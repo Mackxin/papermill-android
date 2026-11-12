@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- 只用于「检查更新」读 GitHub Releases；出卷、排版、打印全程离线可用 -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
     <!--
       Android 11（API 30）的包可见性：不声明这条 queries，
       PrintManager.printServices 永远返回空列表 —— 检测「有没有打印服务」会永远误判为没有。

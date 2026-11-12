@@ -34,17 +34,24 @@ object PaperComposer {
                 difficulty = spec.difficulty,
                 rng = rng,
                 blocked = blocked,
+                subjects = spec.effectiveSubjects().toSet(),
             )
             val questions = generator.generate(ctx)
                 .mapIndexed { i, q -> q.copy(no = nextNo + i) }
             nextNo += questions.size
             if (questions.isEmpty()) return@forEachIndexed
 
+            // 多学科交叉时给大题加科目前缀，例如「二、语文·看拼音写词语」
+            val crossSubject = spec.effectiveSubjects().size > 1
+            val prefix = if (crossSubject && type != QuestionType.KNOWLEDGE) {
+                GeneratorRegistry.subjectOf(type)?.let { "${it.label}·" } ?: ""
+            } else ""
+
             sections.add(
                 GeneratedSection(
                     index = sections.size + 1,
                     title = "${CN_NUM.getOrElse(sections.size) { (sections.size + 1).toString() }}、" +
-                        "${type.label}（每题 2 分，共 ${questions.size * 2} 分）",
+                        "$prefix${type.label}（每题 2 分，共 ${questions.size * 2} 分）",
                     type = type,
                     questions = questions,
                     // 需要书写过程的题强制单栏，否则横线会被挤到很窄
@@ -63,13 +70,16 @@ object PaperComposer {
     }
 
     /** 默认规格：按年级科目自动挑两个最合适的题型，打开就能直接出一份 */
-    fun defaultSpec(grade: Int, subject: Subject): PaperSpec {
-        val types = GeneratorRegistry.availableFor(grade, subject)
+    fun defaultSpec(grade: Int, subject: Subject): PaperSpec = defaultSpec(grade, listOf(subject))
+
+    fun defaultSpec(grade: Int, subjects: List<Subject>): PaperSpec {
+        val primary = subjects.firstOrNull() ?: Subject.MATH
+        val types = GeneratorRegistry.availableFor(grade, subjects)
         val counts = LinkedHashMap<QuestionType, Int>()
         types.take(2).forEachIndexed { i, t ->
             counts[t] = if (t.answerLines > 0) 4 else if (i == 0) 20 else 10
         }
-        return specWith(grade, subject, counts, seed = System.currentTimeMillis())
+        return specWith(grade, primary, counts, subjects = subjects)
     }
 
     fun specWith(
@@ -79,9 +89,14 @@ object PaperComposer {
         seed: Long = System.currentTimeMillis(),
         title: String? = null,
         isMistakePaper: Boolean = false,
+        subjects: List<Subject> = emptyList(),
     ): PaperSpec {
         val total = counts.values.sum()
-        val autoTitle = "${GradeProfiles.stageLabel(grade)} · ${GradeProfiles.gradeLabel(grade)} · ${subject.label}练习"
+        val autoTitle = if (subjects.size > 1) {
+            "${GradeProfiles.stageLabel(grade)} · ${GradeProfiles.gradeLabel(grade)} · 综合练习"
+        } else {
+            "${GradeProfiles.stageLabel(grade)} · ${GradeProfiles.gradeLabel(grade)} · ${subject.label}练习"
+        }
         return PaperSpec(
             grade = grade,
             subject = subject,
@@ -95,6 +110,7 @@ object PaperComposer {
             fontSize = 11f,
             seed = seed,
             isMistakePaper = isMistakePaper,
+            subjects = subjects,
         )
     }
 }
@@ -109,8 +125,10 @@ object PaperTemplates {
         val wanted: Map<QuestionType, Int>,
     )
 
-    fun forSelection(grade: Int, subject: Subject): List<Preset> {
-        val available = GeneratorRegistry.availableFor(grade, subject).toSet()
+    fun forSelection(grade: Int, subject: Subject): List<Preset> = forSelection(grade, listOf(subject))
+
+    fun forSelection(grade: Int, subjects: List<Subject>): List<Preset> {
+        val available = GeneratorRegistry.availableFor(grade, subjects).toSet()
         val raw = listOf(
             Preset("daily", "口算天天练", "一页 30 题，5 分钟", mapOf(QuestionType.ORAL to 30)),
             Preset("calc", "计算专项", "口算 + 竖式 + 脱式", mapOf(
@@ -125,6 +143,9 @@ object PaperTemplates {
             Preset("words", "字词默写", "看拼音写词语 + 补全", mapOf(
                 QuestionType.PINYIN to 16, QuestionType.DICTATION to 12, QuestionType.HANZI to 8,
                 QuestionType.ENGLISH_WORD to 24,
+            )),
+            Preset("knowledge", "知识点题库", "内置自编选择 / 判断题，按所选科目抽题", mapOf(
+                QuestionType.KNOWLEDGE to 20,
             )),
         )
         return raw.mapNotNull { p ->

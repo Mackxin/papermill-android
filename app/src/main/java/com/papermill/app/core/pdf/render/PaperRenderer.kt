@@ -6,8 +6,10 @@ import com.papermill.app.core.pdf.PdfBackend
 import com.papermill.app.core.pdf.TextPainter
 import com.papermill.app.core.pdf.layout.Block
 import com.papermill.app.core.pdf.layout.FlowLayout
+import com.papermill.app.core.pdf.layout.blocks.NoteBlock
 import com.papermill.app.core.pdf.layout.blocks.QuestionBlock
 import com.papermill.app.core.pdf.layout.blocks.SectionHeaderBlock
+import com.papermill.app.core.pdf.layout.blocks.TableBlock
 import java.io.ByteArrayOutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -46,18 +48,33 @@ object PaperRenderer {
         val contentHOther = PageGeometry.CONTENT_BOTTOM_SAFE - (PageGeometry.MARGIN + RUNNING_H)
 
         val pages = ArrayList<FlowLayout.Page>()
+        // 答案页从第几页开始：有了它才能准确说「最后一页正文用了多少」，
+        // 而不是把答案页的填充率当成正文页报给用户。
+        var firstAnswerPage = -1
         doc.sections.forEach { section ->
-            val blocks = ArrayList<Block>(section.questions.size + 1)
+            if (section.isAnswer && firstAnswerPage < 0) firstAnswerPage = pages.size
+            val blocks = ArrayList<Block>(section.questions.size + 2)
             blocks.add(SectionHeaderBlock(section.title))
-            section.questions.forEach { q ->
-                blocks.add(QuestionBlock(no = q.no, stem = q.stem, answerLines = section.answerLines))
+
+            val table = section.table
+            if (table != null) {
+                // 表格按固定行数切块，FlowLayout 就能自然分页且每块都带表头
+                table.rows.chunked(table.rowsPerBlock.coerceAtLeast(1)).forEach { rows ->
+                    blocks.add(TableBlock(table.headers, table.weights, rows, showHeader = true))
+                }
+                blocks.add(NoteBlock("本表可直接打印张贴，题目均由本 App 整理编排。"))
+            } else {
+                section.questions.forEach { q ->
+                    blocks.add(QuestionBlock(no = q.no, stem = q.stem, answerLines = section.answerLines))
+                }
             }
+
             pages.addAll(
                 FlowLayout(
                     contentW = PageGeometry.CONTENT_W,
                     contentHFirst = contentHFirst,
                     contentHOther = contentHOther,
-                    columns = section.columns,
+                    columns = if (table != null) 1 else section.columns,
                     columnGap = COLUMN_GAP,
                     // 只有整卷第 1 页才有卷头；第 2 个大题另起页时按「后续页」的高度排
                     startsOnFirstPage = pages.isEmpty(),
@@ -66,6 +83,17 @@ object PaperRenderer {
         }
 
         val total = pages.size
+
+        // 每页填充率：用来判断「最后一页只印了几行、白浪费一张纸」
+        val fillRatios = pages.mapIndexed { index, page ->
+            var bottom = 0f
+            page.items.forEach { placed ->
+                val h = placed.block.measure(tp, placed.w)
+                bottom = maxOf(bottom, placed.y + h)
+            }
+            val cap = if (index == 0) contentHFirst else contentHOther
+            if (cap <= 0f) 0f else (bottom / cap).coerceIn(0f, 1f)
+        }
         val out = ByteArrayOutputStream()
         val pdf = PdfDocument()
         try {
@@ -104,6 +132,8 @@ object PaperRenderer {
             fileName = buildFileName(doc.title),
             bytes = out.toByteArray(),
             pageCount = total,
+            pageFillRatios = fillRatios,
+            contentPageCount = firstAnswerPage.takeIf { it > 0 } ?: total,
         )
     }
 

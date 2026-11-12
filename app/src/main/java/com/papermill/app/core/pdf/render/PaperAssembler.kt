@@ -34,6 +34,7 @@ object PaperAssembler {
                     title = "参考答案（家长核对用）",
                     questions = paper.questions.map { PaperQuestion(no = it.no, stem = it.answer) },
                     columns = 4,
+                    isAnswer = true,
                 )
             )
         }

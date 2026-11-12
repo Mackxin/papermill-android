@@ -12,13 +12,28 @@ data class PaperQuestion(
     val stem: String,
 )
 
+/**
+ * 网格表格（九九乘法表、拼音音节表、公式表用）。
+ * 渲染时会按 [rowsPerBlock] 把行拆成多个 TableBlock，交给 FlowLayout 自动分页。
+ */
+data class PaperTable(
+    val headers: List<String>,
+    val weights: List<Float>,
+    val rows: List<List<String>>,
+    val rowsPerBlock: Int = 18,
+)
+
 data class PaperSection(
     val title: String,
-    val questions: List<PaperQuestion>,
+    val questions: List<PaperQuestion> = emptyList(),
     /** 栏数：口算 2~4 栏，应用题 1 栏 */
     val columns: Int = 1,
     /** 每题下方留几条答题横线（应用题用；口算为 0，答案位写在题干里） */
     val answerLines: Int = 0,
+    /** 非空时本 section 渲染成网格表格，忽略 questions */
+    val table: PaperTable? = null,
+    /** 答案页标记：统计「最后一页正文用了多少」时不把它算进去 */
+    val isAnswer: Boolean = false,
 )
 
 data class PaperDocument(
@@ -29,9 +44,16 @@ data class PaperDocument(
     val footerText: String = "卷子 · 自编练习卷",
 )
 
-/** 渲染结果：文件名 + PDF 字节 + 页数（页数给 PrintDocumentInfo 用，必须准） */
+/**
+ * 渲染结果。
+ * [pageFillRatios] 每页「正文内容高度 / 该页可用高度」，用于判断
+ * 「最后一页只印了三行、白浪费一张纸」，并据此自动补足题目。
+ */
 class RenderedPdf(
     val fileName: String,
     val bytes: ByteArray,
     val pageCount: Int,
+    val pageFillRatios: List<Float> = emptyList(),
+    /** 正文页数（不含答案页）；最后一页正文 = 第 contentPageCount 页 */
+    val contentPageCount: Int = pageCount,
 )

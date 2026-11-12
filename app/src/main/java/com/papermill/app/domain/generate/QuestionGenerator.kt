@@ -9,6 +9,8 @@ data class GenContext(
     val rng: Random,
     /** 已出现过的题干 hash：同卷内 + 最近几张历史卷，用来防重复 */
     val blocked: MutableSet<Long>,
+    /** 本次出卷勾选的科目（交叉学科时用；空 = 不限制） */
+    val subjects: Set<Subject> = emptySet(),
 )
 
 interface QuestionGenerator {
@@ -79,12 +81,23 @@ object GeneratorRegistry {
         PinyinGenerator, HanziGenerator, DictationGenerator, EnglishWordGenerator,
         // 理化
         PhysicsGenerator, ChemistryGenerator,
+        // 内置自编题库
+        BankQuestionGenerator,
     )
 
     fun availableFor(grade: Int, subject: Subject): List<QuestionType> =
-        all.filter { it.subject == subject && it.supports(grade) }
-            .map { it.type }
-            .distinct()
+        availableFor(grade, listOf(subject))
+
+    /**
+     * 交叉学科：返回所有勾选科目能出的题型。
+     * KNOWLEDGE（自编题库）是跨科通用题型，只要勾了任意科目就出现。
+     */
+    fun availableFor(grade: Int, subjects: Collection<Subject>): List<QuestionType> =
+        all.filter {
+            it.supports(grade) && (it.type == QuestionType.KNOWLEDGE || it.subject in subjects)
+        }.map { it.type }.distinct()
+
+    fun subjectOf(type: QuestionType): Subject? = all.firstOrNull { it.type == type }?.subject
 
     fun of(type: QuestionType, grade: Int): QuestionGenerator? =
         all.firstOrNull { it.type == type && it.supports(grade) }

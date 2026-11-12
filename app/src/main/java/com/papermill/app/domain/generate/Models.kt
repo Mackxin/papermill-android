@@ -54,6 +54,9 @@ enum class QuestionType(
     // 理化
     PHYSICS_CALC("物理计算", 1, 3),
     CHEMISTRY_CALC("化学计算", 2),
+
+    // 内置自编题库（概念 / 选择 / 判断）
+    KNOWLEDGE("自编题库", 1, 1),
 }
 
 enum class AnswerMode(val label: String) {
@@ -93,8 +96,10 @@ data class PaperSpec(
     val showNameRow: Boolean,
     val fontSize: Float,
     val seed: Long,
-    /** 错题重练卷：题号右上角/标题上要标明，且默认附答案 */
+    /** 错题重练卷：标题上要标明，且默认附答案 */
     val isMistakePaper: Boolean = false,
+    /** 交叉学科：一份卷里可以同时出数学 + 语文 + 英语等；为空时按 [subject] 单科处理 */
+    val subjects: List<Subject> = emptyList(),
 )
 
 data class GeneratedPaper(
@@ -103,6 +108,10 @@ data class GeneratedPaper(
     val questions: List<GeneratedQuestion>,
     val createdAt: Long,
 )
+
+/** 兼容单科旧数据：没勾选多学科时按主科目处理 */
+fun PaperSpec.effectiveSubjects(): List<Subject> =
+    if (subjects.isEmpty()) listOf(subject) else subjects.distinct()
 
 /** 年级画像：数域上限、是否允许进位/退位、难度基准。数据表驱动，避免 if-else 地狱。 */
 data class GradeProfile(
