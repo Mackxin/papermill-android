@@ -41,18 +41,26 @@ object PrintLauncher {
 /**
  * 探测系统里有没有可用的打印服务。
  *
- * 注意：Android 11 起有包可见性限制，Manifest 里没声明
+ * ============================================================
+ * 为什么不用 PrintManager.getPrintServices()
+ * ============================================================
+ * 那个方法在公开 SDK 里**不存在**（javap 查 android-34 的 android.jar，
+ * PrintManager 只有 getPrintJobs / print / isPrintServiceEnabled 三个公开方法）。
+ * 用 PackageManager 查「声明了 android.printservice.PrintService 的服务」更可靠。
+ *
+ * 另外 Android 11 起有包可见性限制，Manifest 里没声明
  * `<queries><intent><action android:name="android.printservice.PrintService"/></intent></queries>`
- * 的话，[PrintManager.getPrintServices] 永远返回空 —— 会误判成"没有打印服务"。
+ * 的话这里永远返回 false —— 会误判成"没有打印服务"。
  *
  * 探测结果只用于**提示**，不能用来阻止用户点打印（探测本身就可能误判）。
  */
 object PrintServiceProbe {
 
-    fun hasService(context: Context): Boolean {
-        val pm = context.getSystemService(Context.PRINT_SERVICE) as? PrintManager ?: return false
-        return runCatching { pm.printServices.isNotEmpty() }.getOrDefault(false)
-    }
+    fun hasService(context: Context): Boolean = runCatching {
+        context.packageManager
+            .queryIntentServices(Intent(ACTION_PRINT_SERVICE), 0)
+            .isNotEmpty()
+    }.getOrDefault(false)
 
     /** 跳到系统「打印」设置页，让用户启用 Mopria / 奔图打印服务 */
     fun openSettings(context: Context) {
@@ -63,4 +71,6 @@ object PrintServiceProbe {
             )
         }
     }
+
+    private const val ACTION_PRINT_SERVICE = "android.printservice.PrintService"
 }
