@@ -23,6 +23,7 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -33,12 +34,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.papermill.app.core.design.PaperColors
+import com.papermill.app.core.update.UpdateChecker
 import com.papermill.app.domain.generate.AnswerMode
-import com.papermill.app.domain.generate.GeneratorRegistry
 import com.papermill.app.domain.generate.GradeProfiles
 import com.papermill.app.domain.generate.PaperTemplates
-import com.papermill.app.domain.generate.QuestionType
 import com.papermill.app.domain.generate.Subject
+import com.papermill.app.domain.reference.ReferenceData
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 @Composable
@@ -49,6 +52,10 @@ fun PaperMillRoot(state: AppState) {
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) state.importBackup(uri)
     }
+    // 切页面回到顶部：否则从首页滚到底点模板，进参数页会停在半截，
+    // 用户看不到标题，还以为实时预览是整页内容。
+    val scroll = rememberScrollState()
+    LaunchedEffect(state.screen) { scroll.scrollTo(0) }
 
     Column(
         Modifier
@@ -59,16 +66,17 @@ fun PaperMillRoot(state: AppState) {
         Column(
             Modifier
                 .weight(1f)
-                .verticalScroll(rememberScrollState())
+                .verticalScroll(scroll)
                 .padding(horizontal = 20.dp)
         ) {
             when (state.screen) {
-                Screen.HOME -> HomeScreen(state, scope, activity)
+                Screen.HOME -> HomeScreen(state, scope)
                 Screen.CREATE -> CreateScreen(state, scope)
                 Screen.PREVIEW -> PreviewScreen(state, scope, activity)
                 Screen.MISTAKES -> MistakesScreen(state, scope)
                 Screen.HISTORY -> HistoryScreen(state, scope) { importLauncher.launch("*/*") }
-                Screen.HELP -> HelpScreen(state)
+                Screen.HELP -> HelpScreen(state, scope)
+                Screen.REFERENCE -> ReferenceScreen(state, scope)
             }
             Spacer(Modifier.height(12.dp))
             ToastBar(state.toast)
@@ -82,10 +90,10 @@ fun PaperMillRoot(state: AppState) {
 @Composable
 private fun HomeScreen(
     state: AppState,
-    scope: kotlinx.coroutines.CoroutineScope,
-    activity: Activity?,
+    scope: CoroutineScope,
 ) {
-    val templates = PaperTemplates.forSelection(state.grade, state.subject)
+    val templates = PaperTemplates.forSelection(state.grade, state.subjects)
+    val subjectLabel = state.subjects.joinToString(" + ") { it.label }
 
     CardSection(title = "① 选择年级", hint = "小学 1–6 年级 / 初中 7–9 年级") {
         ChipGrid(
@@ -99,22 +107,27 @@ private fun HomeScreen(
 
     Spacer(Modifier.height(12.dp))
 
-    CardSection(title = "② 选择科目", hint = "灰色 = 该年级还没开这门课") {
+    CardSection(
+        title = "② 选择科目",
+        hint = "可多选 —— 多学科交叉出一份综合卷；灰色 = 该年级还没开这门课",
+    ) {
         ChipGrid(
             items = Subject.values().toList(),
             perRow = 5,
             label = { it.label },
-            selected = { it == state.subject },
+            selected = { it in state.subjects },
             enabled = { it.availableFor(state.grade) },
-            onClick = { state.selectSubject(it) },
+            onClick = { state.toggleSubject(it) },
         )
+        Spacer(Modifier.height(8.dp))
+        Text("已选：$subjectLabel", fontSize = 12.sp, color = PaperColors.Primary)
     }
 
     Spacer(Modifier.height(12.dp))
 
     CardSection(
         title = "③ 选个模板，或自己配题量",
-        hint = "${GradeProfiles.gradeLabel(state.grade)} · ${state.subject.label} · 当前共 ${state.totalQuestions} 题",
+        hint = "${GradeProfiles.gradeLabel(state.grade)} · $subjectLabel · 当前共 ${state.totalQuestions} 题",
     ) {
         templates.forEach { preset ->
             Row(
@@ -139,7 +152,22 @@ private fun HomeScreen(
 
     PrimaryButton("自定义题量并生成 →") { state.screen = Screen.CREATE }
     Spacer(Modifier.height(10.dp))
-    SecondaryButton("按当前配置直接出卷") { scope.launch { state.generate() } }
+    SecondaryButton("按当前配置直接出卷", enabled = !state.busy) {
+        scope.launch { state.generate() }
+    }
+    Spacer(Modifier.height(10.dp))
+    SecondaryButton("每日一练 · 今天这一套（明天自动换新）", enabled = !state.busy) {
+        scope.launch { state.generateDaily() }
+    }
+
+    Spacer(Modifier.height(12.dp))
+
+    CardSection(
+        title = "学生必备速查表",
+        hint = "九九乘法表 / 拼音音节 / 数理化公式 / 不规则动词，一键打印张贴",
+    ) {
+        SecondaryButton("去挑选速查表 →") { state.screen = Screen.REFERENCE }
+    }
 
     if (state.savedPapers.isNotEmpty()) {
         Spacer(Modifier.height(12.dp))
@@ -169,29 +197,93 @@ private fun HomeScreen(
 // ------------------------------------------------------------------ 参数页
 
 @Composable
-private fun CreateScreen(state: AppState, scope: kotlinx.coroutines.CoroutineScope) {
-    val types = GeneratorRegistry.availableFor(state.grade, state.subject)
+private fun CreateScreen(state: AppState, scope: CoroutineScope) {
+    // 参数一变就重排一次（350ms 防抖，避免连点 ＋ 时反复生成 PDF）。
+    // signature 读到的是 mutableStateOf，值变化会触发重组 → LaunchedEffect 重启。
+    val signature = buildString {
+        append(state.grade).append('|')
+        append(state.subjects.joinToString(",") { it.name }).append('|')
+        append(state.counts.entries.joinToString(",") { "${it.key.name}:${it.value}" }).append('|')
+        append(state.difficulty).append('|').append(state.columns).append('|')
+        append(state.answerMode.name).append('|').append(state.showNameRow).append('|')
+        append(state.titleOverride).append('|').append(state.previewSeed)
+    }
+    LaunchedEffect(signature) {
+        delay(350)
+        state.refreshLivePreview()
+    }
+
+    val types = state.availableTypes
+    val subjectLabel = state.subjects.joinToString(" + ") { it.label }
 
     CardSection(
         title = "自定义试卷",
-        hint = "${GradeProfiles.gradeLabel(state.grade)} · ${state.subject.label} · 共 ${state.totalQuestions} 题 · 预计 ${state.estimatedPages} 页 A4",
+        hint = "${GradeProfiles.gradeLabel(state.grade)} · $subjectLabel · 共 ${state.totalQuestions} 题 · 预计 ${state.estimatedPages} 页 A4",
     ) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             ChoiceChip("← 返回首页", false) { state.screen = Screen.HOME }
-            ChoiceChip("换一套题", false) { scope.launch { state.generate() } }
+            ChoiceChip("换一套看看", false) { state.shufflePreviewSeed() }
         }
     }
 
     Spacer(Modifier.height(12.dp))
 
-    CardSection(title = "题型与题量", hint = "点 ＋ / － 调整；0 表示本卷不出这类题") {
+    CardSection(
+        title = "实时预览（改参数自动刷新）",
+        hint = "按当前参数试排的 A4 首页 · 与打印结果完全一致",
+    ) {
+        val bmp = state.livePreview
+        if (bmp == null) {
+            Text("正在试排…", fontSize = 12.sp, color = PaperColors.OnSurfaceVariant)
+        } else {
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .background(Color.White, RoundedCornerShape(6.dp))
+                    .border(1.dp, PaperColors.Outline, RoundedCornerShape(6.dp)),
+            ) {
+                Image(
+                    bitmap = bmp,
+                    contentDescription = "实时预览首页",
+                    contentScale = ContentScale.FillWidth,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+            Spacer(Modifier.height(10.dp))
+            Text(
+                "试排结果：最后一页正文用了 ${state.liveFillPercent}%",
+                fontSize = 12.sp,
+                color = PaperColors.OnSurface,
+            )
+            if (state.liveSuggestExtra > 0) {
+                Text(
+                    "注意：按现在的题量会浪费纸，建议再加约 ${state.liveSuggestExtra} 题，" +
+                        "或打开下面的「自动补满整页」由 App 代劳。",
+                    fontSize = 12.sp,
+                    color = PaperColors.Accent,
+                    lineHeight = 17.sp,
+                )
+            } else {
+                Text("页面已排得比较满，不会浪费纸。", fontSize = 12.sp, color = PaperColors.Primary)
+            }
+        }
+    }
+
+    Spacer(Modifier.height(12.dp))
+
+    CardSection(
+        title = "题型与题量",
+        hint = "±1 精调 / ±5 批量；0 表示本卷不出这类题",
+    ) {
         types.forEach { type ->
             StepperRow(
                 label = type.label,
                 value = state.counts[type] ?: 0,
                 hint = if (type.answerLines > 0) "需要书写过程，自动单栏 + 答题横线" else "客观题，按下方栏数排",
-                onMinus = { state.setCount(type, -5) },
-                onPlus = { state.setCount(type, 5) },
+                onMinus = { state.setCount(type, -1) },
+                onPlus = { state.setCount(type, 1) },
+                onMinusMore = { state.setCount(type, -5) },
+                onPlusMore = { state.setCount(type, 5) },
             )
         }
     }
@@ -199,6 +291,20 @@ private fun CreateScreen(state: AppState, scope: kotlinx.coroutines.CoroutineSco
     Spacer(Modifier.height(12.dp))
 
     CardSection(title = "卷面设置") {
+        Text("纸张利用（最低一页纸）", fontSize = 12.sp, color = PaperColors.OnSurfaceVariant)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            ChoiceChip("自动补满整页", state.autoFillPage) { state.autoFillPage = true }
+            ChoiceChip("严格按题量", !state.autoFillPage) { state.autoFillPage = false }
+        }
+        Text(
+            "开启后，若最后一页正文没印到 84%，会自动往客观题里补几题再排版；" +
+                "关闭则完全按上面填的题量出卷。",
+            fontSize = 11.sp,
+            color = PaperColors.OnSurfaceVariant,
+            lineHeight = 16.sp,
+        )
+        Spacer(Modifier.height(12.dp))
+
         Text("难度", fontSize = 12.sp, color = PaperColors.OnSurfaceVariant)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             listOf(1 to "基础", 2 to "标准", 3 to "提高").forEach { (v, label) ->
@@ -251,26 +357,51 @@ private fun CreateScreen(state: AppState, scope: kotlinx.coroutines.CoroutineSco
 @Composable
 private fun PreviewScreen(
     state: AppState,
-    scope: kotlinx.coroutines.CoroutineScope,
+    scope: CoroutineScope,
     activity: Activity?,
 ) {
     val gp = state.paper
     val pdf = state.pdf
+    val isRef = state.isReference
 
     CardSection(
         title = "试卷预览",
-        hint = if (pdf != null) "共 ${pdf.pageCount} 页 A4 · ${gp?.questions?.size ?: 0} 题 · 与打印结果完全一致" else "还没有生成卷子",
+        hint = if (pdf != null) {
+            if (isRef) "速查表 · 共 ${pdf.pageCount} 页 A4 · 与打印结果完全一致"
+            else "共 ${pdf.pageCount} 页 A4 · ${gp?.questions?.size ?: 0} 题 · 与打印结果完全一致"
+        } else "还没有生成卷子",
     ) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            ChoiceChip("← 改参数", false) { state.screen = Screen.CREATE }
-            ChoiceChip("A4 页面", !state.showQuestionList) { state.showQuestionList = false }
-            ChoiceChip("题目清单", state.showQuestionList) { state.showQuestionList = true }
+            if (isRef) {
+                ChoiceChip("← 速查表", false) { state.screen = Screen.REFERENCE }
+            } else {
+                ChoiceChip("← 改参数", false) { state.screen = Screen.CREATE }
+                ChoiceChip("A4 页面", !state.showQuestionList) { state.showQuestionList = false }
+                ChoiceChip("题目清单", state.showQuestionList) { state.showQuestionList = true }
+            }
+        }
+        if (!isRef && pdf != null) {
+            Spacer(Modifier.height(10.dp))
+            Text(
+                "最后一页正文用了 ${state.lastContentFillPercent}% · 正文 ${pdf.contentPageCount} 页 / 共 ${pdf.pageCount} 页",
+                fontSize = 12.sp,
+                color = PaperColors.OnSurface,
+            )
+            if (state.finalSuggestExtra > 0) {
+                Text(
+                    "注意：最后一页还有空白，回参数页再加约 ${state.finalSuggestExtra} 题，" +
+                        "或开启「自动补满整页」可以避免浪费纸。",
+                    fontSize = 12.sp,
+                    color = PaperColors.Accent,
+                    lineHeight = 17.sp,
+                )
+            }
         }
     }
 
     Spacer(Modifier.height(12.dp))
 
-    if (!state.showQuestionList) {
+    if (isRef || !state.showQuestionList) {
         state.previews.forEachIndexed { i, bitmap ->
             Text("第 ${i + 1} 页", fontSize = 11.sp, color = PaperColors.OnSurfaceVariant)
             Spacer(Modifier.height(4.dp))
@@ -290,19 +421,33 @@ private fun PreviewScreen(
             Spacer(Modifier.height(14.dp))
         }
     } else {
-        CardSection(title = "题目清单 · 勾选做错的题", hint = "批改完纸质卷后，在这里点题号即可加入错题本") {
+        CardSection(
+            title = "题目清单 · 勾选做错的题",
+            hint = "批改完纸质卷后点题号加入错题本；也可以直接换题 / 删题 / 加题",
+        ) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                MiniAction("+ 在末尾加一题", enabled = !state.busy) { scope.launch { state.appendQuestion() } }
+            }
+            Spacer(Modifier.height(8.dp))
             gp?.questions?.forEach { q ->
-                Row(
-                    Modifier.fillMaxWidth().padding(vertical = 2.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Checkbox(
-                        checked = q.no in state.wrongNumbers,
-                        onCheckedChange = { state.toggleWrong(q.no) },
-                    )
-                    Column(Modifier.weight(1f)) {
-                        Text("${q.no}. ${q.stem}", fontSize = 12.sp, color = PaperColors.OnSurface)
-                        Text("答案：${q.answer}", fontSize = 11.sp, color = PaperColors.OnSurfaceVariant)
+                Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(
+                            checked = q.no in state.wrongNumbers,
+                            onCheckedChange = { state.toggleWrong(q.no) },
+                        )
+                        Column(Modifier.weight(1f)) {
+                            Text("${q.no}. ${q.stem}", fontSize = 12.sp, color = PaperColors.OnSurface)
+                            Text("答案：${q.answer}", fontSize = 11.sp, color = PaperColors.OnSurfaceVariant)
+                        }
+                    }
+                    Row(Modifier.padding(start = 46.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        MiniAction("换一题", enabled = !state.busy) { scope.launch { state.replaceQuestion(q.no) } }
+                        MiniAction(
+                            "删这题",
+                            color = PaperColors.Error,
+                            enabled = !state.busy,
+                        ) { scope.launch { state.removeQuestion(q.no) } }
                     }
                 }
             }
@@ -326,16 +471,74 @@ private fun PreviewScreen(
         Box(Modifier.weight(1f)) {
             SecondaryButton("分享 PDF") { state.sharePdf() }
         }
-        Box(Modifier.weight(1f)) {
-            SecondaryButton("加入错题本（${state.wrongNumbers.size}）") { state.addWrongToMistakes() }
+        if (!isRef) {
+            Box(Modifier.weight(1f)) {
+                SecondaryButton("加入错题本（${state.wrongNumbers.size}）") { state.addWrongToMistakes() }
+            }
         }
+    }
+}
+
+@Composable
+private fun MiniAction(
+    text: String,
+    color: Color = PaperColors.Primary,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+) {
+    Text(
+        text,
+        fontSize = 11.sp,
+        color = if (enabled) color else PaperColors.OnSurfaceVariant,
+        modifier = Modifier
+            .background(PaperColors.PrimaryContainer, RoundedCornerShape(8.dp))
+            .clickable(enabled = enabled) { onClick() }
+            .padding(horizontal = 9.dp, vertical = 6.dp),
+    )
+}
+
+// ------------------------------------------------------------------ 速查表
+
+@Composable
+private fun ReferenceScreen(state: AppState, scope: CoroutineScope) {
+    CardSection(
+        title = "学生必备速查表",
+        hint = "基础事实与公式（不受著作权保护），自行整理编排；A4 排版，可反复打印张贴",
+    ) {
+        Text(
+            "共 ${ReferenceData.sheets.size} 张。点任意一张即可生成 PDF，直接系统打印或分享到微信远程打印。",
+            fontSize = 12.sp,
+            color = PaperColors.OnSurfaceVariant,
+            lineHeight = 17.sp,
+        )
+    }
+
+    Spacer(Modifier.height(12.dp))
+
+    ReferenceData.sheets.forEach { sheet ->
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .background(PaperColors.Surface, RoundedCornerShape(12.dp))
+                .border(1.dp, PaperColors.Outline, RoundedCornerShape(12.dp))
+                .clickable(enabled = !state.busy) { scope.launch { state.renderReference(sheet) } }
+                .padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(sheet.title, fontSize = 13.sp, fontWeight = FontWeight.Medium, color = PaperColors.OnSurface)
+                Text(sheet.subtitle, fontSize = 11.sp, color = PaperColors.OnSurfaceVariant)
+            }
+            Text("打印 ›", fontSize = 12.sp, color = PaperColors.Primary)
+        }
+        Spacer(Modifier.height(8.dp))
     }
 }
 
 // ------------------------------------------------------------------ 错题本
 
 @Composable
-private fun MistakesScreen(state: AppState, scope: kotlinx.coroutines.CoroutineScope) {
+private fun MistakesScreen(state: AppState, scope: CoroutineScope) {
     val filtered = state.mistakes.filter {
         state.masteryFilter == "ALL" || it.mastery == state.masteryFilter
     }
@@ -393,7 +596,7 @@ private fun masteryLabel(m: String) = when (m) {
 @Composable
 private fun HistoryScreen(
     state: AppState,
-    scope: kotlinx.coroutines.CoroutineScope,
+    scope: CoroutineScope,
     onImport: () -> Unit,
 ) {
     CardSection(title = "试卷库", hint = "共 ${state.savedPapers.size} 张 · 只存题目快照，随时可重新出同一张卷") {
@@ -434,10 +637,10 @@ private fun HistoryScreen(
     }
 }
 
-// ------------------------------------------------------------------ 打印帮助
+// ------------------------------------------------------------------ 打印帮助 / 更新
 
 @Composable
-private fun HelpScreen(state: AppState) {
+private fun HelpScreen(state: AppState, scope: CoroutineScope) {
     CardSection(title = "① 在家打印（手机和打印机同一 WiFi）") {
         HelpLine("1", "第一次：手机装「奔图打印」App，或在 系统设置 → 打印 里启用 Mopria 打印服务。")
         HelpLine("2", "在 App 里点「系统打印」，系统打印框中选择奔图 M1。")
@@ -471,10 +674,46 @@ private fun HelpScreen(state: AppState) {
     }
 
     Spacer(Modifier.height(12.dp))
+    CardSection(title = "③ App 更新", hint = "当前版本 v${state.versionName} · 内置自编题库 ${state.bankSize} 题") {
+        SecondaryButton("检查更新", enabled = !state.busy) { scope.launch { state.checkUpdate() } }
+        if (state.updateInfo.isNotEmpty()) {
+            Spacer(Modifier.height(8.dp))
+            Text(state.updateInfo, fontSize = 12.sp, color = PaperColors.OnSurface)
+        }
+        val release = state.updateRelease
+        if (release != null) {
+            Spacer(Modifier.height(8.dp))
+            if (release.notes.isNotBlank()) {
+                Text(release.notes, fontSize = 11.sp, color = PaperColors.OnSurfaceVariant)
+                Spacer(Modifier.height(8.dp))
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ChoiceChip("打开 Release 页面", false) { state.openUrl(release.pageUrl) }
+                if (release.apkUrl != null) {
+                    ChoiceChip("下载新版 APK", false) { state.openUrl(release.apkUrl) }
+                }
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            ChoiceChip("打开 GitHub 仓库", false) { state.openUrl(UpdateChecker.REPO_URL) }
+        }
+        Text(
+            "检查更新是 App 里唯一需要联网的动作；出卷、排版、打印、错题本全部离线可用。" +
+                "访问不到 GitHub API 时会提示检查失败，不影响任何其它功能。",
+            fontSize = 11.sp,
+            color = PaperColors.OnSurfaceVariant,
+            lineHeight = 16.sp,
+        )
+    }
+
+    Spacer(Modifier.height(12.dp))
     CardSection(title = "关于题目") {
         Text(
             "所有题目均由本 App 程序生成（数学计算、字词默写、理化计算等），" +
-                "不抓取也不收录任何教辅、题库或教材原文，页脚已标注。答案在生成时同步算出并做自校验。",
+                "或由我们按知识点自编（内置 ${state.bankSize} 道选择 / 判断题，可跨科组合）。" +
+                "不抓取也不收录任何教辅、题库或教材原文，页脚已标注。答案在生成时同步算出并做自校验。" +
+                "速查表只收录不受著作权保护的基础事实与公式。",
             fontSize = 12.sp,
             color = PaperColors.OnSurface,
             lineHeight = 18.sp,

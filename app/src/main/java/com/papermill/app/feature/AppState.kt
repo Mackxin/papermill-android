@@ -8,31 +8,43 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.ImageBitmap
+import com.papermill.app.BuildConfig
 import com.papermill.app.core.export.PdfExporter
 import com.papermill.app.core.export.PdfSharer
 import com.papermill.app.core.pdf.render.PaperAssembler
 import com.papermill.app.core.pdf.render.PaperRenderer
 import com.papermill.app.core.pdf.render.PdfPreviewRenderer
+import com.papermill.app.core.pdf.render.ReferenceRenderer
 import com.papermill.app.core.pdf.render.RenderedPdf
 import com.papermill.app.core.print.PrintLauncher
 import com.papermill.app.core.print.PrintServiceProbe
 import com.papermill.app.core.store.LocalStore
 import com.papermill.app.core.store.MistakeItem
 import com.papermill.app.core.store.SavedPaper
+import com.papermill.app.core.update.UpdateChecker
 import com.papermill.app.domain.generate.AnswerMode
+import com.papermill.app.domain.generate.BankQuestionSource
+import com.papermill.app.domain.generate.GenContext
 import com.papermill.app.domain.generate.GeneratedPaper
 import com.papermill.app.domain.generate.GeneratedQuestion
 import com.papermill.app.domain.generate.GeneratedSection
+import com.papermill.app.domain.generate.GeneratorRegistry
 import com.papermill.app.domain.generate.GradeProfiles
 import com.papermill.app.domain.generate.PaperComposer
 import com.papermill.app.domain.generate.PaperSpec
 import com.papermill.app.domain.generate.QuestionType
 import com.papermill.app.domain.generate.Subject
+import com.papermill.app.domain.reference.ReferenceSheet
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.Random
+import kotlin.math.ceil
 
-enum class Screen { HOME, CREATE, PREVIEW, MISTAKES, HISTORY, HELP }
+enum class Screen { HOME, CREATE, PREVIEW, MISTAKES, HISTORY, HELP, REFERENCE }
 
 private data class Built(
     val paper: GeneratedPaper,
@@ -41,26 +53,28 @@ private data class Built(
     val savedId: String,
 )
 
-/**
- * 全局 UI 状态 + 动作。
- *
- * 没有引 ViewModel / DI 框架：整个 App 的状态图很小，
- * 一个状态类 + 一个 Context 足够，也避开本机 Hilt/KSP 的已知坑。
- * 所有写盘、渲染、生成题目都在 IO 线程；Compose state 只在主线程改。
- */
+/** 一页正文大约能装的高度与单题高度，用于把「还差多少题」估算出来 */
+private const val TYPICAL_CONTENT_H = 657f
+private const val TYPICAL_QUESTION_H = 20.5f
+private const val FILL_TARGET = 0.84f
+
 class AppState(private val rawContext: Context) {
 
     private val ctx = rawContext.applicationContext
 
     var screen by mutableStateOf(Screen.HOME)
+
     var grade by mutableStateOf(3)
     var subject by mutableStateOf(Subject.MATH)
+    var subjects by mutableStateOf(listOf(Subject.MATH))
     var counts by mutableStateOf<Map<QuestionType, Int>>(emptyMap())
+
     var difficulty by mutableStateOf(2)
     var columns by mutableStateOf(2)
     var answerMode by mutableStateOf(AnswerMode.LAST_PAGE)
     var showNameRow by mutableStateOf(true)
     var titleOverride by mutableStateOf<String?>(null)
+    var autoFillPage by mutableStateOf(true)
 
     var paper by mutableStateOf<GeneratedPaper?>(null)
     var pdf by mutableStateOf<RenderedPdf?>(null)
@@ -68,6 +82,11 @@ class AppState(private val rawContext: Context) {
     var savedPaperId by mutableStateOf("")
     var wrongNumbers by mutableStateOf<Set<Int>>(emptySet())
     var showQuestionList by mutableStateOf(false)
+    var isReference by mutableStateOf(false)
+
+    var livePreview by mutableStateOf<ImageBitmap?>(null)
+    var liveFillPercent by mutableStateOf(0)
+    var previewSeed by mutableStateOf(daySeed())
 
     var busy by mutableStateOf(false)
     var toast by mutableStateOf("")
@@ -76,10 +95,19 @@ class AppState(private val rawContext: Context) {
     var mistakes by mutableStateOf(emptyList<MistakeItem>())
     var masteryFilter by mutableStateOf("ALL")
 
+    var updateInfo by mutableStateOf("")
+    var updateRelease by mutableStateOf<UpdateChecker.Release?>(null)
+
     val hasPrintService: Boolean = PrintServiceProbe.hasService(ctx)
+    val versionName: String = BuildConfig.VERSION_NAME
+    val bankSize: Int
+
+    val availableTypes: List<QuestionType>
+        get() = GeneratorRegistry.availableFor(grade, subjects)
 
     init {
-        counts = PaperComposer.defaultSpec(grade, subject).counts
+        bankSize = BankQuestionSource.loadFromAssets(ctx)
+        counts = PaperComposer.defaultSpec(grade, subjects).counts
         refreshLists()
     }
 
@@ -92,26 +120,41 @@ class AppState(private val rawContext: Context) {
 
     fun selectGrade(g: Int) {
         grade = g
-        if (!subject.availableFor(g)) subject = Subject.MATH
-        counts = PaperComposer.defaultSpec(g, subject).counts
-        resetTitle()
+        val kept = subjects.filter { it.availableFor(g) }.ifEmpty { listOf(Subject.MATH) }
+        subjects = kept
+        subject = kept.first()
+        counts = PaperComposer.defaultSpec(g, kept).counts
+        titleOverride = null
+        previewSeed = System.currentTimeMillis()
     }
 
-    fun selectSubject(s: Subject) {
+    /** 多学科交叉：点一下加进来，再点一下取消（至少留一科） */
+    fun toggleSubject(s: Subject) {
         if (!s.availableFor(grade)) return
-        subject = s
-        counts = PaperComposer.defaultSpec(grade, s).counts
-        resetTitle()
+        val list = subjects.toMutableList()
+        if (s in list) {
+            if (list.size == 1) return
+            list.remove(s)
+        } else {
+            list.add(s)
+        }
+        subjects = list
+        subject = list.first()
+        counts = PaperComposer.defaultSpec(grade, list).counts
+        titleOverride = null
+        previewSeed = System.currentTimeMillis()
     }
 
-    fun applyTemplate(counts: Map<QuestionType, Int>) {
-        this.counts = LinkedHashMap(counts)
-        resetTitle()
+    fun applyTemplate(newCounts: Map<QuestionType, Int>) {
+        counts = LinkedHashMap(newCounts)
+        titleOverride = null
+        previewSeed = System.currentTimeMillis()
         screen = Screen.CREATE
     }
 
-    private fun resetTitle() {
-        titleOverride = null
+    /** 参数页「换一套看看」：只换实时预览的题目，不动正式卷 */
+    fun shufflePreviewSeed() {
+        previewSeed = System.currentTimeMillis()
     }
 
     fun setCount(type: QuestionType, delta: Int) {
@@ -126,23 +169,61 @@ class AppState(private val rawContext: Context) {
     val estimatedPages: Int
         get() {
             var pages = 1
-            val perPage = columns * 26
-            pages += totalQuestions / perPage.coerceAtLeast(1)
-            // 有书写过程的题占地方
+            pages += totalQuestions / (columns * 26).coerceAtLeast(1)
             pages += counts.entries.filter { it.key.answerLines > 0 }.sumOf { it.value } / 8
             if (answerMode == AnswerMode.LAST_PAGE) pages += 1
             return pages.coerceAtLeast(1)
         }
 
-    private fun currentSpec(seed: Long = System.currentTimeMillis()): PaperSpec {
-        val total = totalQuestions
-        val autoTitle = "${GradeProfiles.stageLabel(grade)} · ${GradeProfiles.gradeLabel(grade)} · ${subject.label}练习"
+    /** 当前正式卷「最后一页正文」的填充百分比 */
+    val lastContentFillPercent: Int
+        get() {
+            val p = pdf ?: return 0
+            return (contentFillRatio(p) * 100).toInt()
+        }
+
+    private fun contentFillRatio(p: RenderedPdf): Float {
+        val list = p.pageFillRatios
+        if (list.isEmpty()) return 1f
+        // PaperRenderer 已把答案页排除在 contentPageCount 之外，
+        // 不再用「倒数第二页」这种在答案跨页时会算错的近似。
+        val idx = (p.contentPageCount - 1).coerceIn(0, list.lastIndex)
+        return list[idx]
+    }
+
+    /** 参数页实时预览用：还差多少题才能把最后一页正文印满 */
+    val liveSuggestExtra: Int get() = suggestedExtra(liveFillPercent / 100f)
+
+    /** 正式卷用：还差多少题 */
+    val finalSuggestExtra: Int get() = suggestedExtra(lastContentFillPercent / 100f)
+
+    private fun suggestedExtra(ratio: Float): Int {
+        if (ratio >= FILL_TARGET) return 0
+        return ceil((0.90f - ratio) * TYPICAL_CONTENT_H / TYPICAL_QUESTION_H)
+            .toInt().coerceIn(1, 16)
+    }
+
+    private fun pickFillType(map: Map<QuestionType, Int>): QuestionType? {
+        val used = map.filter { it.value > 0 }.keys
+        return used.firstOrNull { it.answerLines == 0 }
+            ?: used.firstOrNull()
+            ?: availableTypes.firstOrNull()
+    }
+
+    private fun currentSpec(seed: Long, useCounts: Map<QuestionType, Int> = counts): PaperSpec {
+        val total = useCounts.values.sum()
+        val autoTitle = if (subjects.size > 1) {
+            "${GradeProfiles.stageLabel(grade)} · ${GradeProfiles.gradeLabel(grade)} · 综合练习"
+        } else {
+            "${GradeProfiles.stageLabel(grade)} · ${GradeProfiles.gradeLabel(grade)} · ${subject.label}练习"
+        }
         return PaperSpec(
             grade = grade,
             subject = subject,
+            subjects = subjects,
             title = titleOverride?.takeIf { it.isNotBlank() } ?: autoTitle,
             subtitle = "共 $total 题　满分 ${total * 2} 分",
-            counts = counts,
+            counts = useCounts,
             difficulty = difficulty,
             columns = columns,
             answerMode = answerMode,
@@ -152,8 +233,29 @@ class AppState(private val rawContext: Context) {
         )
     }
 
-    // ---------------------------------------------------------------- 生成
+    // ---------------------------------------------------------------- 构建
 
+    private fun buildOnce(
+        seed: Long,
+        useCounts: Map<QuestionType, Int>,
+        save: Boolean,
+        withPreviews: Boolean = save,
+    ): Built {
+        val spec = currentSpec(seed, useCounts)
+        val recent = LocalStore.recentHashes(ctx, grade, subject)
+        val gp = PaperComposer.compose(spec, recent)
+        val rendered = PaperRenderer.render(PaperAssembler.build(gp))
+        val pages = if (withPreviews) PdfPreviewRenderer.render(ctx, rendered.bytes) else emptyList()
+        val savedId = if (save) LocalStore.savePaper(ctx, gp, rendered.fileName).id else ""
+        return Built(gp, rendered, pages, savedId)
+    }
+
+    /**
+     * 生成正式卷。
+     *
+     * 默认开启「补满整页」：先试排，若最后一页正文没用到 84%，
+     * 就自动往客观题里加题再排，最多 4 轮 —— 避免只印半张纸就出纸。
+     */
     suspend fun generate(seed: Long = System.currentTimeMillis()) {
         if (totalQuestions <= 0) {
             toast = "至少选一种题型、题量大于 0"
@@ -161,35 +263,78 @@ class AppState(private val rawContext: Context) {
         }
         busy = true
         try {
-            val built = withContext(Dispatchers.IO) {
-                val spec = currentSpec(seed)
-                val recent = LocalStore.recentHashes(ctx, grade, subject)
-                val gp = PaperComposer.compose(spec, recent)
-                val doc = PaperAssembler.build(gp)
-                val rendered = PaperRenderer.render(doc)
-                val pages = PdfPreviewRenderer.render(ctx, rendered.bytes)
-                val saved = LocalStore.savePaper(ctx, gp, rendered.fileName)
-                Built(gp, rendered, pages, saved.id)
+            var working = LinkedHashMap(counts)
+            var result: Built? = null
+            var extraAdded = 0
+            var lastCount = -1
+
+            for (attempt in 0..3) {
+                val probe = withContext(Dispatchers.IO) { buildOnce(seed, working, save = false) }
+                val ratio = contentFillRatio(probe.pdf)
+                val need = if (autoFillPage) suggestedExtra(ratio) else 0
+                val fillType = pickFillType(working)
+                // 有些题型题量已经抽干（词表/题库有限），再加计数也出不了新题 ——
+                // 别空转 4 轮，直接按当前结果定稿，并在提示里如实告诉用户。
+                val noProgress = lastCount >= 0 && probe.paper.questions.size <= lastCount
+                lastCount = probe.paper.questions.size
+
+                if (need <= 0 || fillType == null || attempt == 3 || noProgress) {
+                    result = withContext(Dispatchers.IO) { buildOnce(seed, working, save = true) }
+                    break
+                }
+                // need 是按「一行题干」的高度估出来的题数；带答题横线的题更占地方，
+                // 要按占的行数折算，否则一次只补 2 题、四轮下来页面还是空的。
+                val lineFactor = 1f + fillType.answerLines
+                val step = (need / lineFactor).toInt().coerceIn(1, need)
+                working[fillType] = (working[fillType] ?: 0) + step
+                extraAdded += step
             }
-            applyBuilt(built)
-            val actual = built.paper.questions.size
-            toast = if (actual < totalQuestions) {
-                "已生成 $actual 题（要了 $totalQuestions 题，该年级可用题量不足）——可减少题量或增选其它题型"
+
+            if (result != null) {
+                counts = LinkedHashMap(working)
+                applyBuilt(result)
+
+                val actual = result.paper.questions.size
+                toast = buildString {
+                    append("已生成 $actual 题，共 ${result.pdf.pageCount} 页")
+                    if (extraAdded > 0) append("（自动补了 $extraAdded 题填满整页）")
+                    if (actual < totalQuestions) append("　⚠ 该年级可用题量不足，可减少题量或增选其它题型")
+                    append("　最后一页正文用了 $lastContentFillPercent%")
+                }
+                screen = Screen.PREVIEW
             } else {
-                "已生成 $actual 题，共 ${built.pdf.pageCount} 页"
+                toast = "生成失败，请减少题量后重试"
             }
-            screen = Screen.PREVIEW
         } catch (t: Throwable) {
             toast = "生成失败：${t.message ?: t.javaClass.simpleName}"
         }
         busy = false
     }
 
-    /** 试卷库里点一张历史卷：同一种子会生成同一套题，无需存整张 PDF */
+    /** 参数页实时预览：不落库、只渲染第 1 页缩略图 */
+    suspend fun refreshLivePreview() {
+        if (totalQuestions <= 0) {
+            livePreview = null
+            liveFillPercent = 0
+            return
+        }
+        runCatching {
+            val result = withContext(Dispatchers.IO) {
+                val b = buildOnce(previewSeed, counts, save = false)
+                val bmp = PdfPreviewRenderer.render(ctx, b.pdf.bytes, scale = 0.75f).firstOrNull()
+                bmp to (contentFillRatio(b.pdf) * 100).toInt()
+            }
+            livePreview = result.first
+            liveFillPercent = result.second
+        }
+    }
+
+    /** 试卷库里点一张历史卷：同一种子会生成同一套题 */
     suspend fun reopen(saved: SavedPaper) {
         grade = saved.grade
         subject = runCatching { Subject.valueOf(saved.subject) }.getOrDefault(Subject.MATH)
-        counts = PaperComposer.defaultSpec(grade, subject).counts
+        subjects = listOf(subject)
+        counts = PaperComposer.defaultSpec(grade, subjects).counts
         titleOverride = saved.title
         busy = true
         try {
@@ -197,8 +342,7 @@ class AppState(private val rawContext: Context) {
                 val spec = LocalStore.toSpec(saved).copy(title = saved.title, seed = saved.createdAt)
                 val gp = PaperComposer.compose(spec)
                 val rendered = PaperRenderer.render(PaperAssembler.build(gp))
-                val pages = PdfPreviewRenderer.render(ctx, rendered.bytes)
-                Built(gp, rendered, pages, saved.id)
+                Built(gp, rendered, PdfPreviewRenderer.render(ctx, rendered.bytes), saved.id)
             }
             applyBuilt(built)
             toast = "已重新打开：${saved.title}"
@@ -209,11 +353,10 @@ class AppState(private val rawContext: Context) {
         busy = false
     }
 
-    /** 错题重练卷：直接把错题快照组成卷子，不走生成器 */
     suspend fun generateMistakePaper() {
         val pool = mistakes.filter { it.mastery != "MASTERED" }
             .groupBy { it.topic }
-            .flatMap { (_, list) -> list.take(3) }   // 同一知识点最多 3 题，防止整卷都是同一考点
+            .flatMap { (_, list) -> list.take(3) }
             .take(40)
         if (pool.isEmpty()) {
             toast = "没有待练的错题（已掌握的不参与组卷）"
@@ -226,22 +369,19 @@ class AppState(private val rawContext: Context) {
                     GeneratedQuestion(
                         no = i + 1,
                         type = runCatching { QuestionType.valueOf(m.type) }.getOrDefault(QuestionType.ORAL),
-                        stem = m.stem,
-                        answer = m.answer,
-                        topic = m.topic,
+                        stem = m.stem, answer = m.answer, topic = m.topic,
                     )
                 }
                 val sections = qs.groupBy { it.type }.entries.mapIndexed { idx, (type, list) ->
                     GeneratedSection(
                         index = idx + 1,
                         title = "${idx + 1}、${type.label}（错题重练）",
-                        type = type,
-                        questions = list,
+                        type = type, questions = list,
                         columns = if (type.answerLines > 0) 1 else 2,
                         answerLines = type.answerLines,
                     )
                 }
-                val spec = currentSpec().copy(
+                val spec = currentSpec(System.currentTimeMillis()).copy(
                     title = "${subject.label}错题重练",
                     subtitle = "共 ${qs.size} 题　来自错题本",
                     isMistakePaper = true,
@@ -250,13 +390,14 @@ class AppState(private val rawContext: Context) {
                 )
                 val gp = GeneratedPaper(spec, sections, qs, System.currentTimeMillis())
                 val rendered = PaperRenderer.render(PaperAssembler.build(gp))
-                val pages = PdfPreviewRenderer.render(ctx, rendered.bytes)
-                val saved = LocalStore.savePaper(ctx, gp, rendered.fileName)
-                LocalStore.markPracticed(ctx, pool.map { it.id })
-                Built(gp, rendered, pages, saved.id)
+                Built(
+                    gp, rendered,
+                    PdfPreviewRenderer.render(ctx, rendered.bytes),
+                    LocalStore.savePaper(ctx, gp, rendered.fileName).id,
+                )
             }
+            LocalStore.markPracticed(ctx, pool.map { it.id })
             applyBuilt(built)
-            refreshLists()
             toast = "已生成错题重练卷：${built.paper.questions.size} 题"
             screen = Screen.PREVIEW
         } catch (t: Throwable) {
@@ -265,6 +406,150 @@ class AppState(private val rawContext: Context) {
         busy = false
     }
 
+    // ---------------------------------------------------------------- 单题编辑
+
+    private fun freshQuestion(gp: GeneratedPaper, type: QuestionType): GeneratedQuestion? {
+        val generator = GeneratorRegistry.of(type, gp.spec.grade) ?: return null
+        val ctx2 = GenContext(
+            grade = gp.spec.grade,
+            count = 1,
+            difficulty = gp.spec.difficulty,
+            rng = Random(System.nanoTime()),
+            blocked = gp.questions.map { com.papermill.app.domain.generate.stableHash(it.stem) }.toMutableSet(),
+            subjects = gp.spec.effectiveSubjectsForState().toSet(),
+        )
+        return generator.generate(ctx2).firstOrNull()
+    }
+
+    /** 所有题目重新连续编号，避免删掉中间一题后题号出现跳号 */
+    private fun renumber(sections: List<GeneratedSection>): List<GeneratedSection> {
+        var cursor = 0
+        return sections.map { s ->
+            val qs = s.questions.mapIndexed { i, q -> q.copy(no = cursor + i + 1) }
+            cursor += qs.size
+            s.copy(questions = qs)
+        }
+    }
+
+    /** 换一题：只重出这一道，其它题不动 */
+    suspend fun replaceQuestion(no: Int) {
+        val gp = paper ?: return
+        val old = gp.questions.firstOrNull { it.no == no } ?: return
+        busy = true
+        try {
+            val fresh = withContext(Dispatchers.IO) { freshQuestion(gp, old.type) }
+            if (fresh == null) {
+                toast = "这类题暂时抽不出新题了，可换其它题型"
+            } else {
+                val sections = gp.sections.map { s ->
+                    s.copy(questions = s.questions.map { q -> if (q.no == no) fresh.copy(no = no) else q })
+                }
+                reRender(gp.copy(sections = sections, questions = sections.flatMap { it.questions }))
+                toast = "第 $no 题已换"
+            }
+        } catch (t: Throwable) {
+            toast = "换题失败：${t.message}"
+        }
+        busy = false
+    }
+
+    /** 删一题：后续题号自动顺延，重新排版 */
+    suspend fun removeQuestion(no: Int) {
+        val gp = paper ?: return
+        if (gp.questions.size <= 1) {
+            toast = "至少留一道题"
+            return
+        }
+        busy = true
+        try {
+            val stripped = gp.sections.map { s -> s.copy(questions = s.questions.filter { it.no != no }) }
+            val sections = renumber(stripped)
+            reRender(gp.copy(sections = sections, questions = sections.flatMap { it.questions }))
+            toast = "已删除第 $no 题，题号已顺延"
+        } catch (t: Throwable) {
+            toast = "删除失败：${t.message}"
+        }
+        busy = false
+    }
+
+    /** 加一题：跟最后一道题同题型，追加到对应大题末尾并整卷重新编号 */
+    suspend fun appendQuestion() {
+        val gp = paper ?: return
+        val lastType = gp.questions.lastOrNull()?.type ?: return
+        busy = true
+        try {
+            val fresh = withContext(Dispatchers.IO) { freshQuestion(gp, lastType) }
+            if (fresh == null) {
+                toast = "这类题暂时抽不出新题了，可回参数页换题型"
+            } else {
+                val mutable = gp.sections.toMutableList()
+                val target = mutable.indexOfLast { it.type == lastType }.takeIf { it >= 0 }
+                    ?: mutable.lastIndex
+                mutable[target] = mutable[target].copy(questions = mutable[target].questions + fresh)
+                val sections = renumber(mutable)
+                reRender(gp.copy(sections = sections, questions = sections.flatMap { it.questions }))
+                toast = "已在末尾加 1 题，共 ${sections.flatMap { it.questions }.size} 题"
+            }
+        } catch (t: Throwable) {
+            toast = "加题失败：${t.message}"
+        }
+        busy = false
+    }
+
+    private suspend fun reRender(gp: GeneratedPaper) {
+        val rendered = withContext(Dispatchers.IO) {
+            val r = PaperRenderer.render(PaperAssembler.build(gp))
+            r to PdfPreviewRenderer.render(ctx, r.bytes)
+        }
+        paper = gp
+        pdf = rendered.first
+        previews = rendered.second
+        wrongNumbers = emptySet()
+    }
+
+    // ---------------------------------------------------------------- 速查表 / 每日一练
+
+    suspend fun renderReference(sheet: ReferenceSheet) {
+        busy = true
+        try {
+            val result = withContext(Dispatchers.IO) {
+                val r = PaperRenderer.render(ReferenceRenderer.build(sheet))
+                r to PdfPreviewRenderer.render(ctx, r.bytes)
+            }
+            pdf = result.first
+            previews = result.second
+            paper = null
+            savedPaperId = ""
+            wrongNumbers = emptySet()
+            showQuestionList = false
+            isReference = true
+            toast = "《${sheet.title}》共 ${result.first.pageCount} 页，可直接打印"
+            screen = Screen.PREVIEW
+        } catch (t: Throwable) {
+            toast = "生成速查表失败：${t.message}"
+        }
+        busy = false
+    }
+
+    /** 每天一份不重样：以当天日期为种子，混合该年级 3 门主科 */
+    suspend fun generateDaily() {
+        val picked = Subject.values().filter { it.availableFor(grade) }.take(3)
+        subjects = picked
+        subject = picked.first()
+        val types = GeneratorRegistry.availableFor(grade, picked)
+        val map = LinkedHashMap<QuestionType, Int>()
+        types.firstOrNull { it == QuestionType.ORAL || it == QuestionType.RATIONAL }
+            ?.let { map[it] = 20 }
+        types.filter { it.answerLines == 0 && it != QuestionType.KNOWLEDGE && it !in map }
+            .take(2).forEach { map[it] = 8 }
+        if (QuestionType.KNOWLEDGE in types) map[QuestionType.KNOWLEDGE] = 6
+        counts = map
+        titleOverride = "${GradeProfiles.gradeLabel(grade)} · 每日一练 · ${todayText()}"
+        generate(daySeed())
+    }
+
+    // ---------------------------------------------------------------- 打印 / 导出
+
     private fun applyBuilt(b: Built) {
         paper = b.paper
         pdf = b.pdf
@@ -272,10 +557,9 @@ class AppState(private val rawContext: Context) {
         savedPaperId = b.savedId
         wrongNumbers = emptySet()
         showQuestionList = false
+        isReference = false
         refreshLists()
     }
-
-    // ---------------------------------------------------------------- 打印 / 导出
 
     suspend fun print(activity: Activity) {
         val current = pdf ?: return
@@ -324,8 +608,7 @@ class AppState(private val rawContext: Context) {
     // ---------------------------------------------------------------- 备份
 
     fun exportBackup(): File {
-        val dir = PdfExporter.papersDir(ctx)
-        val file = File(dir, "卷子备份_${System.currentTimeMillis()}.json")
+        val file = File(PdfExporter.papersDir(ctx), "卷子备份_${System.currentTimeMillis()}.json")
         file.writeText(LocalStore.exportAll(ctx))
         toast = "备份已存到：${file.absolutePath}"
         return file
@@ -336,12 +619,9 @@ class AppState(private val rawContext: Context) {
             ctx.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
         }.getOrNull()
         toast = if (text != null && LocalStore.importAll(ctx, text)) {
-            refreshLists()
-            "备份已恢复"
+            refreshLists(); "备份已恢复"
         } else "备份文件读取失败或格式不对"
     }
-
-    fun openPrintSettings() = PrintServiceProbe.openSettings(ctx)
 
     fun shareBackup() {
         val file = exportBackup()
@@ -359,4 +639,38 @@ class AppState(private val rawContext: Context) {
             )
         }.onFailure { toast = "分享失败：${it.message}" }
     }
+
+    // ---------------------------------------------------------------- 更新
+
+    suspend fun checkUpdate() {
+        updateInfo = "正在检查更新…"
+        val release = UpdateChecker.check()
+        updateRelease = release
+        updateInfo = when {
+            release == null -> "检查失败（可能访问不到 GitHub），可到「打印帮助」里手动打开仓库"
+            UpdateChecker.isNewer(release.version, versionName) ->
+                "发现新版本 ${release.version}：${release.name}"
+            else -> "已是最新版本 $versionName"
+        }
+    }
+
+    fun openUrl(url: String) {
+        runCatching {
+            ctx.startActivity(
+                Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+        }.onFailure { toast = "打开失败：${it.message}" }
+    }
+
+    fun openPrintSettings() = PrintServiceProbe.openSettings(ctx)
 }
+
+private fun daySeed(): Long {
+    val sdf = SimpleDateFormat("yyyyMMdd", Locale.CHINA)
+    return sdf.format(Date()).toLongOrNull() ?: System.currentTimeMillis()
+}
+
+private fun todayText(): String = SimpleDateFormat("M 月 d 日", Locale.CHINA).format(Date())
+
+private fun PaperSpec.effectiveSubjectsForState(): List<Subject> =
+    if (subjects.isEmpty()) listOf(subject) else subjects

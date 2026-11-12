@@ -3,13 +3,16 @@ package com.papermill.app.feature
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -27,6 +30,14 @@ import com.papermill.app.core.design.PaperColors
 
 @Composable
 fun AppHeader(state: AppState) {
+    val onCompose = when (state.screen) {
+        Screen.HOME, Screen.CREATE -> true
+        Screen.PREVIEW -> !state.isReference
+        else -> false
+    }
+    val onReference = state.screen == Screen.REFERENCE ||
+        (state.screen == Screen.PREVIEW && state.isReference)
+
     Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 14.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("卷子", fontSize = 24.sp, fontWeight = FontWeight.SemiBold, color = PaperColors.OnSurface)
@@ -35,12 +46,20 @@ fun AppHeader(state: AppState) {
                 fontSize = 12.sp,
                 color = PaperColors.OnSurfaceVariant,
             )
+            Spacer(Modifier.weight(1f))
+            Text("v${state.versionName}", fontSize = 10.sp, color = PaperColors.OnSurfaceVariant)
         }
+        // 5 个页签在窄屏上放不下，改成可横向滑动，避免最后一个被裁掉
         Row(
-            Modifier.fillMaxWidth().padding(top = 12.dp),
+            Modifier
+                .fillMaxWidth()
+                .padding(top = 12.dp)
+                .horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            TabBtn("出卷", state.screen == Screen.HOME) { state.screen = Screen.HOME }
+            TabBtn("出卷", onCompose) { state.screen = Screen.HOME }
+            TabBtn("速查表", onReference) { state.screen = Screen.REFERENCE }
             TabBtn("错题本", state.screen == Screen.MISTAKES) { state.screen = Screen.MISTAKES }
             TabBtn("试卷库", state.screen == Screen.HISTORY) {
                 state.refreshLists(); state.screen = Screen.HISTORY
@@ -88,7 +107,7 @@ fun CardSection(
         if (hint.isNotEmpty()) {
             Text(hint, fontSize = 11.sp, color = PaperColors.OnSurfaceVariant, modifier = Modifier.padding(top = 2.dp))
         }
-        androidx.compose.foundation.layout.Spacer(Modifier.height(10.dp))
+        Spacer(Modifier.height(10.dp))
         content()
     }
 }
@@ -149,13 +168,17 @@ fun <T> ChipGrid(
                 }
                 // 最后一行不足 perRow 个时用空位补齐，保持列宽一致
                 repeat(perRow - row.size) {
-                    androidx.compose.foundation.layout.Spacer(Modifier.weight(1f))
+                    Spacer(Modifier.weight(1f))
                 }
             }
         }
     }
 }
 
+/**
+ * 题量步进：既能 ±1 精调（用户明确要求「自定义增加减少题目」），
+ * 也保留 ±5 快速批量调整。
+ */
 @Composable
 fun StepperRow(
     label: String,
@@ -163,6 +186,8 @@ fun StepperRow(
     hint: String = "",
     onMinus: () -> Unit,
     onPlus: () -> Unit,
+    onMinusMore: () -> Unit = {},
+    onPlusMore: () -> Unit = {},
 ) {
     Row(
         Modifier.fillMaxWidth().padding(vertical = 5.dp),
@@ -172,27 +197,29 @@ fun StepperRow(
             Text(label, fontSize = 13.sp, color = PaperColors.OnSurface)
             if (hint.isNotEmpty()) Text(hint, fontSize = 10.sp, color = PaperColors.OnSurfaceVariant)
         }
-        SmallBtn("－") { onMinus() }
+        SmallBtn("－5", 7) { onMinusMore() }
+        SmallBtn("－", 9) { onMinus() }
         Text(
             "$value",
             fontSize = 14.sp,
             color = PaperColors.OnSurface,
-            modifier = Modifier.padding(horizontal = 12.dp),
+            modifier = Modifier.padding(horizontal = 8.dp),
         )
-        SmallBtn("＋") { onPlus() }
+        SmallBtn("＋", 9) { onPlus() }
+        SmallBtn("＋5", 7) { onPlusMore() }
     }
 }
 
 @Composable
-private fun SmallBtn(text: String, onClick: () -> Unit) {
+private fun SmallBtn(text: String, padH: Int = 12, onClick: () -> Unit) {
     Box(
         Modifier
             .background(PaperColors.PrimaryContainer, RoundedCornerShape(10.dp))
             .clickable { onClick() }
-            .padding(horizontal = 12.dp, vertical = 5.dp),
+            .padding(horizontal = padH.dp, vertical = 5.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Text(text, fontSize = 15.sp, color = PaperColors.Primary, fontWeight = FontWeight.Medium)
+        Text(text, fontSize = 14.sp, color = PaperColors.Primary, fontWeight = FontWeight.Medium)
     }
 }
 
