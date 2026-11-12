@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Compose 应用不需要 AppCompat 主题；用系统 Material Light 无标题栏即可 -->
+    <style name="Theme.PaperMill" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:statusBarColor">#F7F5F0</item>
+        <item name="android:navigationBarColor">#F7F5F0</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowBackground">#F7F5F0</item>
+    </style>
+</resources>

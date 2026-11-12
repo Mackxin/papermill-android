@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- 试卷 PDF（Android/data/<包名>/files/papers/） -->
+    <external-files-path name="papers" path="papers/" />
+
+    <!--
+      外部存储不可用时（拔卡 / 挂载异常）PdfExporter 会退到内部 filesDir/papers/。
+      这里必须同时声明，否则 FileProvider.getUriForFile 会抛 IllegalArgumentException，
+      被调用处 runCatching 吞掉 → 界面上「点了没反应」，连错误都看不到。
+    -->
+    <files-path name="papers_internal" path="papers/" />
+
+    <cache-path name="cache" path="." />
+</paths>
