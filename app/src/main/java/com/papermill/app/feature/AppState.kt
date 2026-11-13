@@ -35,6 +35,7 @@ import com.papermill.app.domain.generate.PaperSpec
 import com.papermill.app.domain.generate.PageOrientation
 import com.papermill.app.domain.generate.QuestionType
 import com.papermill.app.domain.generate.Subject
+import com.papermill.app.domain.generate.stableHash
 import com.papermill.app.domain.reference.ReferenceSheet
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -95,6 +96,8 @@ class AppState(private val rawContext: Context) {
     // 参数页默认只露题量；卷面细节收进折叠区，避免一屏塞 6 组开关
     var showAdvanced by mutableStateOf(false)
     var showAllTypes by mutableStateOf(false)
+    /** 预览页「自定义加题」一次加几道，用户可调 */
+    var extraAddCount by mutableStateOf(5)
 
     var livePreview by mutableStateOf<ImageBitmap?>(null)
     var liveFillPercent by mutableStateOf(0)
@@ -496,6 +499,153 @@ class AppState(private val rawContext: Context) {
             toast = "生成失败：${t.message}"
         }
         busy = false
+    }
+
+    // ---------------------------------------------------------------- 预览页补题
+
+    private data class AppendProbe(
+        val paper: GeneratedPaper,
+        val pdf: RenderedPdf,
+        val ratio: Float,
+        val pages: Int,
+    )
+
+    /**
+     * 在现有卷子末尾追加 n 道题并试排一次（不落库、不渲染预览）。
+     *
+     * 新题追加到「最后一个大题」—— 它正好落在最后一页正文上，补它才真的把
+     * 那张纸填满；补到第一个大题反而会把后面的版面整体往后推，越补越浪费纸
+     * （v0.3.0 就踩过这个坑）。
+     */
+    private fun probeAppend(base: GeneratedPaper, n: Int): AppendProbe? {
+        if (n <= 0) return null
+        val last = base.sections.lastOrNull() ?: return null
+        val generator = GeneratorRegistry.of(last.type, base.spec.grade) ?: return null
+        val ctx2 = GenContext(
+            grade = base.spec.grade,
+            count = n,
+            difficulty = base.spec.difficulty,
+            rng = Random(System.nanoTime()),
+            blocked = base.questions.map { stableHash(it.stem) }.toMutableSet(),
+            subjects = base.spec.effectiveSubjectsForState().toSet(),
+        )
+        val fresh = generator.generate(ctx2)
+        if (fresh.isEmpty()) return null
+
+        val mutable = base.sections.toMutableList()
+        val idx = mutable.lastIndex
+        mutable[idx] = mutable[idx].copy(questions = mutable[idx].questions + fresh)
+        val sections = renumber(mutable)
+        val gp = base.copy(sections = sections, questions = sections.flatMap { it.questions })
+        val rendered = PaperRenderer.render(PaperAssembler.build(gp))
+        return AppendProbe(gp, rendered, contentFillRatio(rendered), rendered.contentPageCount)
+    }
+
+    fun changeExtraAdd(delta: Int) {
+        extraAddCount = (extraAddCount + delta).coerceIn(1, 30)
+    }
+
+    /** 自定义加 N 题：若会多出一张纸，自动退到「不增页」的最大题数 */
+    suspend fun addQuestions(n: Int) {
+        val gp = paper ?: return
+        if (isReference || n <= 0) return
+        busy = true
+        try {
+            val basePages = withContext(Dispatchers.IO) {
+                PaperRenderer.render(PaperAssembler.build(gp)).contentPageCount
+            }
+            val candidates = buildList {
+                add(n)
+                listOf(0.75f, 0.5f, 0.25f).forEach { f ->
+                    val v = (n * f).toInt()
+                    if (v > 0) add(v)
+                }
+                add(1)
+            }.distinct()
+
+            var chosen: AppendProbe? = null
+            var exhausted = false
+            for (candidate in candidates) {
+                val probe = withContext(Dispatchers.IO) { probeAppend(gp, candidate) }
+                if (probe == null) {
+                    exhausted = true
+                    continue
+                }
+                if (probe.pages <= basePages && probe.paper.questions.size > gp.questions.size) {
+                    chosen = probe
+                    break
+                }
+            }
+            if (chosen != null) {
+                applyAppend(chosen, "已加")
+            } else {
+                toast = if (exhausted) {
+                    "这类题暂时抽不出新题了，可回参数页换题型"
+                } else {
+                    "这一页已经放不下了：再加题会多出一张纸，已取消"
+                }
+            }
+        } catch (t: Throwable) {
+            toast = "加题失败：${t.message}"
+        }
+        busy = false
+    }
+
+    /** 「补满这一页」：逐轮试排，只保留「不增页 & 填充率最高」的那一轮 */
+    suspend fun fillLastPage() {
+        val gp = paper ?: return
+        if (isReference) return
+        busy = true
+        try {
+            val basePages = withContext(Dispatchers.IO) {
+                PaperRenderer.render(PaperAssembler.build(gp)).contentPageCount
+            }
+            var best: AppendProbe? = null
+            var bestRatio = pdf?.let { contentFillRatio(it) } ?: 0f
+            var total = 0
+
+            for (attempt in 0..5) {
+                if (bestRatio >= FILL_TARGET) break
+                val step = suggestedExtra(bestRatio)
+                if (step <= 0) break
+                val want = total + step
+                if (want > 40) break
+                val probe = withContext(Dispatchers.IO) { probeAppend(gp, want) } ?: break
+                // 补到多出一张纸、或填充率没有长进，就停，保留上一轮最好的版本
+                if (probe.pages > basePages || probe.ratio <= bestRatio + 0.005f) break
+                best = probe
+                bestRatio = probe.ratio
+                total = want
+            }
+
+            if (best != null) {
+                applyAppend(best, "自动补满，已加")
+            } else {
+                toast = "当前版面已经排得比较满，再加题会多出一张纸"
+            }
+        } catch (t: Throwable) {
+            toast = "补题失败：${t.message}"
+        }
+        busy = false
+    }
+
+    private suspend fun applyAppend(probe: AppendProbe, prefix: String) {
+        val baseSize = paper?.questions?.size ?: 0
+        val added = probe.paper.questions.size - baseSize
+        val total = probe.paper.questions.size
+        // 卷头副标题写着「共 N 题」，加题后必须同步，不然印出来数字对不上
+        val fixed = probe.paper.copy(
+            spec = probe.paper.spec.copy(subtitle = "共 $total 题　满分 ${total * 2} 分"),
+        )
+        reRender(fixed)
+        val type = fixed.sections.lastOrNull()?.type
+        if (type != null) {
+            val map = LinkedHashMap(counts)
+            map[type] = (map[type] ?: 0) + added
+            counts = map
+        }
+        toast = "$prefix $added 题，共 $total 题 / ${probe.pdf.pageCount} 页，" +
+            "末页正文 $lastContentFillPercent%，未增加页数"
     }
 
     // ---------------------------------------------------------------- 单题编辑

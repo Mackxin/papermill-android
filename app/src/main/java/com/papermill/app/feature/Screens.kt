@@ -536,11 +536,50 @@ private fun PreviewScreen(
         if (!isRef && state.finalSuggestExtra > 0) {
             Spacer(Modifier.height(9.dp))
             Text(
-                "注意：最后一页还有空白，建议再加约 ${state.finalSuggestExtra} 题，或回参数页开启「自动补满整页」。",
+                "最后一页还有空白，建议再加约 ${state.finalSuggestExtra} 题 —— 直接在下面点「补满这一页」即可。",
                 fontSize = PaperDimens.CaptionSp,
                 color = PaperColors.Accent,
                 lineHeight = 16.sp,
             )
+        }
+    }
+
+    if (!isRef) {
+        Spacer(Modifier.height(PaperDimens.Gap))
+        CardSection(
+            title = "这一页还有空白？",
+            hint = "末页正文 $pct% · 加题后立刻重排，放不下会自动减量，绝不白多印一张纸",
+        ) {
+            Row(horizontalArrangement = Arrangement.spacedBy(PaperDimens.GapSmall)) {
+                PrimaryButton(
+                    "补满这一页",
+                    enabled = !state.busy && pct < 92,
+                    modifier = Modifier.weight(1f),
+                ) { scope.launch { state.fillLastPage() } }
+                SecondaryButton(
+                    "加 ${state.extraAddCount} 题",
+                    enabled = !state.busy,
+                    modifier = Modifier.weight(1f),
+                ) { scope.launch { state.addQuestions(state.extraAddCount) } }
+            }
+            Spacer(Modifier.height(6.dp))
+            StepperRow(
+                label = "自定义加题数量",
+                value = state.extraAddCount,
+                hint = "1–30 题 · 会先试排，放不下自动减量",
+                onMinus = { state.changeExtraAdd(-1) },
+                onPlus = { state.changeExtraAdd(1) },
+                onMinusMore = { state.changeExtraAdd(-5) },
+                onPlusMore = { state.changeExtraAdd(5) },
+            )
+            Divider()
+            SettingRow("纸张方向（立即重排）") {
+                PageOrientation.values().forEach { o ->
+                    ChoiceChip(o.shortLabel, state.orientation == o) {
+                        scope.launch { state.setOrientation(o) }
+                    }
+                }
+            }
         }
     }
 
