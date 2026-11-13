@@ -1,0 +1,84 @@
+# 卷子 PaperMill
+
+给小学 / 初中孩子用的**练习卷生成与打印** Android App。选年级 → 选题型组合 → 实时预览 → 补满一页 → 打印出来。题目全部离线生成，数据只存在本机。
+
+搭配奔图 M1（或任何支持 AirPrint / Mopria 的打印机）在家打印；不在同一 WiFi 时导出 PDF 走「奔图云打印」小程序远程打印。
+
+---
+
+## 核心流程
+
+```
+选年级 / 科目（可多选交叉）
+   → 选预设卷 或 自定义每种题型的题量
+   → 实时预览第 1 页 + 末页填充率
+   → 生成试卷，分页查看 A4 预览
+   → 空白太多？点「补满这一页」或「加 N 题」（保证不多印一张纸）
+   → 竖版 / 横版随时切换，立即重排
+   → 系统打印 / 保存 PDF / 分享 PDF
+```
+
+**「打印出完整的一页纸」是硬目标**：自动补题带硬约束 —— 逐轮试排，只保留「不增加正文页数且末页填充率最高」的那一版；预览页手动加题也会先试排，放不下自动减量并提示。
+
+## 功能
+
+| 模块 | 说明 |
+|---|---|
+| 出卷 | 1–9 年级，数学 / 语文 / 英语 / 物理 / 化学，可多学科交叉；30+ 种题型任意组合题量 |
+| 程序化题目 | 口算、竖式、脱式、分数、方程、应用题、有理数、整式、二次根式、拼音、生字、单词、理化计算 |
+| v0.4.0 新题型 | 填括号、凑十、连加连减、加减混合、整十数、两位数加减、单位换算、比大小、找规律、数数、字母顺序 |
+| 内置自编题库 | `assets/bank/builtin_questions.json`，74 道按知识点自编的选择 / 判断题，选项洗牌 + 答案字母同步换算，可反复出不重样 |
+| 满页保证 | 自动补题、手动补满、自定义加题数量；答案页单独统计，不把答案页填充率误报成正文页 |
+| 横版打印 | A4 竖版 595×842pt / 横版 842×595pt，PDF 页面尺寸与 `PrintAttributes.MediaSize` 同步，打印框不会被二次缩放 |
+| 速查表 | 7 张：九九乘法表、拼音音节表、小学 / 初中数学公式、物理公式、化学必备、英语不规则动词 |
+| 练习纸 | 8 张：田字格、米字格、拼音四线格、方格纸、横条纸、点阵纸、坐标纸、横版田字格；格子按页面剩余高度铺满整页 |
+| 错题本 | 预览页勾错题 → 错题本 → 按知识点生成错题重练卷，支持掌握度标记 |
+| 试卷库 / 备份 | 本地 JSON 保存题目快照，同种子可复现同一套题；一键导出 / 恢复备份 |
+| 每日一练 | 以当天日期为种子，混合 3 门主科，每天自动换新 |
+| 检查更新 | App 内查 GitHub Releases（唯一需要联网的动作），出卷 / 排版 / 打印全程离线 |
+
+## 打印奔图 M1
+
+**在家（同一 WiFi）**：手机装「奔图打印」App，或在 系统设置 → 打印 里启用 Mopria 打印服务 → App 里点「系统打印」→ 选奔图 M1 → 纸张选 ISO A4（选横版时打印框自动匹配 A4 横向）。
+
+不需要奔图 SDK：M1 支持 AirPrint / Mopria，Android 自带 `PrintManager` + `PrintDocumentAdapter` 直接送 PDF 即可。
+
+**在外面（远程）**：点「分享」把 PDF 发到微信 → 长按 PDF → 用其他应用打开 → 「奔图云打印」小程序 → 选已绑定的 M1。奔图云打印**没有公开 API**，开放平台 SDK 需企业资质审核，因此这一步必须由小程序完成，App 只负责交出排版好的 PDF。
+
+## 题目来源与版权边界
+
+- **不抓取、不内置任何市面题库 / 教辅 / 教材原题。** 题目 100% 由 App 内算法生成，或按知识点自编。
+- 外部练习网站只借鉴「有哪些题型」这一层规则（填括号、凑十、连加连减、元角分换算、字母顺序等属于题型模式与数学事实），不复制其原题、PDF、图片或版面。
+- 速查表只收录不受著作权保护的基础事实与公式，自行整理编排。
+- 练习纸的「横条 / 方格 / 英文四线三格」版式思路参考 [namishu/printables](https://github.com/namishu/printables)（MIT）。本项目**未使用其代码、样例 PDF 或内置字体**，全部用 Android Canvas 自绘重新实现；完整 MIT 声明见 [`app/src/main/assets/licenses/NAMISHU_PRINTABLES_LICENSE.txt`](app/src/main/assets/licenses/NAMISHU_PRINTABLES_LICENSE.txt)。田字格、米字格、坐标纸等为通行基础版式，自行编排。
+- 不打包任何字体文件，中文靠 Android 系统字体回退，PDF 体积保持在几十 KB。
+
+## 技术方案
+
+- Kotlin 2.0.21 + Jetpack Compose (Material3) + AGP 8.5.0，单 Activity，手写 `AppState` 状态容器（不引 Hilt / Room）。
+- PDF：`android.graphics.pdf.PdfDocument` 直接绘制，零第三方依赖。排版是两阶段：`FlowLayout` 先算「第几页 / 第几栏 / 哪个 y」，再逐页画卷头、页眉页码、正文、页脚。多栏采用水位均衡填充，不会 20 道题全挤左栏。
+- 预览：`PdfRenderer` 把**同一份 PDF 字节**渲染成位图，所见即所得。
+- 分享：`FileProvider` + `ACTION_SEND(application/pdf)`。
+- 本地存储：`papers.json` / `mistakes.json`，纯本地，无账号、无上传。
+
+## 构建
+
+```bash
+# 需要 JDK 17、Android SDK 34
+export JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home
+export ANDROID_HOME=$HOME/Library/Android/sdk
+./gradlew :app:assembleRelease
+```
+
+产物：`app/build/outputs/apk/release/app-release.apk`（用 debug keystore 签名，方便覆盖安装、数据不丢）。
+
+## 版本
+
+| 版本 | 内容 |
+|---|---|
+| v0.1.0 | M0 闭环：A4 PDF 排版、系统打印 / 分享链路 |
+| v0.2.0 | 完整出卷 UI、全科生成器、多学科交叉、实时预览、满页保证、内置题库、速查表、每日一练、App 内检查更新、仓库公开 |
+| v0.3.0 | UI 全面重设计：底部 4 页签、固定操作条、一屏出卷、分页预览；修复自动补题越补越费纸的退化 |
+| v0.4.0 | 预览页补满空白 / 自定义加题数量、A4 横版打印、11 种新题型、8 张铺满整页的练习纸、题库扩容、README |
+
+Releases 与 APK：<https://github.com/Mackxin/papermill-android/releases>
