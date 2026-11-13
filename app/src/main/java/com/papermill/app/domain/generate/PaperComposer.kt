@@ -69,15 +69,25 @@ object PaperComposer {
         )
     }
 
-    /** 默认规格：按年级科目自动挑两个最合适的题型，打开就能直接出一份 */
+    /**
+     * 默认规格：打开就能直接出一份。
+     * 单科时只用**一个题型** —— 每个大题在排版上会另起一页，
+     * 「口算 20 + 竖式 4」会白占两张纸；单题型卷配合自动补题能正好排满一页。
+     * 勾了多学科时才给两个题型，保证各科都有题。
+     */
     fun defaultSpec(grade: Int, subject: Subject): PaperSpec = defaultSpec(grade, listOf(subject))
 
     fun defaultSpec(grade: Int, subjects: List<Subject>): PaperSpec {
         val primary = subjects.firstOrNull() ?: Subject.MATH
         val types = GeneratorRegistry.availableFor(grade, subjects)
         val counts = LinkedHashMap<QuestionType, Int>()
-        types.take(2).forEachIndexed { i, t ->
-            counts[t] = if (t.answerLines > 0) 4 else if (i == 0) 20 else 10
+        if (subjects.size > 1) {
+            types.take(2).forEachIndexed { i, t ->
+                counts[t] = if (t.answerLines > 0) 4 else if (i == 0) 20 else 10
+            }
+        } else {
+            val first = types.firstOrNull()
+            if (first != null) counts[first] = if (first.answerLines > 0) 8 else 30
         }
         return specWith(grade, primary, counts, subjects = subjects)
     }

@@ -44,7 +44,10 @@ import java.util.Locale
 import java.util.Random
 import kotlin.math.ceil
 
-enum class Screen { HOME, CREATE, PREVIEW, MISTAKES, HISTORY, HELP, REFERENCE }
+enum class Screen { HOME, CREATE, PREVIEW, MISTAKES, HISTORY, HELP, REFERENCE, MORE }
+
+/** 底部 4 个固定页签；PREVIEW / CREATE 归到「出卷」，HISTORY / HELP 归到「更多」 */
+enum class NavTab { HOME, REFERENCE, MISTAKES, MORE }
 
 private data class Built(
     val paper: GeneratedPaper,
@@ -84,6 +87,12 @@ class AppState(private val rawContext: Context) {
     var showQuestionList by mutableStateOf(false)
     var isReference by mutableStateOf(false)
 
+    // 预览页改成「一次只看一页」，不再把 3 页 A4 竖着铺满整个屏幕
+    var previewPage by mutableStateOf(0)
+    // 参数页默认只露题量；卷面细节收进折叠区，避免一屏塞 6 组开关
+    var showAdvanced by mutableStateOf(false)
+    var showAllTypes by mutableStateOf(false)
+
     var livePreview by mutableStateOf<ImageBitmap?>(null)
     var liveFillPercent by mutableStateOf(0)
     var previewSeed by mutableStateOf(daySeed())
@@ -104,6 +113,49 @@ class AppState(private val rawContext: Context) {
 
     val availableTypes: List<QuestionType>
         get() = GeneratorRegistry.availableFor(grade, subjects)
+
+    /** 参数页只列已选题型；没选的收进「添加题型」折叠区 */
+    val selectedTypes: List<QuestionType>
+        get() = availableTypes.filter { (counts[it] ?: 0) > 0 }
+
+    val unselectedTypes: List<QuestionType>
+        get() = availableTypes.filter { (counts[it] ?: 0) == 0 }
+
+    val navTab: NavTab
+        get() = when (screen) {
+            Screen.REFERENCE -> NavTab.REFERENCE
+            Screen.MISTAKES -> NavTab.MISTAKES
+            Screen.MORE, Screen.HISTORY, Screen.HELP -> NavTab.MORE
+            Screen.PREVIEW -> if (isReference) NavTab.REFERENCE else NavTab.HOME
+            else -> NavTab.HOME
+        }
+
+    fun goTab(tab: NavTab) {
+        toast = ""
+        screen = when (tab) {
+            NavTab.HOME -> Screen.HOME
+            NavTab.REFERENCE -> Screen.REFERENCE
+            NavTab.MISTAKES -> Screen.MISTAKES
+            NavTab.MORE -> Screen.MORE
+        }
+        if (tab == NavTab.MORE) refreshLists()
+    }
+
+    /** 首页快捷卡片：套用题量后立刻出卷，不再先跳去参数页 */
+    fun useTemplate(newCounts: Map<QuestionType, Int>) {
+        counts = LinkedHashMap(newCounts)
+        titleOverride = null
+        previewSeed = System.currentTimeMillis()
+    }
+
+    fun addType(type: QuestionType) = setCount(type, 10)
+
+    fun nextPreviewPage(delta: Int) {
+        val last = (previews.size - 1).coerceAtLeast(0)
+        previewPage = (previewPage + delta).coerceIn(0, last)
+    }
+
+    fun clearToast() { toast = "" }
 
     init {
         bankSize = BankQuestionSource.loadFromAssets(ctx)
@@ -203,8 +255,11 @@ class AppState(private val rawContext: Context) {
             .toInt().coerceIn(1, 16)
     }
 
-    private fun pickFillType(map: Map<QuestionType, Int>): QuestionType? {
+    /** 优先补「最后一个大题」的题型 —— 它就在最后一页正文上，补它才真的把最后一张纸填满 */
+    private fun pickFillType(map: Map<QuestionType, Int>, probe: Built?): QuestionType? {
         val used = map.filter { it.value > 0 }.keys
+        val last = probe?.paper?.sections?.lastOrNull()?.type
+        if (last != null && last in used) return last
         return used.firstOrNull { it.answerLines == 0 }
             ?: used.firstOrNull()
             ?: availableTypes.firstOrNull()
@@ -253,8 +308,10 @@ class AppState(private val rawContext: Context) {
     /**
      * 生成正式卷。
      *
-     * 默认开启「补满整页」：先试排，若最后一页正文没用到 84%，
-     * 就自动往客观题里加题再排，最多 4 轮 —— 避免只印半张纸就出纸。
+     * 「补满整页」的**硬约束：补题不能让正文页数变多**。
+     * 上一版只盯填充率补，遇到多题型卷（每个大题单独起页）会越补越多页：
+     * 24 题被补成 72 题 / 4 页，末页还是空的，比不补更浪费纸。
+     * 这一版逐轮试排，只保留「不增页 & 填充率最高」的那一轮定稿。
      */
     suspend fun generate(seed: Long = System.currentTimeMillis()) {
         if (totalQuestions <= 0) {
@@ -264,47 +321,56 @@ class AppState(private val rawContext: Context) {
         busy = true
         try {
             var working = LinkedHashMap(counts)
-            var result: Built? = null
+            var bestCounts = LinkedHashMap(counts)
+            var bestRatio = -1f
+            var bestExtra = 0
             var extraAdded = 0
+            var basePages = -1
             var lastCount = -1
 
-            for (attempt in 0..3) {
+            for (attempt in 0..4) {
                 val probe = withContext(Dispatchers.IO) { buildOnce(seed, working, save = false) }
+                val pages = probe.pdf.contentPageCount
+                if (basePages < 0) basePages = pages
+                // 补到多出一张纸就停，回退到之前最好的版本
+                if (pages > basePages) break
+
                 val ratio = contentFillRatio(probe.pdf)
-                val need = if (autoFillPage) suggestedExtra(ratio) else 0
-                val fillType = pickFillType(working)
-                // 有些题型题量已经抽干（词表/题库有限），再加计数也出不了新题 ——
-                // 别空转 4 轮，直接按当前结果定稿，并在提示里如实告诉用户。
+                if (ratio > bestRatio) {
+                    bestRatio = ratio
+                    bestCounts = LinkedHashMap(working)
+                    bestExtra = extraAdded
+                }
+                // 词表 / 题库抽干后计数再涨也出不了新题，别空转
                 val noProgress = lastCount >= 0 && probe.paper.questions.size <= lastCount
                 lastCount = probe.paper.questions.size
 
-                if (need <= 0 || fillType == null || attempt == 3 || noProgress) {
-                    result = withContext(Dispatchers.IO) { buildOnce(seed, working, save = true) }
-                    break
-                }
-                // need 是按「一行题干」的高度估出来的题数；带答题横线的题更占地方，
-                // 要按占的行数折算，否则一次只补 2 题、四轮下来页面还是空的。
+                val need = if (autoFillPage) suggestedExtra(ratio) else 0
+                val fillType = pickFillType(working, probe)
+                if (need <= 0 || fillType == null || attempt == 4 || noProgress) break
+
+                // need 按「一行题干」估算；带答题横线的题更占地方，按行数折算
                 val lineFactor = 1f + fillType.answerLines
                 val step = (need / lineFactor).toInt().coerceIn(1, need)
                 working[fillType] = (working[fillType] ?: 0) + step
                 extraAdded += step
             }
 
-            if (result != null) {
-                counts = LinkedHashMap(working)
-                applyBuilt(result)
+            working = bestCounts
+            extraAdded = bestExtra
+            val result = withContext(Dispatchers.IO) { buildOnce(seed, working, save = true) }
+            counts = LinkedHashMap(working)
+            applyBuilt(result)
 
-                val actual = result.paper.questions.size
-                toast = buildString {
-                    append("已生成 $actual 题，共 ${result.pdf.pageCount} 页")
-                    if (extraAdded > 0) append("（自动补了 $extraAdded 题填满整页）")
-                    if (actual < totalQuestions) append("　⚠ 该年级可用题量不足，可减少题量或增选其它题型")
-                    append("　最后一页正文用了 $lastContentFillPercent%")
-                }
-                screen = Screen.PREVIEW
-            } else {
-                toast = "生成失败，请减少题量后重试"
+            val actual = result.paper.questions.size
+            toast = buildString {
+                append("已生成 $actual 题，共 ${result.pdf.pageCount} 页")
+                if (extraAdded > 0) append("（自动补了 $extraAdded 题，未增加页数）")
+                if (actual < totalQuestions) append("　⚠ 可用题量不足，可减少题量或增选其它题型")
+                append("　最后一页正文用了 $lastContentFillPercent%")
+                if (lastContentFillPercent < 84) append("　⚠ 末页还有空白，可回参数页手动加题")
             }
+            screen = Screen.PREVIEW
         } catch (t: Throwable) {
             toast = "生成失败：${t.message ?: t.javaClass.simpleName}"
         }
@@ -504,6 +570,7 @@ class AppState(private val rawContext: Context) {
         paper = gp
         pdf = rendered.first
         previews = rendered.second
+        previewPage = previewPage.coerceIn(0, (rendered.second.size - 1).coerceAtLeast(0))
         wrongNumbers = emptySet()
     }
 
@@ -518,6 +585,7 @@ class AppState(private val rawContext: Context) {
             }
             pdf = result.first
             previews = result.second
+            previewPage = 0
             paper = null
             savedPaperId = ""
             wrongNumbers = emptySet()
@@ -554,6 +622,7 @@ class AppState(private val rawContext: Context) {
         paper = b.paper
         pdf = b.pdf
         previews = b.previews
+        previewPage = 0
         savedPaperId = b.savedId
         wrongNumbers = emptySet()
         showQuestionList = false
