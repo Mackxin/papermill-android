@@ -39,6 +39,7 @@ import com.papermill.app.core.design.PaperDimens
 import com.papermill.app.core.update.UpdateChecker
 import com.papermill.app.domain.generate.AnswerMode
 import com.papermill.app.domain.generate.GradeProfiles
+import com.papermill.app.domain.generate.PageOrientation
 import com.papermill.app.domain.generate.PaperTemplates
 import com.papermill.app.domain.generate.Subject
 import com.papermill.app.domain.reference.ReferenceData
@@ -156,11 +157,11 @@ fun PaperMillRoot(state: AppState) {
 
 private fun screenTitle(state: AppState): Pair<String, String> = when (state.screen) {
     Screen.HOME -> "卷子" to "自己配卷，一键打印"
-    Screen.CREATE -> "自定义题量" to "${GradeProfiles.gradeLabel(state.grade)} · ${state.totalQuestions} 题 · 预计 ${state.estimatedPages} 页 A4"
+    Screen.CREATE -> "自定义题量" to "${GradeProfiles.gradeLabel(state.grade)} · ${state.totalQuestions} 题 · 预计 ${state.estimatedPages} 页 ${state.orientation.label}"
     Screen.PREVIEW -> if (state.isReference) {
         "速查表预览" to "A4 表格 · 与打印结果完全一致"
     } else {
-        "试卷预览" to "共 ${state.paper?.questions?.size ?: 0} 题 · ${state.pdf?.pageCount ?: 0} 页 A4"
+        "试卷预览" to "共 ${state.paper?.questions?.size ?: 0} 题 · ${state.pdf?.pageCount ?: 0} 页 ${state.orientation.label}"
     }
     Screen.REFERENCE -> "学生必备速查表" to "7 张 A4 表格，可反复打印张贴"
     Screen.MISTAKES -> "错题本" to "数据只存在这台手机"
@@ -288,6 +289,7 @@ private fun CreateScreen(state: AppState, scope: CoroutineScope) {
         append(state.counts.entries.joinToString(",") { "${it.key.name}:${it.value}" }).append('|')
         append(state.difficulty).append('|').append(state.columns).append('|')
         append(state.answerMode.name).append('|').append(state.showNameRow).append('|')
+        append(state.orientation.name).append('|')
         append(state.titleOverride).append('|').append(state.previewSeed)
     }
     LaunchedEffect(signature) {
@@ -298,10 +300,11 @@ private fun CreateScreen(state: AppState, scope: CoroutineScope) {
     CardSection(title = "实时预览", hint = "改参数自动刷新 · 与打印结果一致") {
         Row(verticalAlignment = Alignment.CenterVertically) {
             val bmp = state.livePreview
+            val landscape = state.orientation == PageOrientation.LANDSCAPE
             Box(
                 Modifier
-                    .width(96.dp)
-                    .height(136.dp)
+                    .width(if (landscape) 136.dp else 96.dp)
+                    .height(if (landscape) 96.dp else 136.dp)
                     .background(Color.White, RoundedCornerShape(6.dp))
                     .border(1.dp, PaperColors.Outline, RoundedCornerShape(6.dp)),
                 contentAlignment = Alignment.Center,
@@ -409,6 +412,21 @@ private fun CreateScreen(state: AppState, scope: CoroutineScope) {
     if (state.showAdvanced) {
         Spacer(Modifier.height(8.dp))
         CardSection {
+            SettingRow("纸张方向") {
+                PageOrientation.values().forEach { o ->
+                    ChoiceChip(o.shortLabel, state.orientation == o) {
+                        scope.launch { state.setOrientation(o) }
+                    }
+                }
+            }
+            Text(
+                "横版为 842×595pt 的真横页，系统打印框也会按 A4 横向匹配；" +
+                    "内容区更宽、更矮，适合口算、默写这类短题。",
+                fontSize = PaperDimens.TinySp,
+                color = PaperColors.OnSurfaceVariant,
+                lineHeight = 15.sp,
+            )
+            Divider()
             SettingRow("纸张利用") {
                 ChoiceChip("自动补满整页", state.autoFillPage) { state.autoFillPage = true }
                 ChoiceChip("严格按题量", !state.autoFillPage) { state.autoFillPage = false }
@@ -456,7 +474,7 @@ private fun CreateScreen(state: AppState, scope: CoroutineScope) {
         // 折叠态也把当前卷面配置说清楚，不展开就能确认
         Spacer(Modifier.height(6.dp))
         Text(
-            "${state.columns} 栏 · ${state.answerMode.label} · " +
+            "${state.columns} 栏 · ${state.orientation.shortLabel} · ${state.answerMode.label} · " +
                 when (state.difficulty) { 1 -> "基础"; 3 -> "提高"; else -> "标准" } +
                 " · " + if (state.autoFillPage) "自动补满整页" else "严格按题量",
             fontSize = PaperDimens.CaptionSp,

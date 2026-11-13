@@ -6,6 +6,7 @@ import android.content.Intent
 import android.print.PrintAttributes
 import android.print.PrintManager
 import com.papermill.app.core.pdf.render.RenderedPdf
+import com.papermill.app.domain.generate.PageOrientation
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -22,8 +23,16 @@ object PrintLauncher {
         val pm = activity.getSystemService(Context.PRINT_SERVICE) as? PrintManager
             ?: error("当前系统没有打印服务")
 
+        // PDF 页面本身就是 842×595pt 的横版时，打印框也必须按横版 A4 匹配，
+        // 否则 print service 会把横版内容再缩放/旋转一次，题号被裁掉。
+        val media = if (pdf.orientation == PageOrientation.LANDSCAPE) {
+            PrintAttributes.MediaSize.ISO_A4.asLandscape()
+        } else {
+            PrintAttributes.MediaSize.ISO_A4
+        }
+
         val attributes = PrintAttributes.Builder()
-            .setMediaSize(PrintAttributes.MediaSize.ISO_A4)
+            .setMediaSize(media)
             // PDF 自己已经留了 14mm 边距，这里不要再叠一层
             .setMinMargins(PrintAttributes.Margins.NO_MARGINS)
             .setColorMode(PrintAttributes.COLOR_MODE_MONOCHROME)

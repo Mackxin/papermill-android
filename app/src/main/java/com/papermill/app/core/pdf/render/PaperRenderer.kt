@@ -1,6 +1,7 @@
 package com.papermill.app.core.pdf.render
 
 import android.graphics.pdf.PdfDocument
+import com.papermill.app.core.pdf.CanvasBackend
 import com.papermill.app.core.pdf.PageGeometry
 import com.papermill.app.core.pdf.PdfBackend
 import com.papermill.app.core.pdf.TextPainter
@@ -27,6 +28,9 @@ import java.util.Locale
  * 不用第三方 PDF 库的理由（沿用同机已验证的判断）：
  * iText / PdfBox 动辄 5~10MB，还要处理 AGPL 商用授权；
  * 而 `android.graphics.pdf.PdfDocument` 是框架内置，零依赖、中文靠系统字体回退。
+ *
+ * v0.4.0：所有页面尺寸都从 [PageGeometry] 实例取，不再引用全局常量。
+ * 竖版 595×842 / 横版 842×595，卷头、页眉、页脚、分页全部跟着自动适配。
  */
 object PaperRenderer {
 
@@ -42,10 +46,11 @@ object PaperRenderer {
 
     fun render(doc: PaperDocument): RenderedPdf {
         val tp = TextPainter()
+        val g = PageGeometry.of(doc.orientation)
 
         // 首页被卷头占掉，后续页只有窄页眉 —— 两页可用高度不同
-        val contentHFirst = PageGeometry.CONTENT_BOTTOM_SAFE - (PageGeometry.MARGIN + coverHeight(doc))
-        val contentHOther = PageGeometry.CONTENT_BOTTOM_SAFE - (PageGeometry.MARGIN + RUNNING_H)
+        val contentHFirst = g.contentBottomSafe - (g.margin + coverHeight(doc))
+        val contentHOther = g.contentBottomSafe - (g.margin + RUNNING_H)
 
         val pages = ArrayList<FlowLayout.Page>()
         // 答案页从第几页开始：有了它才能准确说「最后一页正文用了多少」，
@@ -71,7 +76,7 @@ object PaperRenderer {
 
             pages.addAll(
                 FlowLayout(
-                    contentW = PageGeometry.CONTENT_W,
+                    contentW = g.contentW,
                     contentHFirst = contentHFirst,
                     contentHOther = contentHOther,
                     columns = if (table != null) 1 else section.columns,
@@ -99,28 +104,28 @@ object PaperRenderer {
         try {
             pages.forEachIndexed { index, page ->
                 val info = PdfDocument.PageInfo
-                    .Builder(PageGeometry.PAGE_W, PageGeometry.PAGE_H, index + 1)
+                    .Builder(g.pageW, g.pageH, index + 1)
                     .create()
                 val pdfPage = pdf.startPage(info)
                 val backend = PdfBackend(pdfPage.canvas)
 
                 val contentTop = if (index == 0) {
-                    drawCover(backend, tp, doc)
+                    drawCover(backend, tp, doc, g)
                 } else {
-                    drawRunningHeader(backend, tp, doc, index + 1, total)
+                    drawRunningHeader(backend, tp, doc, g, index + 1, total)
                 }
 
                 page.items.forEach { placed ->
                     placed.block.paint(
                         backend,
                         tp,
-                        PageGeometry.MARGIN + placed.x,
+                        g.margin + placed.x,
                         contentTop + placed.y,
                         placed.w,
                     )
                 }
 
-                drawFooter(backend, tp, doc)
+                drawFooter(backend, tp, doc, g)
                 pdf.finishPage(pdfPage)
             }
             pdf.writeTo(out)
@@ -134,6 +139,7 @@ object PaperRenderer {
             pageCount = total,
             pageFillRatios = fillRatios,
             contentPageCount = firstAnswerPage.takeIf { it > 0 } ?: total,
+            orientation = doc.orientation,
         )
     }
 
@@ -147,14 +153,14 @@ object PaperRenderer {
     }
 
     /** 画卷头，返回正文起始 y（含页边距） */
-    private fun drawCover(b: com.papermill.app.core.pdf.CanvasBackend, tp: TextPainter, doc: PaperDocument): Float {
-        var y = PageGeometry.MARGIN
+    private fun drawCover(b: CanvasBackend, tp: TextPainter, doc: PaperDocument, g: PageGeometry): Float {
+        var y = g.margin
 
         val titlePaint = tp.paint(TITLE_SIZE, bold = true)
         val titleW = tp.measure(doc.title, titlePaint)
         b.drawText(
             doc.title,
-            (PageGeometry.PAGE_W - titleW) / 2f,
+            (g.pageW - titleW) / 2f,
             y + tp.baselineOffset(titlePaint, TITLE_H),
             titlePaint,
         )
@@ -165,7 +171,7 @@ object PaperRenderer {
             val subW = tp.measure(doc.subtitle, subPaint)
             b.drawText(
                 doc.subtitle,
-                (PageGeometry.PAGE_W - subW) / 2f,
+                (g.pageW - subW) / 2f,
                 y + tp.baselineOffset(subPaint, SUB_H),
                 subPaint,
             )
@@ -176,7 +182,7 @@ object PaperRenderer {
             val labelPaint = tp.paint(10.5f)
             val baseline = y + tp.baselineOffset(labelPaint, NAME_ROW_H)
             val rule = tp.rulePaint(0.8f, 0xFF333333.toInt())
-            var x = PageGeometry.MARGIN
+            var x = g.margin
 
             fun field(text: String, lineW: Float) {
                 b.drawText(text, x, baseline, labelPaint)
@@ -200,13 +206,13 @@ object PaperRenderer {
 
         // 双线：粗线 + 细线，是国内试卷的通用「卷头分界」
         b.drawLine(
-            PageGeometry.MARGIN, y + 2f,
-            PageGeometry.PAGE_W - PageGeometry.MARGIN, y + 2f,
+            g.margin, y + 2f,
+            g.pageW - g.margin, y + 2f,
             tp.rulePaint(1f, 0xFF222222.toInt()),
         )
         b.drawLine(
-            PageGeometry.MARGIN, y + 5f,
-            PageGeometry.PAGE_W - PageGeometry.MARGIN, y + 5f,
+            g.margin, y + 5f,
+            g.pageW - g.margin, y + 5f,
             tp.rulePaint(0.5f, 0xFFAAAAAA.toInt()),
         )
         y += COVER_RULE_H
@@ -216,43 +222,45 @@ object PaperRenderer {
     // ------------------------------------------------------------------ 页眉页脚
 
     private fun drawRunningHeader(
-        b: com.papermill.app.core.pdf.CanvasBackend,
+        b: CanvasBackend,
         tp: TextPainter,
         doc: PaperDocument,
+        g: PageGeometry,
         pageNo: Int,
         total: Int,
     ): Float {
         val p = tp.paint(8.5f, color = 0xFF555555.toInt())
-        val baseline = PageGeometry.MARGIN + tp.baselineOffset(p, RUNNING_H)
+        val baseline = g.margin + tp.baselineOffset(p, RUNNING_H)
 
-        b.drawText(doc.title, PageGeometry.MARGIN, baseline, p)
+        b.drawText(doc.title, g.margin, baseline, p)
 
         val right = "第 $pageNo 页 / 共 $total 页"
         val rightW = tp.measure(right, p)
-        b.drawText(right, PageGeometry.PAGE_W - PageGeometry.MARGIN - rightW, baseline, p)
+        b.drawText(right, g.pageW - g.margin - rightW, baseline, p)
 
         b.drawLine(
-            PageGeometry.MARGIN, PageGeometry.MARGIN + RUNNING_H - 5f,
-            PageGeometry.PAGE_W - PageGeometry.MARGIN, PageGeometry.MARGIN + RUNNING_H - 5f,
+            g.margin, g.margin + RUNNING_H - 5f,
+            g.pageW - g.margin, g.margin + RUNNING_H - 5f,
             tp.rulePaint(0.5f, 0xFFBBBBBB.toInt()),
         )
-        return PageGeometry.MARGIN + RUNNING_H
+        return g.margin + RUNNING_H
     }
 
     private fun drawFooter(
-        b: com.papermill.app.core.pdf.CanvasBackend,
+        b: CanvasBackend,
         tp: TextPainter,
         doc: PaperDocument,
+        g: PageGeometry,
     ) {
-        val bottom = PageGeometry.PAGE_H - PageGeometry.MARGIN
+        val bottom = g.pageH - g.margin
         b.drawLine(
-            PageGeometry.MARGIN, bottom - 12f,
-            PageGeometry.PAGE_W - PageGeometry.MARGIN, bottom - 12f,
+            g.margin, bottom - 12f,
+            g.pageW - g.margin, bottom - 12f,
             tp.rulePaint(0.5f, 0xFFDDDDDD.toInt()),
         )
         val p = tp.paint(7.5f, color = 0xFF999999.toInt())
         val w = tp.measure(doc.footerText, p)
-        b.drawText(doc.footerText, (PageGeometry.PAGE_W - w) / 2f, bottom - 4f, p)
+        b.drawText(doc.footerText, (g.pageW - w) / 2f, bottom - 4f, p)
     }
 
     // ------------------------------------------------------------------ 文件名

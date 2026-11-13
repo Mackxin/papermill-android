@@ -45,6 +45,7 @@ object PaperAssembler {
             showNameRow = spec.showNameRow,
             sections = sections,
             footerText = "卷子 · 题目由本 App 程序生成，非官方教材配套",
+            orientation = spec.orientation,
         )
     }
 }

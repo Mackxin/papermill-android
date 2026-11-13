@@ -32,6 +32,7 @@ import com.papermill.app.domain.generate.GeneratorRegistry
 import com.papermill.app.domain.generate.GradeProfiles
 import com.papermill.app.domain.generate.PaperComposer
 import com.papermill.app.domain.generate.PaperSpec
+import com.papermill.app.domain.generate.PageOrientation
 import com.papermill.app.domain.generate.QuestionType
 import com.papermill.app.domain.generate.Subject
 import com.papermill.app.domain.reference.ReferenceSheet
@@ -78,6 +79,8 @@ class AppState(private val rawContext: Context) {
     var showNameRow by mutableStateOf(true)
     var titleOverride by mutableStateOf<String?>(null)
     var autoFillPage by mutableStateOf(true)
+    /** 竖版 / 横版 A4，预览页可直接改并即时重排 */
+    var orientation by mutableStateOf(PageOrientation.PORTRAIT)
 
     var paper by mutableStateOf<GeneratedPaper?>(null)
     var pdf by mutableStateOf<RenderedPdf?>(null)
@@ -285,7 +288,30 @@ class AppState(private val rawContext: Context) {
             showNameRow = showNameRow,
             fontSize = 11f,
             seed = seed,
+            orientation = orientation,
         )
+    }
+
+    /**
+     * 切换纸张方向。在预览页直接切会立刻用同一套题重新排版，
+     * 用户看到空白页时可以先试试横版，不用回参数页重新生成。
+     */
+    suspend fun setOrientation(value: PageOrientation) {
+        if (orientation == value) return
+        orientation = value
+        val gp = paper
+        if (screen == Screen.PREVIEW && gp != null && !isReference) {
+            busy = true
+            try {
+                reRender(gp.copy(spec = gp.spec.copy(orientation = value)))
+                toast = "已切换为${value.label}，共 ${pdf?.pageCount ?: 0} 页，末页正文 $lastContentFillPercent%"
+            } catch (t: Throwable) {
+                toast = "切换方向失败：${t.message}"
+            }
+            busy = false
+        } else {
+            toast = "已切换为${value.label}，生成试卷时生效"
+        }
     }
 
     // ---------------------------------------------------------------- 构建

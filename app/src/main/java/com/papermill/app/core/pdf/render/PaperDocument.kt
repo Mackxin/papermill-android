@@ -1,5 +1,7 @@
 package com.papermill.app.core.pdf.render
 
+import com.papermill.app.domain.generate.PageOrientation
+
 /**
  * 渲染用的中间表示。
  *
@@ -42,6 +44,8 @@ data class PaperDocument(
     val showNameRow: Boolean = true,
     val sections: List<PaperSection>,
     val footerText: String = "卷子 · 自编练习卷",
+    /** 竖版 / 横版：决定 PdfDocument 页面宽高，并随结果传给打印框架 */
+    val orientation: PageOrientation = PageOrientation.PORTRAIT,
 )
 
 /**
@@ -56,4 +60,6 @@ class RenderedPdf(
     val pageFillRatios: List<Float> = emptyList(),
     /** 正文页数（不含答案页）；最后一页正文 = 第 contentPageCount 页 */
     val contentPageCount: Int = pageCount,
+    /** 打印时按这个方向选 MediaSize，竖版走 ISO_A4，横版走 ISO_A4.asLandscape() */
+    val orientation: PageOrientation = PageOrientation.PORTRAIT,
 )

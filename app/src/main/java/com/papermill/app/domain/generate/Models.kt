@@ -64,6 +64,16 @@ enum class AnswerMode(val label: String) {
     LAST_PAGE("附答案页"),
 }
 
+/**
+ * 卷面方向：竖版 / 横版 A4。
+ * 放在 domain 层是因为它属于「用户对卷子的要求」，PDF 层只是照着执行。
+ * 打印时会同步到 PrintAttributes.MediaSize，避免驱动把横版内容再缩放一次。
+ */
+enum class PageOrientation(val label: String, val shortLabel: String) {
+    PORTRAIT("A4 竖版", "竖版"),
+    LANDSCAPE("A4 横版", "横版"),
+}
+
 data class GeneratedQuestion(
     val no: Int,
     val type: QuestionType,
@@ -100,6 +110,8 @@ data class PaperSpec(
     val isMistakePaper: Boolean = false,
     /** 交叉学科：一份卷里可以同时出数学 + 语文 + 英语等；为空时按 [subject] 单科处理 */
     val subjects: List<Subject> = emptyList(),
+    /** 纸张方向：横版时 PDF 页面是 842×595pt，系统打印框也按横版 A4 匹配 */
+    val orientation: PageOrientation = PageOrientation.PORTRAIT,
 )
 
 data class GeneratedPaper(
