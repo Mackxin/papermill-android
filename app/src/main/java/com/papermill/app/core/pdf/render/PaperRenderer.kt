@@ -45,6 +45,9 @@ object PaperRenderer {
     private const val RUNNING_H = 24f
 
     fun render(doc: PaperDocument): RenderedPdf {
+        // 练习纸走独立分支：固定一页，按剩余高度把格子铺满
+        doc.sections.firstOrNull()?.grid?.let { return renderPracticeGrid(doc, it) }
+
         val tp = TextPainter()
         val g = PageGeometry.of(doc.orientation)
 
@@ -139,6 +142,34 @@ object PaperRenderer {
             pageCount = total,
             pageFillRatios = fillRatios,
             contentPageCount = firstAnswerPage.takeIf { it > 0 } ?: total,
+            orientation = doc.orientation,
+        )
+    }
+
+    /** 练习纸：一页 A4，卷头 + 铺满的格子 + 页脚，天然 100% 利用纸张 */
+    private fun renderPracticeGrid(doc: PaperDocument, grid: PaperGrid): RenderedPdf {
+        val tp = TextPainter()
+        val g = PageGeometry.of(doc.orientation)
+        val out = ByteArrayOutputStream()
+        val pdf = PdfDocument()
+        try {
+            val info = PdfDocument.PageInfo.Builder(g.pageW, g.pageH, 1).create()
+            val page = pdf.startPage(info)
+            val b = PdfBackend(page.canvas)
+            val top = drawCover(b, tp, doc, g)
+            GridPainter.draw(b, tp, grid, g, top)
+            drawFooter(b, tp, doc, g)
+            pdf.finishPage(page)
+            pdf.writeTo(out)
+        } finally {
+            pdf.close()
+        }
+        return RenderedPdf(
+            fileName = buildFileName(doc.title),
+            bytes = out.toByteArray(),
+            pageCount = 1,
+            pageFillRatios = listOf(1f),
+            contentPageCount = 1,
             orientation = doc.orientation,
         )
     }

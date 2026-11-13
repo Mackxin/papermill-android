@@ -14,6 +14,7 @@ import com.papermill.app.core.export.PdfSharer
 import com.papermill.app.core.pdf.render.PaperAssembler
 import com.papermill.app.core.pdf.render.PaperRenderer
 import com.papermill.app.core.pdf.render.PdfPreviewRenderer
+import com.papermill.app.core.pdf.render.PracticeRenderer
 import com.papermill.app.core.pdf.render.ReferenceRenderer
 import com.papermill.app.core.pdf.render.RenderedPdf
 import com.papermill.app.core.print.PrintLauncher
@@ -36,6 +37,7 @@ import com.papermill.app.domain.generate.PageOrientation
 import com.papermill.app.domain.generate.QuestionType
 import com.papermill.app.domain.generate.Subject
 import com.papermill.app.domain.generate.stableHash
+import com.papermill.app.domain.reference.PracticeSheet
 import com.papermill.app.domain.reference.ReferenceSheet
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -771,6 +773,30 @@ class AppState(private val rawContext: Context) {
             screen = Screen.PREVIEW
         } catch (t: Throwable) {
             toast = "生成速查表失败：${t.message}"
+        }
+        busy = false
+    }
+
+    /** 练习纸：一页铺满，横版那张会同时把打印框切到 A4 横向 */
+    suspend fun renderPractice(sheet: PracticeSheet) {
+        busy = true
+        try {
+            val result = withContext(Dispatchers.IO) {
+                val r = PaperRenderer.render(PracticeRenderer.build(sheet))
+                r to PdfPreviewRenderer.render(ctx, r.bytes)
+            }
+            pdf = result.first
+            previews = result.second
+            previewPage = 0
+            paper = null
+            savedPaperId = ""
+            wrongNumbers = emptySet()
+            showQuestionList = false
+            isReference = true
+            toast = "《${sheet.title}》1 页 ${sheet.orientation.shortLabel}，格子已铺满整页，可直接打印"
+            screen = Screen.PREVIEW
+        } catch (t: Throwable) {
+            toast = "生成练习纸失败：${t.message}"
         }
         busy = false
     }

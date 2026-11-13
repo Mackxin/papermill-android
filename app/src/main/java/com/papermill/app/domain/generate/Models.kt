@@ -57,6 +57,20 @@ enum class QuestionType(
 
     // 内置自编题库（概念 / 选择 / 判断）
     KNOWLEDGE("自编题库", 1, 1),
+
+    // v0.4.0：把外部资源站的「题型规则」转成自编程序化生成器
+    // 只借鉴题型模式（填括号、凑十、连加连减、单位换算……），不收录任何第三方原题
+    FILL_BLANK("填括号", 3),
+    MAKE_TEN("凑十练习", 3),
+    CHAIN_CALC("连加连减", 2),
+    MIXED_CALC("加减混合", 2),
+    TENS_CALC("整十数运算", 3),
+    TWO_DIGIT("两位数加减", 2),
+    UNIT_CONVERT("单位换算", 2),
+    COMPARE("比大小", 3),
+    NUMBER_PATTERN("找规律填数", 2),
+    COUNTING("数数与认数", 2),
+    LETTER_ORDER("字母顺序", 3),
 }
 
 enum class AnswerMode(val label: String) {

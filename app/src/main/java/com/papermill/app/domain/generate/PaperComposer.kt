@@ -141,6 +141,16 @@ object PaperTemplates {
         val available = GeneratorRegistry.availableFor(grade, subjects).toSet()
         val raw = listOf(
             Preset("daily", "口算天天练", "一页 30 题，5 分钟", mapOf(QuestionType.ORAL to 30)),
+            // v0.4.0：外部练习站的题型规则转成的自编计算题组合
+            Preset("variety", "计算题大全", "填括号 + 凑十 + 连加连减 + 换算", mapOf(
+                QuestionType.FILL_BLANK to 12, QuestionType.MAKE_TEN to 8,
+                QuestionType.CHAIN_CALC to 8, QuestionType.TENS_CALC to 6,
+                QuestionType.TWO_DIGIT to 6, QuestionType.UNIT_CONVERT to 6,
+            )),
+            Preset("thinking", "思维小练", "比大小 + 找规律 + 填括号", mapOf(
+                QuestionType.COMPARE to 10, QuestionType.NUMBER_PATTERN to 8,
+                QuestionType.FILL_BLANK to 8, QuestionType.COUNTING to 6,
+            )),
             Preset("calc", "计算专项", "口算 + 竖式 + 脱式", mapOf(
                 QuestionType.ORAL to 20, QuestionType.VERTICAL to 6, QuestionType.EXPRESSION to 6,
                 QuestionType.RATIONAL to 20, QuestionType.ALGEBRA to 10,

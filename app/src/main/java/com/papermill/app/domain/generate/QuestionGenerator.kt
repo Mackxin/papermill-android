@@ -83,6 +83,10 @@ object GeneratorRegistry {
         PhysicsGenerator, ChemistryGenerator,
         // 内置自编题库
         BankQuestionGenerator,
+        // v0.4.0：外部资源站题型规则转成的自编生成器（放在末尾，保证默认卷仍是原来的主题型）
+        FillBlankGenerator, MakeTenGenerator, ChainCalcGenerator, MixedCalcGenerator,
+        TensCalcGenerator, TwoDigitGenerator, UnitConvertGenerator, CompareGenerator,
+        NumberPatternGenerator, CountingGenerator, LetterOrderGenerator,
     )
 
     fun availableFor(grade: Int, subject: Subject): List<QuestionType> =

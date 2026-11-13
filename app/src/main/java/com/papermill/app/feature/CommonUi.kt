@@ -104,7 +104,7 @@ fun BottomNav(state: AppState) {
                 .background(PaperColors.Surface),
         ) {
             NavItem("出卷", state.navTab == NavTab.HOME) { state.goTab(NavTab.HOME) }
-            NavItem("速查表", state.navTab == NavTab.REFERENCE) { state.goTab(NavTab.REFERENCE) }
+            NavItem("打印纸", state.navTab == NavTab.REFERENCE) { state.goTab(NavTab.REFERENCE) }
             NavItem("错题本", state.navTab == NavTab.MISTAKES) { state.goTab(NavTab.MISTAKES) }
             NavItem("更多", state.navTab == NavTab.MORE) { state.goTab(NavTab.MORE) }
         }

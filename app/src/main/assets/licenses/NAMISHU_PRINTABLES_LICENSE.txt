@@ -1,0 +1,33 @@
+namishu/printables — MIT License
+https://github.com/namishu/printables
+
+本项目仅参考其「书写纸」版式设计（横条、方格、英文四线三格）的分类思路，
+所有网格均由 PaperMill 使用 Android Canvas 自绘重新实现。
+未复制其代码、样例 PDF、原创文档文本或内置字体。
+字体在本项目中一律走 Android 系统字体回退，不打包任何第三方字体。
+
+以下为原仓库 LICENSE 全文：
+
+-------------------------------------------------------------------------------
+
+MIT License
+
+Copyright (c) 2026 Namishu
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

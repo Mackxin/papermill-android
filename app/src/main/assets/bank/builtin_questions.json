@@ -64,6 +64,18 @@
     {"grade":9,"subject":"CHEMISTRY","topic":"物质分类","stem":"下列属于纯净物的是？","options":["A. 空气","B. 食盐水","C. 蒸馏水"],"answer":"C","analysis":"蒸馏水只含 H₂O 一种物质"},
     {"grade":9,"subject":"CHEMISTRY","topic":"酸碱","stem":"pH = 3 的溶液呈？","options":["A. 酸性","B. 中性","C. 碱性"],"answer":"A","analysis":"pH 小于 7 为酸性"},
     {"grade":9,"subject":"CHEMISTRY","topic":"反应类型","stem":"2H₂ + O₂ → 2H₂O 属于？","options":["A. 分解反应","B. 化合反应","C. 置换反应"],"answer":"B","analysis":"多种物质生成一种物质"},
-    {"grade":9,"subject":"CHEMISTRY","topic":"金属","stem":"地壳中含量最多的金属元素是？","options":["A. 铁","B. 铝","C. 铜"],"answer":"B","analysis":"地壳中铝含量居金属首位"}
+    {"grade":9,"subject":"CHEMISTRY","topic":"金属","stem":"地壳中含量最多的金属元素是？","options":["A. 铁","B. 铝","C. 铜"],"answer":"B","analysis":"地壳中铝含量居金属首位"},
+    {"grade":1,"subject":"MATH","topic":"数数","stem":"从 3 数到 7，一共数了几个数？","options":["A. 4 个","B. 5 个","C. 6 个"],"answer":"B","analysis":"3、4、5、6、7 共 5 个"},
+    {"grade":1,"subject":"MATH","topic":"凑十","stem":"与 8 合起来是 10 的数是？","options":["A. 1","B. 2","C. 3"],"answer":"B","analysis":"10 - 8 = 2"},
+    {"grade":1,"subject":"MATH","topic":"单位","stem":"1 元等于多少角？","options":["A. 10 角","B. 100 角","C. 1 角"],"answer":"A","analysis":"1 元 = 10 角"},
+    {"grade":1,"subject":"MATH","topic":"找规律","stem":"2、4、6、8 的下一个数是？","options":["A. 9","B. 10","C. 12"],"answer":"B","analysis":"每次加 2"},
+    {"grade":1,"subject":"CHINESE","topic":"拼音","stem":"下面哪个是整体认读音节？","options":["A. zhi","B. zh","C. z"],"answer":"A","analysis":"zhi 是整体认读音节，不用拼读"},
+    {"grade":1,"subject":"CHINESE","topic":"笔画","stem":"「木」字一共有几笔？","options":["A. 3 笔","B. 4 笔","C. 5 笔"],"answer":"B","analysis":"横、竖、撇、捺共 4 笔"},
+    {"grade":2,"subject":"MATH","topic":"整十数","stem":"50 + 30 的结果是？","options":["A. 53","B. 80","C. 8"],"answer":"B","analysis":"5 个十加 3 个十是 8 个十"},
+    {"grade":2,"subject":"MATH","topic":"连加","stem":"2 + 3 + 4 的结果是？","options":["A. 8","B. 9","C. 10"],"answer":"B","analysis":"2+3=5，5+4=9"},
+    {"grade":2,"subject":"MATH","topic":"时间","stem":"1 小时等于多少分钟？","options":["A. 30 分","B. 60 分","C. 100 分"],"answer":"B","analysis":"1 时 = 60 分"},
+    {"grade":3,"subject":"ENGLISH","topic":"字母顺序","stem":"字母 D 的前一个字母是？","options":["A. B","B. C","C. E"],"answer":"B","analysis":"字母表顺序 A、B、C、D"},
+    {"grade":3,"subject":"ENGLISH","topic":"大小写","stem":"字母 g 的大写形式是？","options":["A. G","B. Q","C. C"],"answer":"A","analysis":"g 的大写是 G"},
+    {"grade":3,"subject":"MATH","topic":"长度单位","stem":"2 米等于多少厘米？","options":["A. 20 厘米","B. 200 厘米","C. 2000 厘米"],"answer":"B","analysis":"1 米 = 100 厘米"}
   ]
 }

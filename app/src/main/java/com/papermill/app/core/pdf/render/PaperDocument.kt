@@ -34,6 +34,8 @@ data class PaperSection(
     val answerLines: Int = 0,
     /** 非空时本 section 渲染成网格表格，忽略 questions */
     val table: PaperTable? = null,
+    /** 非空时整份文档渲染成一页铺满的练习纸，忽略 sections 的其它内容 */
+    val grid: PaperGrid? = null,
     /** 答案页标记：统计「最后一页正文用了多少」时不把它算进去 */
     val isAnswer: Boolean = false,
 )

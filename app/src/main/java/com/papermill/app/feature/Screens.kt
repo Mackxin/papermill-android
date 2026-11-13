@@ -42,6 +42,7 @@ import com.papermill.app.domain.generate.GradeProfiles
 import com.papermill.app.domain.generate.PageOrientation
 import com.papermill.app.domain.generate.PaperTemplates
 import com.papermill.app.domain.generate.Subject
+import com.papermill.app.domain.reference.PracticeData
 import com.papermill.app.domain.reference.ReferenceData
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
@@ -163,7 +164,7 @@ private fun screenTitle(state: AppState): Pair<String, String> = when (state.scr
     } else {
         "试卷预览" to "共 ${state.paper?.questions?.size ?: 0} 题 · ${state.pdf?.pageCount ?: 0} 页 ${state.orientation.label}"
     }
-    Screen.REFERENCE -> "学生必备速查表" to "7 张 A4 表格，可反复打印张贴"
+    Screen.REFERENCE -> "速查表与练习纸" to "${ReferenceData.sheets.size} 张速查表 · ${PracticeData.sheets.size} 张练习纸，点开即打印"
     Screen.MISTAKES -> "错题本" to "数据只存在这台手机"
     Screen.MORE -> "更多" to "数据 / 打印 / 更新 / 关于"
     Screen.HISTORY -> "试卷库" to "只存题目快照，随时重开"
@@ -182,7 +183,7 @@ private fun Divider() = Box(
 
 @Composable
 private fun HomeScreen(state: AppState, scope: CoroutineScope) {
-    val presets = PaperTemplates.forSelection(state.grade, state.subjects).take(4)
+    val presets = PaperTemplates.forSelection(state.grade, state.subjects).take(6)
     val subjectLabel = state.subjects.joinToString(" + ") { it.label }
 
     CardSection {
@@ -714,21 +715,61 @@ private fun PreviewScreen(
 private fun ReferenceScreen(state: AppState, scope: CoroutineScope) {
     CardSection {
         Text(
-            "点任意一张即可生成 A4 PDF，用底部「系统打印」或「分享」远程打印。基础事实与公式，自行整理编排。",
+            "点任意一张即可生成 1 页 A4 PDF，用底部「系统打印」或「分享」远程打印。" +
+                "速查表只收基础事实与公式；练习纸的格子铺满整页，不浪费纸。",
             fontSize = PaperDimens.BodySp,
             color = PaperColors.OnSurfaceVariant,
             lineHeight = 18.sp,
         )
     }
+
     Spacer(Modifier.height(PaperDimens.Gap))
-    ReferenceData.sheets.chunked(2).forEach { row ->
+    SectionLabel("01", "学生必备速查表", "${ReferenceData.sheets.size} 张 · 事实与公式")
+    Spacer(Modifier.height(PaperDimens.GapSmall))
+    SheetGrid(
+        items = ReferenceData.sheets,
+        titleOf = { it.title },
+        descOf = { it.subtitle },
+        metaOf = { "A4 · 立即打印" },
+    ) { sheet -> scope.launch { state.renderReference(sheet) } }
+
+    Spacer(Modifier.height(PaperDimens.Gap))
+    SectionLabel("02", "练习纸", "${PracticeData.sheets.size} 张 · 格子铺满整页")
+    Spacer(Modifier.height(PaperDimens.GapSmall))
+    SheetGrid(
+        items = PracticeData.sheets,
+        titleOf = { it.title },
+        descOf = { it.subtitle },
+        metaOf = { "1 页 ${it.orientation.shortLabel}" },
+    ) { sheet -> scope.launch { state.renderPractice(sheet) } }
+
+    Spacer(Modifier.height(PaperDimens.Gap))
+    Text(
+        "练习纸版式参考 namishu/printables（MIT），全部用本 App 自绘线条重新实现，" +
+            "未打包其 PDF 与字体；田字格、米字格、坐标纸等为通行基础版式，自行编排。",
+        fontSize = PaperDimens.CaptionSp,
+        color = PaperColors.OnSurfaceVariant,
+        lineHeight = 17.sp,
+    )
+}
+
+/** 速查表 / 练习纸共用的 2 列卡片网格 */
+@Composable
+private fun <T> SheetGrid(
+    items: List<T>,
+    titleOf: (T) -> String,
+    descOf: (T) -> String,
+    metaOf: (T) -> String,
+    onClick: (T) -> Unit,
+) {
+    items.chunked(2).forEach { row ->
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(PaperDimens.GapSmall)) {
-            row.forEach { sheet ->
+            row.forEach { item ->
                 PresetCard(
-                    title = sheet.title,
-                    desc = sheet.subtitle,
-                    meta = "A4 · 立即打印",
-                    onClick = { scope.launch { state.renderReference(sheet) } },
+                    title = titleOf(item),
+                    desc = descOf(item),
+                    meta = metaOf(item),
+                    onClick = { onClick(item) },
                     modifier = Modifier.weight(1f),
                 )
             }
@@ -836,7 +877,9 @@ private fun MoreScreen(state: AppState, scope: CoroutineScope, onImport: () -> U
     CardSection(title = "关于") {
         Text(
             "题目全部由本 App 程序生成，或按知识点自编（内置 ${state.bankSize} 道选择 / 判断题）。" +
-                "不抓取也不收录任何教辅、题库或教材原文；速查表只收录不受著作权保护的基础事实与公式。",
+                "不抓取也不收录任何教辅、题库或教材原文；外部练习网站只借鉴题型规则，" +
+                "不打包其原始 PDF / 图片 / 原题。速查表只收基础事实与公式，" +
+                "练习纸版式参考 namishu/printables（MIT，声明随包放在 assets/licenses）。",
             fontSize = PaperDimens.BodySp,
             color = PaperColors.OnSurface,
             lineHeight = 19.sp,
