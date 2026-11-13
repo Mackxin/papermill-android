@@ -62,8 +62,11 @@ private data class Built(
 
 /** 一页正文大约能装的高度与单题高度，用于把「还差多少题」估算出来 */
 private const val TYPICAL_CONTENT_H = 657f
+private const val TYPICAL_CONTENT_H_LANDSCAPE = 410f
 private const val TYPICAL_QUESTION_H = 20.5f
 private const val FILL_TARGET = 0.84f
+/** 自动补题总量上限：想要更多由用户在预览页显式点「加 N 题」 */
+private const val MAX_AUTO_EXTRA = 24
 
 class AppState(private val rawContext: Context) {
 
@@ -259,7 +262,15 @@ class AppState(private val rawContext: Context) {
 
     private fun suggestedExtra(ratio: Float): Int {
         if (ratio >= FILL_TARGET) return 0
-        return ceil((0.90f - ratio) * TYPICAL_CONTENT_H / TYPICAL_QUESTION_H)
+        val pageH = if (orientation == PageOrientation.LANDSCAPE) {
+            TYPICAL_CONTENT_H_LANDSCAPE
+        } else {
+            TYPICAL_CONTENT_H
+        }
+        // 2 栏时一道题只占约半行高度，补题量必须按栏数折算。
+        // 旧版不折算，连续 5 轮都觉得「还差很多」，46 题被一路补到 99 题。
+        val gainPerQuestion = TYPICAL_QUESTION_H / columns.coerceAtLeast(1)
+        return ceil((0.90f - ratio) * pageH / gainPerQuestion)
             .toInt().coerceIn(1, 16)
     }
 
@@ -376,13 +387,20 @@ class AppState(private val rawContext: Context) {
                 val noProgress = lastCount >= 0 && probe.paper.questions.size <= lastCount
                 lastCount = probe.paper.questions.size
 
-                val need = if (autoFillPage) suggestedExtra(ratio) else 0
+                // 只有「正文就一页」才自动补：已经要印 2 页正文时再补只会越补越多，
+                // 那种情况交给预览页的显式「补满这一页 / 加 N 题」。
+                val need = if (autoFillPage && basePages == 1 && extraAdded < MAX_AUTO_EXTRA) {
+                    suggestedExtra(ratio)
+                } else 0
                 val fillType = pickFillType(working, probe)
                 if (need <= 0 || fillType == null || attempt == 4 || noProgress) break
 
                 // need 按「一行题干」估算；带答题横线的题更占地方，按行数折算
                 val lineFactor = 1f + fillType.answerLines
-                val step = (need / lineFactor).toInt().coerceIn(1, need)
+                val step = (need / lineFactor).toInt()
+                    .coerceIn(1, need)
+                    .coerceAtMost(MAX_AUTO_EXTRA - extraAdded)
+                if (step <= 0) break
                 working[fillType] = (working[fillType] ?: 0) + step
                 extraAdded += step
             }
@@ -397,9 +415,14 @@ class AppState(private val rawContext: Context) {
             toast = buildString {
                 append("已生成 $actual 题，共 ${result.pdf.pageCount} 页")
                 if (extraAdded > 0) append("（自动补了 $extraAdded 题，未增加页数）")
-                if (actual < totalQuestions) append("　⚠ 可用题量不足，可减少题量或增选其它题型")
+                // 去重 / 历史卷避让少给两三题是常态，别动不动报「题量不足」吓人
+                val shortage = totalQuestions - actual
+                // 页面已经排满就不再拿「少几题」打扰用户；只有明显缺题或真的没排满才提示
+                if (shortage > maxOf(4, totalQuestions / 5) || lastContentFillPercent < 70) {
+                    append("　⚠ 可用题量不足 $shortage 题，可减少题量或增选其它题型")
+                }
                 append("　最后一页正文用了 $lastContentFillPercent%")
-                if (lastContentFillPercent < 84) append("　⚠ 末页还有空白，可回参数页手动加题")
+                if (lastContentFillPercent < 84) append("　可在预览页点「补满这一页」继续加题")
             }
             screen = Screen.PREVIEW
         } catch (t: Throwable) {

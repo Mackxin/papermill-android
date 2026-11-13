@@ -160,7 +160,7 @@ private fun screenTitle(state: AppState): Pair<String, String> = when (state.scr
     Screen.HOME -> "卷子" to "自己配卷，一键打印"
     Screen.CREATE -> "自定义题量" to "${GradeProfiles.gradeLabel(state.grade)} · ${state.totalQuestions} 题 · 预计 ${state.estimatedPages} 页 ${state.orientation.label}"
     Screen.PREVIEW -> if (state.isReference) {
-        "速查表预览" to "A4 表格 · 与打印结果完全一致"
+        "打印预览" to "1 页 A4 · 与打印结果完全一致"
     } else {
         "试卷预览" to "共 ${state.paper?.questions?.size ?: 0} 题 · ${state.pdf?.pageCount ?: 0} 页 ${state.orientation.label}"
     }
@@ -514,7 +514,11 @@ private fun PreviewScreen(
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text(
-                    if (isRef) "速查表 · 可直接打印张贴" else "共 ${gp?.questions?.size ?: 0} 题",
+                    if (isRef) {
+                        "1 页 ${pdf?.orientation?.label ?: "A4"} · 已铺满，可直接打印"
+                    } else {
+                        "共 ${gp?.questions?.size ?: 0} 题"
+                    },
                     fontSize = PaperDimens.BodySp,
                     fontWeight = FontWeight.SemiBold,
                     color = PaperColors.OnSurface,
@@ -640,9 +644,10 @@ private fun PreviewScreen(
             )
         }
     } else if (isRef) {
-        CardSection(title = "关于速查表") {
+        CardSection(title = "关于这一页") {
             Text(
-                "速查表只收录不受著作权保护的基础事实与公式，自行整理编排。可反复打印张贴，不需要答案页。",
+                "这一页由本 App 自行编排绘制：速查表只收基础事实与公式，练习纸用 Canvas 自绘格子。" +
+                    "可反复打印使用，不含任何第三方原题、PDF 或图片，也不需要答案页。",
                 fontSize = PaperDimens.BodySp,
                 color = PaperColors.OnSurface,
                 lineHeight = 19.sp,

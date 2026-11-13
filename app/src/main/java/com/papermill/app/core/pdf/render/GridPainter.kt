@@ -31,6 +31,8 @@ object GridPainter {
 
         val frame = tp.rulePaint(0.7f, 0xFF8A8A8A.toInt())
         val fine = tp.rulePaint(0.3f, 0xFFCFCFCF.toInt())
+        // 田字格 / 米字格的内部辅助线要能被看清，又不能抢过学生的字
+        val inner = tp.rulePaint(0.4f, 0xFFADADAD.toInt())
         val axis = tp.rulePaint(1.1f, 0xFF555555.toInt())
 
         var y0 = top
@@ -51,11 +53,11 @@ object GridPainter {
                     for (col in 0 until cols) {
                         val l = left + col * size
                         b.drawRect(l, t, l + size, t + size, frame)
-                        b.drawLine(l, t + size / 2f, l + size, t + size / 2f, fine)
-                        b.drawLine(l + size / 2f, t, l + size / 2f, t + size, fine)
+                        b.drawLine(l, t + size / 2f, l + size, t + size / 2f, inner)
+                        b.drawLine(l + size / 2f, t, l + size / 2f, t + size, inner)
                         if (grid.style == GridStyle.MIZI) {
-                            b.drawLine(l, t, l + size, t + size, fine)
-                            b.drawLine(l + size, t, l, t + size, fine)
+                            b.drawLine(l, t, l + size, t + size, inner)
+                            b.drawLine(l + size, t, l, t + size, inner)
                         }
                     }
                 }

@@ -7,6 +7,7 @@ import com.papermill.app.core.pdf.PdfBackend
 import com.papermill.app.core.pdf.TextPainter
 import com.papermill.app.core.pdf.layout.Block
 import com.papermill.app.core.pdf.layout.FlowLayout
+import com.papermill.app.core.pdf.layout.blocks.FullWidthBlock
 import com.papermill.app.core.pdf.layout.blocks.NoteBlock
 import com.papermill.app.core.pdf.layout.blocks.QuestionBlock
 import com.papermill.app.core.pdf.layout.blocks.SectionHeaderBlock
@@ -55,38 +56,61 @@ object PaperRenderer {
         val contentHFirst = g.contentBottomSafe - (g.margin + coverHeight(doc))
         val contentHOther = g.contentBottomSafe - (g.margin + RUNNING_H)
 
-        val pages = ArrayList<FlowLayout.Page>()
-        // 答案页从第几页开始：有了它才能准确说「最后一页正文用了多少」，
-        // 而不是把答案页的填充率当成正文页报给用户。
-        var firstAnswerPage = -1
+        // ---- 1) 整卷合并成两条流：正文一条、答案一条 ----
+        // 旧版对每个大题各调一次 FlowLayout，导致「换个大题就换一页」：
+        // 6 种题型的一年级卷被印成 7 页。现在所有大题的块进同一个流，
+        // 标题 / 需要书写过程的题用整宽块占满一行，段与段在同一页里上下相接。
+        val bodyBlocks = ArrayList<Block>()
+        val answerBlocks = ArrayList<Block>()
+        var bodyColumns = 2
+
         doc.sections.forEach { section ->
-            if (section.isAnswer && firstAnswerPage < 0) firstAnswerPage = pages.size
-            val blocks = ArrayList<Block>(section.questions.size + 2)
-            blocks.add(SectionHeaderBlock(section.title))
+            val target = if (section.isAnswer) answerBlocks else bodyBlocks
+            target.add(SectionHeaderBlock(section.title))
 
             val table = section.table
             if (table != null) {
                 // 表格按固定行数切块，FlowLayout 就能自然分页且每块都带表头
                 table.rows.chunked(table.rowsPerBlock.coerceAtLeast(1)).forEach { rows ->
-                    blocks.add(TableBlock(table.headers, table.weights, rows, showHeader = true))
+                    target.add(TableBlock(table.headers, table.weights, rows, showHeader = true))
                 }
-                blocks.add(NoteBlock("本表可直接打印张贴，题目均由本 App 整理编排。"))
+                target.add(FullWidthBlock(NoteBlock("本表可直接打印张贴，题目均由本 App 整理编排。")))
             } else {
                 section.questions.forEach { q ->
-                    blocks.add(QuestionBlock(no = q.no, stem = q.stem, answerLines = section.answerLines))
+                    val qb = QuestionBlock(no = q.no, stem = q.stem, answerLines = section.answerLines)
+                    target.add(if (section.answerLines > 0) FullWidthBlock(qb) else qb)
                 }
+                if (!section.isAnswer) bodyColumns = maxOf(bodyColumns, section.columns)
             }
+        }
 
+        val pages = ArrayList<FlowLayout.Page>()
+        if (bodyBlocks.isNotEmpty()) {
             pages.addAll(
                 FlowLayout(
                     contentW = g.contentW,
                     contentHFirst = contentHFirst,
                     contentHOther = contentHOther,
-                    columns = if (table != null) 1 else section.columns,
+                    columns = bodyColumns,
                     columnGap = COLUMN_GAP,
-                    // 只有整卷第 1 页才有卷头；第 2 个大题另起页时按「后续页」的高度排
-                    startsOnFirstPage = pages.isEmpty(),
-                ).layout(blocks, tp)
+                    startsOnFirstPage = true,
+                ).layout(bodyBlocks, tp)
+            )
+        }
+
+        // 答案页单独成流：本来就该另起一页，四栏小字更省纸
+        var firstAnswerPage = -1
+        if (answerBlocks.isNotEmpty()) {
+            firstAnswerPage = pages.size
+            pages.addAll(
+                FlowLayout(
+                    contentW = g.contentW,
+                    contentHFirst = contentHFirst,
+                    contentHOther = contentHOther,
+                    columns = 4,
+                    columnGap = COLUMN_GAP,
+                    startsOnFirstPage = false,
+                ).layout(answerBlocks, tp)
             )
         }
 
