@@ -284,9 +284,9 @@ object ReferenceData {
         ReferenceSheet("grammar_junior", "英语语法速查表·初中", "7–9 年级 7 个语法点", grammarTable(7, 9), "英语专项"),
         ReferenceSheet("verbs", "英语不规则动词表", "原形 / 过去式 / 过去分词", irregularVerbs(), "英语专项"),
         // —— 语文基础
-        ReferenceSheet("pinyin", "汉语拼音音节表", "声母 23 · 韵母 24 · 整体认读 16", pinyinTable(), "语文基础"),
+        ReferenceSheet("pinyin", "汉语拼音音节表", "声母 23 · 韵母 24\n整体认读 16", pinyinTable(), "语文基础"),
         // —— 数学与理科
-        ReferenceSheet("mul99", "九九乘法表", "45 条乘法口诀 · 建议打印张贴", multiplyTable(), "数学与理科"),
+        ReferenceSheet("mul99", "九九乘法表", "45 条乘法口诀 · 建议打印", multiplyTable(), "数学与理科"),
         ReferenceSheet("math_primary", "小学数学公式表", "图形 / 运算 / 数量关系", primaryMath(), "数学与理科"),
         ReferenceSheet("math_junior", "初中数学公式表", "代数 / 几何 / 函数", juniorMath(), "数学与理科"),
         ReferenceSheet("physics", "初中物理公式表", "力学 / 热学 / 电学", physics(), "数学与理科"),

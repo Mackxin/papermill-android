@@ -37,7 +37,7 @@ object PracticeData {
             PaperGrid(GridStyle.FOUR_LINE, hint = "中格写满，上不顶线、下不踩线"),
         ),
         PracticeSheet(
-            "square", "数学方格纸", "20pt 小方格 · 草稿 / 画图 / 竖式",
+            "square", "数学方格纸", "小方格 · 草稿 / 画图 / 竖式",
             PaperGrid(GridStyle.SQUARE),
         ),
         PracticeSheet(

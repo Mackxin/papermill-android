@@ -38,6 +38,7 @@ import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.LineBreak
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -719,6 +720,8 @@ fun PresetCard(
             fontSize = PaperDimens.CaptionSp,
             color = PaperColors.OnSurfaceVariant,
             lineHeight = 16.sp,
+            // 按短语断行：「整体认读」不会被拆成「整体认 / 读」，「9×11 格」不会只剩一个「格」
+            style = TextStyle(lineBreak = LineBreak.Paragraph),
             // 描述统一占两行：一行与两行的卡片高度才一致，同一行里「N 题 · 出卷」才对得齐
             minLines = 2,
             maxLines = 2,
