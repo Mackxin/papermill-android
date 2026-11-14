@@ -54,8 +54,9 @@ object PaperComposer {
                         "$prefix${type.label}（每题 2 分，共 ${questions.size * 2} 分）",
                     type = type,
                     questions = questions,
-                    // 需要书写过程的题强制单栏，否则横线会被挤到很窄
-                    columns = if (type.answerLines > 0) 1 else spec.columns,
+                    // 需要书写过程、或题干本身很长（连词成句 / 选词填空）的题型强制单栏，
+                    // 否则 2 栏会把英文长句挤成好几行，印出来既难看又难写
+                    columns = if (type.answerLines > 0 || type.columns <= 1) 1 else spec.columns,
                     answerLines = type.answerLines,
                 )
             )

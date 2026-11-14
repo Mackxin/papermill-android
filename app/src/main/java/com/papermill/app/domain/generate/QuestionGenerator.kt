@@ -87,6 +87,10 @@ object GeneratorRegistry {
         FillBlankGenerator, MakeTenGenerator, ChainCalcGenerator, MixedCalcGenerator,
         TensCalcGenerator, TwoDigitGenerator, UnitConvertGenerator, CompareGenerator,
         NumberPatternGenerator, CountingGenerator, LetterOrderGenerator,
+        // v0.5.0 英语题型（题型模式自研、词表句子自编）
+        WordScrambleGenerator, SentenceOrderGenerator, ClozeGenerator,
+        // v0.5.0 主题识字（自编词库 + 校对过的拼音）
+        ThemePinyinGenerator, ThemeSortGenerator, ThemeGroupGenerator,
     )
 
     fun availableFor(grade: Int, subject: Subject): List<QuestionType> =

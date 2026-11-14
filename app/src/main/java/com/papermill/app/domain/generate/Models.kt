@@ -71,6 +71,17 @@ enum class QuestionType(
     NUMBER_PATTERN("找规律填数", 2),
     COUNTING("数数与认数", 2),
     LETTER_ORDER("字母顺序", 3),
+
+    // v0.5.0 英语题型：只借鉴「单词拼装 / 句子排序 / 选词填空」的题型模式，
+    // 词表与句子全部自编，不取自任何第三方仓库
+    WORD_SCRAMBLE("单词拼装", 2),
+    SENTENCE_ORDER("连词成句", 1),
+    CLOZE("选词填空", 1),
+
+    // v0.5.0 主题识字：6 大生活主题的自编词库（拼音已逐条校对）
+    THEME_PINYIN("主题·看拼音写词语", 2),
+    THEME_SORT("主题·找不同类", 2),
+    THEME_GROUP("主题·归类填空", 2),
 }
 
 enum class AnswerMode(val label: String) {
