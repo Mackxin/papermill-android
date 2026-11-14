@@ -94,6 +94,10 @@ object GeneratorRegistry {
         // v0.7.0 音标 / 语法 / 课本同步（内置内容，见 domain/content）
         PhoneticPickGenerator, PhoneticWriteGenerator, GrammarGenerator,
         TextbookHanziGenerator, TextbookWordGenerator,
+        // v0.8.0 成语 / 古诗题库题型（内容见 domain/content/Idioms.kt、Poems.kt）
+        IdiomFillGenerator, IdiomMeaningGenerator, PoemFillGenerator, PoemMatchGenerator,
+        // v0.8.0 口算变式（找未知项 / 带余数除法）
+        OralMissingGenerator, OralRemainderGenerator,
     )
 
     /** 关于页实时统计题型总数 */

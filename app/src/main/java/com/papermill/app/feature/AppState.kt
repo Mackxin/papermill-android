@@ -19,6 +19,7 @@ import com.papermill.app.core.pdf.render.ReferenceRenderer
 import com.papermill.app.core.pdf.render.RenderedPdf
 import com.papermill.app.core.print.PrintLauncher
 import com.papermill.app.core.print.PrintServiceProbe
+import com.papermill.app.core.store.AppSettings
 import com.papermill.app.core.store.LocalStore
 import com.papermill.app.core.store.MistakeItem
 import com.papermill.app.core.store.SavedPaper
@@ -108,6 +109,10 @@ class AppState(private val rawContext: Context) {
 
     var livePreview by mutableStateOf<ImageBitmap?>(null)
     var liveFillPercent by mutableStateOf(0)
+    /** 实时预览里「自动补满」额外加了多少题（0 = 没补或没开） */
+    var liveAutoExtra by mutableStateOf(0)
+    /** 实时预览的真实正文页数 */
+    var livePages by mutableStateOf(0)
     var previewSeed by mutableStateOf(daySeed())
 
     var busy by mutableStateOf(false)
@@ -125,6 +130,16 @@ class AppState(private val rawContext: Context) {
 
     var updateInfo by mutableStateOf("")
     var updateRelease by mutableStateOf<UpdateChecker.Release?>(null)
+
+    /** 底部 tab 栏用玻璃半透明（默认关：不透明实底，透出的卡片文字会干扰阅读） */
+    var dockGlass by mutableStateOf(false)
+        private set
+
+    fun updateDockGlass(on: Boolean) {
+        if (dockGlass == on) return
+        dockGlass = on
+        LocalStore.saveSettings(ctx, AppSettings(dockGlass = on))
+    }
 
     val hasPrintService: Boolean = PrintServiceProbe.hasService(ctx)
     val versionName: String = BuildConfig.VERSION_NAME
@@ -241,6 +256,7 @@ class AppState(private val rawContext: Context) {
 
     init {
         bankSize = BankQuestionSource.loadFromAssets(ctx)
+        dockGlass = LocalStore.loadSettings(ctx).dockGlass
         counts = PaperComposer.defaultSpec(grade, subjects).counts
         refreshLists()
     }
@@ -500,6 +516,79 @@ class AppState(private val rawContext: Context) {
     }
 
     /**
+     * 「自动补满」的试排结果：[counts] 补后题量、[extra] 补了几题、[fill] 末页正文填充率。
+     */
+    private class FillPlan(
+        val counts: LinkedHashMap<QuestionType, Int>,
+        val extra: Int,
+        val fill: Float,
+    )
+
+    /**
+     * 反复「试排 → 加题 → 再试排」，把最后一张正文纸填满。
+     *
+     * 三条约束，少一条都会印得更糟：
+     *  1. **不许增页**：补出来的卷比原来多一张纸就整轮回退，宁可少补；
+     *  2. **不许空转**：词表抽干后计数再涨也出不了新题，看实际题数没涨就停；
+     *  3. **多页也要补**：v0.7.4 之前只补「正文一页」的卷，可用户开这个开关，
+     *     要的就是「最后一张纸别空着」——现在任何页数都补，只是照样不许增页。
+     *
+     * [autoFillPage] 关闭时原样返回（extra = 0），调用方不用自己分支。
+     * 参数页的实时预览与正式生成共用这一份逻辑，才能做到「预览看到的就是印出来的」。
+     */
+    private suspend fun fillToPage(
+        seed: Long,
+        start: Map<QuestionType, Int>,
+        rounds: Int,
+    ): FillPlan {
+        if (!autoFillPage) return FillPlan(LinkedHashMap(start), 0, -1f)
+
+        var working = LinkedHashMap(start)
+        var bestCounts = LinkedHashMap(start)
+        var bestRatio = -1f
+        var bestExtra = 0
+        var extraAdded = 0
+        var basePages = -1
+        var lastCount = -1
+
+        for (attempt in 0..rounds) {
+            val probe = withContext(Dispatchers.IO) { buildOnce(seed, working, save = false) }
+            val pages = probe.pdf.contentPageCount
+            if (basePages < 0) basePages = pages
+            // 补到多出一张纸就停，回退到之前最好的那一版
+            if (pages > basePages) break
+
+            val ratio = contentFillRatio(probe.pdf)
+            if (ratio > bestRatio) {
+                bestRatio = ratio
+                bestCounts = LinkedHashMap(working)
+                bestExtra = extraAdded
+            }
+            // 题库抽干后计数再涨也出不了新题，别空转
+            val noProgress = lastCount >= 0 && probe.paper.questions.size <= lastCount
+            lastCount = probe.paper.questions.size
+
+            val fillType = pickFillType(working, probe)
+            if (fillType == null || attempt == rounds || noProgress) break
+            if (extraAdded >= MAX_AUTO_EXTRA) break
+            val need = suggestedExtra(ratio, fillType)
+            if (need <= 0) break
+
+            // 每轮只走估算量的 80%，靠多轮试排逼近 90%：
+            // 一次补满容易越过页边界，被「不增页」约束整轮回退。
+            val lineFactor = 1f + fillType.answerLines
+            val step = (need * 0.8f / lineFactor).toInt()
+                .coerceIn(1, need)
+                .coerceAtMost(MAX_AUTO_EXTRA - extraAdded)
+            if (step <= 0) break
+            working[fillType] = (working[fillType] ?: 0) + step
+            extraAdded += step
+        }
+
+        return FillPlan(bestCounts, bestExtra, bestRatio.coerceAtLeast(0f))
+    }
+
+    /**
      * 生成正式卷。
      *
      * 「补满整页」的**硬约束：补题不能让正文页数变多**。
@@ -514,56 +603,12 @@ class AppState(private val rawContext: Context) {
         }
         busy = true
         try {
-            var working = LinkedHashMap(counts)
-            var bestCounts = LinkedHashMap(counts)
-            var bestRatio = -1f
-            var bestExtra = 0
-            var extraAdded = 0
-            var basePages = -1
-            var lastCount = -1
-
-            for (attempt in 0..4) {
-                val probe = withContext(Dispatchers.IO) { buildOnce(seed, working, save = false) }
-                val pages = probe.pdf.contentPageCount
-                if (basePages < 0) basePages = pages
-                // 补到多出一张纸就停，回退到之前最好的版本
-                if (pages > basePages) break
-
-                val ratio = contentFillRatio(probe.pdf)
-                if (ratio > bestRatio) {
-                    bestRatio = ratio
-                    bestCounts = LinkedHashMap(working)
-                    bestExtra = extraAdded
-                }
-                // 词表 / 题库抽干后计数再涨也出不了新题，别空转
-                val noProgress = lastCount >= 0 && probe.paper.questions.size <= lastCount
-                lastCount = probe.paper.questions.size
-
-                // 只有「正文就一页」才自动补：已经要印 2 页正文时再补只会越补越多，
-                // 那种情况交给预览页的显式「补满这一页 / 加 N 题」。
-                val fillType = pickFillType(working, probe)
-                val need = if (autoFillPage && basePages == 1 && extraAdded < MAX_AUTO_EXTRA) {
-                    suggestedExtra(ratio, fillType)
-                } else 0
-                if (need <= 0 || fillType == null || attempt == 4 || noProgress) break
-
-                // 每轮只走估算量的 80%，靠多轮试排逼近 90%：
-                // 一次补满容易越过页边界，被「不增页」约束整轮回退。
-                val lineFactor = 1f + fillType.answerLines
-                val step = (need * 0.8f / lineFactor).toInt()
-                    .coerceIn(1, need)
-                    .coerceAtMost(MAX_AUTO_EXTRA - extraAdded)
-                if (step <= 0) break
-                working[fillType] = (working[fillType] ?: 0) + step
-                extraAdded += step
-            }
-
-            working = bestCounts
-            extraAdded = bestExtra
-            val result = withContext(Dispatchers.IO) { buildOnce(seed, working, save = true) }
-            counts = LinkedHashMap(working)
+            val plan = fillToPage(seed, counts, rounds = 5)
+            val result = withContext(Dispatchers.IO) { buildOnce(seed, plan.counts, save = true) }
+            counts = LinkedHashMap(plan.counts)
             applyBuilt(result)
 
+            val extraAdded = plan.extra
             val actual = result.paper.questions.size
             toast = buildString {
                 append("已生成 $actual 题，共 ${result.pdf.pageCount} 页")
@@ -585,21 +630,32 @@ class AppState(private val rawContext: Context) {
         busy = false
     }
 
-    /** 参数页实时预览：不落库、只渲染第 1 页缩略图 */
+    /**
+     * 参数页实时预览：不落库、只渲染第 1 页缩略图。
+     *
+     * 开了「自动补满整页」时先在后台把题补到真满，再渲染 ——
+     * 否则预览永远显示「没满」的那一版，用户开了开关也看不出效果，
+     * 只有点「生成」进预览页才发现题量被改过。补满的题数同时回传，界面直接说明。
+     */
     suspend fun refreshLivePreview() {
         if (totalQuestions <= 0) {
             livePreview = null
             liveFillPercent = 0
+            liveAutoExtra = 0
             return
         }
         runCatching {
+            // 预览只走 3 轮：参数页每次改题量都会重排，轮数太多会让缩略图跟不上手指
+            val plan = fillToPage(previewSeed, counts, rounds = 3)
             val result = withContext(Dispatchers.IO) {
-                val b = buildOnce(previewSeed, counts, save = false)
+                val b = buildOnce(previewSeed, plan.counts, save = false)
                 val bmp = PdfPreviewRenderer.render(ctx, b.pdf.bytes, scale = 0.75f).firstOrNull()
-                bmp to (contentFillRatio(b.pdf) * 100).toInt()
+                Triple(bmp, (contentFillRatio(b.pdf) * 100).toInt(), b.pdf.contentPageCount)
             }
             livePreview = result.first
             liveFillPercent = result.second
+            livePages = result.third
+            liveAutoExtra = plan.extra
         }
     }
 

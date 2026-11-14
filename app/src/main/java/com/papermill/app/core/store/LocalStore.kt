@@ -30,8 +30,18 @@ data class SavedPaper(
     val questions: List<SavedQuestion>,
 )
 
-data class MistakeItem(
-    val id: String,
+/**
+ * 全局偏好设置（单独一个 settings.json，不和试卷库混在一起）。
+ *
+ * [dockGlass]：底部 tab 栏是否用半透明玻璃效果。
+ * 默认 **false = 不透明实底** —— 透明会透出下面滚动的卡片文字，可读性打折扣，
+ * 所以做成「想要的人自己去设置里开」，而不是所有人一起忍受。
+ */
+data class AppSettings(
+    val dockGlass: Boolean = false,
+)
+
+data class MistakeItem(    val id: String,
     val grade: Int,
     val subject: String,
     val type: String,
@@ -56,6 +66,7 @@ object LocalStore {
 
     private const val FILE_PAPERS = "papers.json"
     private const val FILE_MISTAKES = "mistakes.json"
+    private const val FILE_SETTINGS = "settings.json"
 
     private fun f(ctx: Context, name: String) = File(ctx.filesDir, name)
 
@@ -67,6 +78,25 @@ object LocalStore {
 
     private fun write(ctx: Context, name: String, arr: JSONArray) {
         f(ctx, name).writeText(arr.toString(2))
+    }
+
+    // -------------------------------------------------------------- 偏好设置
+
+    fun loadSettings(ctx: Context): AppSettings {
+        val file = f(ctx, FILE_SETTINGS)
+        if (!file.exists()) return AppSettings()
+        return runCatching {
+            val o = JSONObject(file.readText())
+            AppSettings(dockGlass = o.optBoolean("dockGlass", false))
+        }.getOrDefault(AppSettings())
+    }
+
+    fun saveSettings(ctx: Context, settings: AppSettings) {
+        runCatching {
+            f(ctx, FILE_SETTINGS).writeText(
+                JSONObject().put("dockGlass", settings.dockGlass).toString(2)
+            )
+        }
     }
 
     // -------------------------------------------------------------- 试卷库

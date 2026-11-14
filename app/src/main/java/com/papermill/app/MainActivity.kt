@@ -21,6 +21,11 @@ class MainActivity : ComponentActivity() {
             DebugSheetDump.dump(this)
             return
         }
+        // 题型抽样：核对题干与答案是否配套（选择题选项洗牌后答案字母最容易错位）
+        if (BuildConfig.DEBUG && intent?.getBooleanExtra("dumpQuestions", false) == true) {
+            DebugSheetDump.dumpQuestions()
+            return
+        }
         setContent {
             PaperMillTheme {
                 val state = remember { AppState(this@MainActivity) }

@@ -61,7 +61,7 @@ object PaperDimens {
     val ChipRadius = 14.dp
     val Gap = 14.dp
     val GapSmall = 10.dp
-    val ActionBarH = 60.dp
+    val ActionBarH = 54.dp
     val NavH = 64.dp
 
     val TitleSp = 27.sp

@@ -57,6 +57,14 @@ object PracticeData {
             PaperGrid(GridStyle.TIANZI, hint = "横版 A4 · 打印时请选「横向」"),
             orientation = PageOrientation.LANDSCAPE,
         ),
+        PracticeSheet(
+            "maze", "迷宫纸", "现场生成 · 每点一次都是新迷宫",
+            PaperGrid(
+                GridStyle.MAZE,
+                cell = 26f,
+                hint = "从左上角入口走进去，到右下角出口走出来；可用铅笔，走错就擦掉重来",
+            ),
+        ),
     )
 
     /**

@@ -8,6 +8,9 @@ import com.papermill.app.core.pdf.render.PaperRenderer
 import com.papermill.app.core.pdf.render.PdfPreviewRenderer
 import com.papermill.app.core.pdf.render.PracticeRenderer
 import com.papermill.app.core.pdf.render.ReferenceRenderer
+import com.papermill.app.domain.generate.GenContext
+import com.papermill.app.domain.generate.GeneratorRegistry
+import com.papermill.app.domain.generate.QuestionType
 import com.papermill.app.domain.reference.PracticeData
 import com.papermill.app.domain.reference.ReferenceData
 import java.io.File
@@ -88,6 +91,41 @@ object DebugSheetDump {
 
             File(dir, "report.txt").writeText(report.toString())
             Log.i(TAG, "done -> ${dir.absolutePath}")
+        }.start()
+    }
+
+    /**
+     * 题型抽样：把指定题型各生成若干题，直接打到 logcat。
+     *
+     * 用途是**核对题干与答案是否配套** —— 选择题选项洗牌后答案字母容易对不上，
+     * 光看代码看不出来，只有把题目真造出来逐条念一遍才可靠。
+     */
+    fun dumpQuestions() {
+        Thread {
+            val ctxList = listOf(
+                QuestionType.IDIOM_FILL to 4,
+                QuestionType.IDIOM_MEANING to 4,
+                QuestionType.POEM_FILL to 4,
+                QuestionType.POEM_MATCH to 4,
+                QuestionType.ORAL_MISSING to 4,
+                QuestionType.ORAL_REMAINDER to 4,
+            )
+            ctxList.forEach { (type, n) ->
+                val gen = GeneratorRegistry.of(type, 4) ?: return@forEach
+                val ctx = GenContext(
+                    grade = 4,
+                    count = n,
+                    difficulty = 2,
+                    rng = java.util.Random(42),
+                    blocked = HashSet(),
+                )
+                val list = runCatching { gen.generate(ctx) }.getOrElse { emptyList() }
+                Log.i(TAG, "===== ${type.label}（${list.size} 题）=====")
+                list.forEachIndexed { i, q ->
+                    Log.i(TAG, "Q${i + 1} ${q.stem.replace("\n", " ｜ ")}")
+                    Log.i(TAG, "   答：${q.answer}")
+                }
+            }
         }.start()
     }
 

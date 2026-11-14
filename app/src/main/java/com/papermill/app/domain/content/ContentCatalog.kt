@@ -73,6 +73,17 @@ object ContentCatalog {
             "常用词带拼音，另加 6 大生活场景的主题识字词（超市 / 医院 / 公园 / 学校 / 动物园 / 交通）。",
         ),
         CatalogEntry(
+            "成语库",
+            "${Idioms.items.size} 条",
+            "常用四字成语，释义全部用自己的一句话重写；成语填空与释义选择题从这里随机抽，库越大题越多。",
+        ),
+        CatalogEntry(
+            "古诗库",
+            "${Poems.items.size} 首 · ${Poems.items.sumOf { it.lines.size }} 句",
+            "小学常见背诵篇目原文（唐宋明清为主，均属公有领域），只收原文、作者、朝代，" +
+                "不收录今人注释与译文；接句与常识题从这里随机抽。",
+        ),
+        CatalogEntry(
             "英语词库",
             "${WordBank.englishCount} 词",
             "按年级分级的基础词，用于单词默写与拼装题型。",

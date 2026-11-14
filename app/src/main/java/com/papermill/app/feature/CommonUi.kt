@@ -44,6 +44,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.LineBreak
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -73,8 +74,13 @@ fun AppTopBar(
     title: String,
     subtitle: String = "",
     onBack: (() -> Unit)? = null,
+    /**
+     * 首页专用：标题居中 + 主色。
+     * 其它页面有返回键、标题也长（「速查表与打印纸」），居中会和返回键打架，保持左对齐黑字。
+     */
+    centered: Boolean = false,
 ) {
-    Row(
+    Box(
         Modifier
             .fillMaxWidth()
             .padding(
@@ -83,7 +89,6 @@ fun AppTopBar(
                 top = 10.dp,
                 bottom = 12.dp,
             ),
-        verticalAlignment = Alignment.CenterVertically,
     ) {
         if (onBack != null) {
             // 触摸区 48dp、视觉圆形 38dp：原来点击热区只有一个 38dp 的圆，边缘容易点空。
@@ -91,6 +96,7 @@ fun AppTopBar(
             val backInteraction = remember { MutableInteractionSource() }
             Box(
                 Modifier
+                    .align(Alignment.CenterStart)
                     .size(48.dp)
                     .clickable(
                         interactionSource = backInteraction,
@@ -116,14 +122,20 @@ fun AppTopBar(
                     )
                 }
             }
-            Spacer(Modifier.width(8.dp))
         }
-        Column(Modifier.weight(1f)) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                // 有返回键时把标题挤到按钮右侧，避免长标题压住圆形按钮
+                .padding(start = if (onBack != null && !centered) 56.dp else 0.dp),
+            horizontalAlignment = if (centered) Alignment.CenterHorizontally else Alignment.Start,
+        ) {
             Text(
                 title,
                 fontSize = PaperDimens.TitleSp,
                 fontWeight = FontWeight.Bold,
-                color = PaperColors.OnSurface,
+                color = if (centered) PaperColors.Primary else PaperColors.OnSurface,
+                textAlign = if (centered) TextAlign.Center else TextAlign.Start,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -132,8 +144,7 @@ fun AppTopBar(
                     subtitle,
                     fontSize = PaperDimens.CaptionSp,
                     color = PaperColors.OnSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
+                    textAlign = if (centered) TextAlign.Center else TextAlign.Start,
                 )
             }
         }
@@ -148,7 +159,7 @@ fun StickyBar(content: @Composable RowScope.() -> Unit) {
             .fillMaxWidth()
             .heightIn(min = PaperDimens.ActionBarH)
             .background(PaperColors.Background)
-            .padding(horizontal = PaperDimens.ScreenPad, vertical = 8.dp),
+            .padding(horizontal = PaperDimens.ScreenPad, vertical = 5.dp),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalAlignment = Alignment.CenterVertically,
         content = content,
@@ -161,10 +172,11 @@ fun StickyBar(content: @Composable RowScope.() -> Unit) {
  * 用户明确要求「tab 栏不需要图标」——去掉图标后整条更矮更安静，
  * 选中态靠胶囊底色 + 字重变化表达，比图标+文字的双行更利落。
  *
- * v0.7.4 起做成**悬浮玻璃条**：整条盖在内容之上（不再占布局位），
- * 半透明底 + 顶部高光描边 + 大阴影，滚动内容会从它背后穿过去。
- * Android 没有能模糊「背后内容」的公开 API（Modifier.blur 只模糊自己），
- * 所以玻璃感靠三件事凑：低透明度、上亮下暗的描边、以及背后真的透出内容。
+ * v0.7.4 起做成**悬浮条**：整条盖在内容之上（不再占布局位）。
+ * v0.8.0 起默认**不透明实底**，玻璃半透明改成「更多 → 设置」里的开关：
+ * 半透明会透出下面滚动的卡片文字，和 tab 文字抢视线；
+ * 而且 Android 没有能模糊「背后内容」的公开 API（Modifier.blur 只模糊自己），
+ * 真玻璃效果凑不出来，只能靠低透明度假装，索性默认关掉、想要的人自己开。
  */
 @Composable
 fun FloatingDock(
@@ -173,6 +185,7 @@ fun FloatingDock(
     onSelect: (NavTab) -> Unit,
 ) {
     val shape = RoundedCornerShape(26.dp)
+    val glass = state.dockGlass
     Row(
         modifier
             .fillMaxWidth()
@@ -180,25 +193,36 @@ fun FloatingDock(
             .shadow(18.dp, shape)
             .clip(shape)
             .background(
-                // 上亮下暗的极浅渐变，比纯平涂更像一块玻璃。
-                // 透明度不能太低：Android 没有「模糊背后内容」的公开 API，
-                // 0.66 那版透过来的卡片文字会和 tab 文字抢视线，压到 0.80 才算能看清。
-                Brush.verticalGradient(
-                    listOf(
-                        PaperColors.Surface.copy(alpha = 0.92f),
-                        PaperColors.Surface.copy(alpha = 0.80f),
+                // 玻璃态：上亮下暗的极浅渐变；实底：同一块不透明 Surface
+                if (glass) {
+                    Brush.verticalGradient(
+                        listOf(
+                            PaperColors.Surface.copy(alpha = 0.92f),
+                            PaperColors.Surface.copy(alpha = 0.80f),
+                        )
                     )
-                )
+                } else {
+                    Brush.verticalGradient(
+                        listOf(PaperColors.Surface, PaperColors.Surface)
+                    )
+                }
             )
-            .border(
-                width = 1.dp,
-                brush = Brush.verticalGradient(
-                    listOf(
-                        Color.White.copy(alpha = 0.9f),
-                        Color.White.copy(alpha = 0.2f),
+            .then(
+                // 高光描边只在玻璃态有意义，实底时描边会显得脏
+                if (glass) {
+                    Modifier.border(
+                        width = 1.dp,
+                        brush = Brush.verticalGradient(
+                            listOf(
+                                Color.White.copy(alpha = 0.9f),
+                                Color.White.copy(alpha = 0.2f),
+                            )
+                        ),
+                        shape = shape,
                     )
-                ),
-                shape = shape,
+                } else {
+                    Modifier.border(1.dp, PaperColors.Outline, shape)
+                }
             )
             .padding(horizontal = 6.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -868,7 +892,7 @@ fun PrimaryButton(
     val shape = RoundedCornerShape(16.dp)
     Box(
         modifier
-            .height(50.dp)
+            .height(46.dp)
             .then(if (enabled) Modifier.shadow(8.dp, shape) else Modifier)
             .clip(shape)
             .background(
@@ -901,7 +925,7 @@ fun SecondaryButton(
     val shape = RoundedCornerShape(16.dp)
     Box(
         modifier
-            .height(50.dp)
+            .height(46.dp)
             .clip(shape)
             .background(PaperColors.SurfaceAlt)
             .clickable(enabled = enabled) { onClick() },

@@ -32,6 +32,9 @@ enum class QuestionType(
 ) {
     // 小学数学
     ORAL("口算", 2),
+    // v0.8.0：求未知项 / 有余数除法（口算的两个「变式」，答案位在算式中间）
+    ORAL_MISSING("求未知项", 3),
+    ORAL_REMAINDER("有余数除法", 2),
     VERTICAL("竖式计算", 1, 2),
     EXPRESSION("脱式计算", 1, 2),
     FRACTION("分数运算", 2),
@@ -95,6 +98,13 @@ enum class QuestionType(
     // v0.7.0 课本同步：按年级分段的生字表 / 核心词表，抽测用
     TEXTBOOK_HANZI("课本生字注音", 4),
     TEXTBOOK_WORD("课本单词默写", 4),
+
+    // v0.8.0 成语与古诗：题库型语文题型，出题时从内置库里随机抽
+    // 选项是整句释义 / 整句诗，必须占整行，半栏会折得七零八落
+    IDIOM_FILL("成语填空", 3),
+    IDIOM_MEANING("成语释义", 1),
+    POEM_FILL("古诗接句", 1),
+    POEM_MATCH("古诗常识", 1),
 }
 
 enum class AnswerMode(val label: String) {

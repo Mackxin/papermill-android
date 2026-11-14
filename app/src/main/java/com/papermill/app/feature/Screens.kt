@@ -193,7 +193,13 @@ fun PaperMillRoot(state: AppState) {
     Box(Modifier.fillMaxSize().background(PaperColors.Background)) {
         // 内容层一路铺到屏幕底部：滚动内容会从 dock 背后穿过去，玻璃质感才透得出来
         Column(Modifier.fillMaxSize()) {
-            AppTopBar(title = title, subtitle = subtitle, onBack = onBack)
+            AppTopBar(
+                title = title,
+                subtitle = subtitle,
+                onBack = onBack,
+                // 只有首页（无返回键）标题居中 + 主色；有返回键的页面居中会和圆形按钮撞
+                centered = state.screen == Screen.HOME,
+            )
 
             Box(Modifier.weight(1f)) {
                 if (state.screen in TAB_SCREENS) {
@@ -315,7 +321,8 @@ private fun screenTitle(state: AppState): Pair<String, String> = when (state.scr
     Screen.HOME -> "卷子" to "选年级科目，30 秒出一张能打印的卷子"
     Screen.CREATE -> "自由组合" to "${GradeProfiles.gradeLabel(state.grade)} · ${state.totalQuestions} 题 · 预计 ${state.estimatedPages} 页 ${state.orientation.label}"
     Screen.PREVIEW -> if (state.isReference) {
-        "打印预览" to "1 页 A4 · 与打印结果完全一致"
+        // 速查表可能排到 2 页，副标题必须读真实页数（原来写死「1 页」和卡片数字打架）
+        "打印预览" to "${state.pdf?.pageCount ?: 0} 页 A4 · 与打印结果完全一致"
     } else {
         "试卷预览" to "共 ${state.paper?.questions?.size ?: 0} 题 · ${state.pdf?.pageCount ?: 0} 页 ${state.orientation.label}"
     }
@@ -327,14 +334,20 @@ private fun screenTitle(state: AppState): Pair<String, String> = when (state.scr
     Screen.HELP -> "打印帮助" to "在家打印与远程打印两种方式"
 }
 
-/** Hero 卡里的三个数据小块：题量 / 页数 / 是否自动补满 */
+/**
+ * Hero 卡里的三个数据小块：题量 / 页数 / 是否自动补满。
+ *
+ * 三块等宽铺满整行（调用方传 weight），文字水平居中 —— 原来宽度跟着字走，
+ * 三块宽窄不一、还都贴在左边，红框那一条右边空一大截。
+ */
 @Composable
-private fun HeroStat(value: String, label: String) {
+private fun HeroStat(value: String, label: String, modifier: Modifier = Modifier) {
     Column(
-        Modifier
+        modifier
             .clip(RoundedCornerShape(12.dp))
             .background(Color.White.copy(alpha = 0.16f))
-            .padding(horizontal = 12.dp, vertical = 8.dp),
+            .padding(vertical = 9.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Text(value, fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Color.White)
         Text(label, fontSize = 10.sp, color = Color.White.copy(alpha = 0.82f))
@@ -383,10 +396,13 @@ private fun LazyListScope.homeScreenItems(state: AppState, scope: CoroutineScope
                     color = Color.White.copy(alpha = 0.82f),
                 )
                 Spacer(Modifier.height(16.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    HeroStat("${state.totalQuestions}", "道题")
-                    HeroStat("${state.estimatedPages}", "页 A4")
-                    HeroStat(if (state.autoFillPage) "开" else "关", "自动补满")
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    HeroStat("${state.totalQuestions}", "道题", Modifier.weight(1f))
+                    HeroStat("${state.estimatedPages}", "页 A4", Modifier.weight(1f))
+                    HeroStat(if (state.autoFillPage) "开" else "关", "自动补满", Modifier.weight(1f))
                 }
                 Spacer(Modifier.height(16.dp))
                 Row(
@@ -632,6 +648,8 @@ private fun CreateScreen(state: AppState, scope: CoroutineScope) {
         append(state.difficulty).append('|').append(state.columns).append('|')
         append(state.answerMode.name).append('|').append(state.showNameRow).append('|')
         append(state.orientation.name).append('|')
+        // 自动补满开关也算参数：切换后要立刻重排，让用户当场看到「页面真的满了」
+        append(state.autoFillPage).append('|')
         append(state.titleOverride).append('|').append(state.previewSeed)
     }
     LaunchedEffect(signature) {
@@ -671,15 +689,36 @@ private fun CreateScreen(state: AppState, scope: CoroutineScope) {
                     color = PaperColors.OnSurface,
                 )
                 Spacer(Modifier.height(6.dp))
-                if (state.liveSuggestExtra > 0) {
-                    Text(
+                val fill = state.liveFillPercent
+                val autoExtra = state.liveAutoExtra
+                when {
+                    // 补满真的生效：直接说清楚补了几题、现在几页
+                    autoExtra > 0 && fill >= 84 -> Text(
+                        "自动补满加了 $autoExtra 题 · 共 ${state.livePages} 页，最后一张纸已经排满。",
+                        fontSize = PaperDimens.CaptionSp,
+                        color = PaperColors.Success,
+                        lineHeight = 16.sp,
+                    )
+                    // 开了补满还是不满：是题库量不够，不是开关没生效
+                    autoExtra > 0 -> Text(
+                        "自动补满加了 $autoExtra 题，但题库不够了，最后一页只到 $fill% —— 再选一种题型就能补上。",
+                        fontSize = PaperDimens.CaptionSp,
+                        color = PaperColors.Accent,
+                        lineHeight = 16.sp,
+                    )
+                    state.autoFillPage -> Text(
+                        "自动补满已开启，当前题量已经排满，不需要再加。",
+                        fontSize = PaperDimens.CaptionSp,
+                        color = PaperColors.Success,
+                        lineHeight = 16.sp,
+                    )
+                    state.liveSuggestExtra > 0 -> Text(
                         "建议再加约 ${state.liveSuggestExtra} 题，或开启「自动补满整页」由 App 代劳。",
                         fontSize = PaperDimens.CaptionSp,
                         color = PaperColors.Accent,
                         lineHeight = 16.sp,
                     )
-                } else {
-                    Text(
+                    else -> Text(
                         "页面排得比较满，不会浪费纸。",
                         fontSize = PaperDimens.CaptionSp,
                         color = PaperColors.Success,
@@ -1357,6 +1396,21 @@ private fun masteryLabel(m: String) = when (m) {
 private fun LazyListScope.moreScreenItems(state: AppState, scope: CoroutineScope, onImport: () -> Unit) {
     // 内置内容：数字全部当场从数据源算，不写死文案 —— 题库扩容后这里自动跟着变
     item { ContentSummaryCard(state.bankSize) }
+
+    item { Spacer(Modifier.height(PaperDimens.Gap)) }
+    item {
+        CardSection(title = "外观") {
+            ListRow(
+                "半透明玻璃 tab 栏",
+                if (state.dockGlass) {
+                    "已开启：tab 栏半透明，滚动内容会从背后透出来"
+                } else {
+                    "已关闭：不透明实底（默认），文字最清楚"
+                },
+                trailing = if (state.dockGlass) "开" else "关",
+            ) { state.updateDockGlass(!state.dockGlass) }
+        }
+    }
 
     item { Spacer(Modifier.height(PaperDimens.Gap)) }
     item {
