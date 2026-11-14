@@ -1,10 +1,13 @@
 package com.papermill.app.feature
 
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -27,6 +30,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -160,10 +164,20 @@ private fun RowScope.DockItem(
     selected: Boolean,
     onClick: () -> Unit,
 ) {
-    val t by animateFloatAsState(if (selected) 1f else 0f, label = "dock-$label")
+    // 定长 160ms 过渡。默认 spring 在快速连点 / 滑动切页时会有一段拖尾，
+    // 手感上就像「点下去要顿一下才亮起来」。
+    val t by animateFloatAsState(
+        targetValue = if (selected) 1f else 0f,
+        animationSpec = tween(durationMillis = 160, easing = FastOutSlowInEasing),
+        label = "dock-$label",
+    )
     val bg = lerp(Color.Transparent, PaperColors.PrimaryContainer, t)
     val fg = lerp(PaperColors.OnSurfaceVariant, PaperColors.Primary, t)
+    // 字重只在过半后切一次，避免每帧换字体尺寸触发重新排版
     val weight = if (t > 0.5f) FontWeight.Bold else FontWeight.Normal
+    // 关掉 ripple：用户明确要求去掉「高亮之前先闪一层灰底」。
+    // 选中态胶囊本身就是点击反馈，再叠一层灰反而脏。
+    val interaction = remember { MutableInteractionSource() }
 
     Box(
         Modifier
@@ -171,7 +185,10 @@ private fun RowScope.DockItem(
             .height(42.dp)
             .clip(RoundedCornerShape(18.dp))
             .background(bg)
-            .clickable { onClick() },
+            .clickable(
+                interactionSource = interaction,
+                indication = null,
+            ) { onClick() },
         contentAlignment = Alignment.Center,
     ) {
         Text(

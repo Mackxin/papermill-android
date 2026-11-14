@@ -186,7 +186,9 @@ class AppState(private val rawContext: Context) {
             NavTab.MISTAKES -> Screen.MISTAKES
             NavTab.MORE -> Screen.MORE
         }
-        if (tab == NavTab.MORE) refreshLists()
+        // 这里原来同步调 refreshLists()（两次 JSON 磁盘读取 + 解析）。
+        // 滑到「更多」页的那一帧正好是 pager settle 收尾，主线程一堵就是明显掉帧。
+        // 现在交给 MoreScreen 进页时异步刷，见 refreshListsAsync()。
     }
 
     /** 首页快捷卡片：套用题量后立刻出卷，不再先跳去参数页 */
@@ -246,6 +248,18 @@ class AppState(private val rawContext: Context) {
     fun refreshLists() {
         savedPapers = LocalStore.loadPapers(ctx)
         mistakes = LocalStore.loadMistakes(ctx)
+    }
+
+    /**
+     * 异步版刷新：磁盘读取 + JSON 解析全在 IO 线程。
+     * 切页 / 进「更多」页这类交互路径上不能再同步读盘，否则掉帧。
+     * 只在真变了才赋值，避免白白触发一轮重组。
+     */
+    suspend fun refreshListsAsync() {
+        val papers = withContext(Dispatchers.IO) { LocalStore.loadPapers(ctx) }
+        val marks = withContext(Dispatchers.IO) { LocalStore.loadMistakes(ctx) }
+        if (savedPapers != papers) savedPapers = papers
+        if (mistakes != marks) mistakes = marks
     }
 
     // ---------------------------------------------------------------- 选择

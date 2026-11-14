@@ -8,6 +8,8 @@ import android.app.Activity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -16,6 +18,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -25,6 +28,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
@@ -126,11 +131,18 @@ fun PaperMillRoot(state: AppState) {
             if (state.navTab != target) state.goTab(target)
         }
     }
-    // 代码里跳页（点 dock / 从子页面回来）时把 pager 滑过去，而不是硬切
+    // 代码里跳页（点 dock / 从子页面回来）时把 pager 滑过去，而不是硬切。
+    // 必须排除「手指正在滑」的情况：否则松手那一刻 settle 还没走完，
+    // 这里又发一个 animateScrollToPage 去抢，两个动画互相打断就是顿挫感。
     LaunchedEffect(state.navTab, state.screen) {
-        if (state.screen in TAB_SCREENS) {
+        if (state.screen in TAB_SCREENS && !pager.isScrollInProgress) {
             val idx = TAB_ORDER.indexOf(state.navTab)
-            if (idx >= 0 && pager.currentPage != idx) pager.animateScrollToPage(idx)
+            if (idx >= 0 && pager.currentPage != idx) {
+                pager.animateScrollToPage(
+                    page = idx,
+                    animationSpec = tween(durationMillis = 240, easing = FastOutSlowInEasing),
+                )
+            }
         }
     }
 
@@ -143,23 +155,41 @@ fun PaperMillRoot(state: AppState) {
 
         Box(Modifier.weight(1f)) {
             if (state.screen in TAB_SCREENS) {
-                HorizontalPager(state = pager, modifier = Modifier.fillMaxSize()) { page ->
+                HorizontalPager(
+                    state = pager,
+                    modifier = Modifier.fillMaxSize(),
+                    // 预先组合相邻页：默认只组合当前页，滑到新页时才现场搭整页内容
+                    // （工具页有 36 张卡），首帧就会卡一下；多挂一页换顺滑。
+                    // Compose 1.6 里这个参数叫 beyondBoundsPageCount（1.7 才改名）。
+                    beyondBoundsPageCount = 1,
+                ) { page ->
                     val tab = TAB_ORDER[page]
-                    val scroll = rememberScrollState()
-                    Column(
-                        Modifier
-                            .fillMaxSize()
-                            .verticalScroll(scroll)
-                            .padding(horizontal = PaperDimens.ScreenPad)
+                    // 「更多」页要用到试卷库 / 错题本数量。放这里而不是列表项里，
+                    // 免得列表项滚出屏幕被回收后反复重跑。
+                    if (tab == NavTab.MORE) {
+                        LaunchedEffect(Unit) { state.refreshListsAsync() }
+                    }
+                    // 用 LazyColumn 而不是 Column + verticalScroll：
+                    // 原来「打印纸」页一次性组合 36 张带 elevation 阴影的卡，
+                    // 滑动时前后两页同时在场，首帧要摆上百个阴影节点 —— 这就是卡顿的主因。
+                    // 改成按需组合后，屏幕上始终只有可见的那几行。
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(
+                            start = PaperDimens.ScreenPad,
+                            end = PaperDimens.ScreenPad,
+                            top = 2.dp,
+                        ),
                     ) {
-                        Spacer(Modifier.height(2.dp))
                         when (tab) {
-                            NavTab.HOME -> HomeScreen(state, scope)
-                            NavTab.REFERENCE -> ReferenceScreen(state, scope)
-                            NavTab.MISTAKES -> MistakesScreen(state)
-                            NavTab.MORE -> MoreScreen(state, scope) { importLauncher.launch("*/*") }
+                            NavTab.HOME -> homeScreenItems(state, scope)
+                            NavTab.REFERENCE -> referenceScreenItems(state, scope)
+                            NavTab.MISTAKES -> mistakesScreenItems(state)
+                            NavTab.MORE -> moreScreenItems(state, scope) {
+                                importLauncher.launch("*/*")
+                            }
                         }
-                        Spacer(Modifier.height(20.dp))
+                        item { Spacer(Modifier.height(20.dp)) }
                     }
                 }
             } else {
@@ -274,150 +304,168 @@ private fun Divider() = Box(
 
 // ------------------------------------------------------------------ 首页：一屏完成选择 + 出卷
 
-@Composable
-private fun HomeScreen(state: AppState, scope: CoroutineScope) {
+private fun LazyListScope.homeScreenItems(state: AppState, scope: CoroutineScope) {
     val presets = PaperTemplates.forSelection(state.grade, state.subjects).take(8)
     val subjectLabel = state.subjects.joinToString(" + ") { it.label }
 
     // Hero：一屏说清「给谁出卷、多少题、几张纸」，渐变是整页的视觉锚点
-    Box(
-        Modifier
-            .fillMaxWidth()
-            .shadow(14.dp, RoundedCornerShape(26.dp))
-            .clip(RoundedCornerShape(26.dp))
-            .background(
-                Brush.linearGradient(
-                    listOf(PaperColors.GradientStart, PaperColors.GradientEnd)
+    item {
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .shadow(14.dp, RoundedCornerShape(26.dp))
+                .clip(RoundedCornerShape(26.dp))
+                .background(
+                    Brush.linearGradient(
+                        listOf(PaperColors.GradientStart, PaperColors.GradientEnd)
+                    )
                 )
-            )
-            .padding(20.dp),
-    ) {
-        Column {
-            Text(
-                "${GradeProfiles.gradeLabel(state.grade)} · $subjectLabel",
-                fontSize = 24.sp,
-                fontWeight = FontWeight.Bold,
-                color = Color.White,
-            )
-            Spacer(Modifier.height(5.dp))
-            Text(
-                "共 ${state.totalQuestions} 题 · 预计 ${state.estimatedPages} 页 A4 · ${state.answerMode.label}",
-                fontSize = PaperDimens.CaptionSp,
-                color = Color.White.copy(alpha = 0.82f),
-            )
-            Spacer(Modifier.height(16.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                HeroStat("${state.totalQuestions}", "道题")
-                HeroStat("${state.estimatedPages}", "页 A4")
-                HeroStat(if (state.autoFillPage) "开" else "关", "自动补满")
-            }
-            Spacer(Modifier.height(16.dp))
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(Color.White.copy(alpha = 0.16f))
-                    .clickable { scope.launch { state.generateDaily() } }
-                    .padding(horizontal = 14.dp, vertical = 11.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
+                .padding(20.dp),
+        ) {
+            Column {
                 Text(
-                    "每日一练 · 今天这套，明天自动换新",
-                    fontSize = PaperDimens.LabelSp,
-                    fontWeight = FontWeight.SemiBold,
+                    "${GradeProfiles.gradeLabel(state.grade)} · $subjectLabel",
+                    fontSize = 24.sp,
+                    fontWeight = FontWeight.Bold,
                     color = Color.White,
-                    modifier = Modifier.weight(1f),
                 )
-                Text("›", fontSize = 20.sp, color = Color.White)
+                Spacer(Modifier.height(5.dp))
+                Text(
+                    "共 ${state.totalQuestions} 题 · 预计 ${state.estimatedPages} 页 A4 · ${state.answerMode.label}",
+                    fontSize = PaperDimens.CaptionSp,
+                    color = Color.White.copy(alpha = 0.82f),
+                )
+                Spacer(Modifier.height(16.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    HeroStat("${state.totalQuestions}", "道题")
+                    HeroStat("${state.estimatedPages}", "页 A4")
+                    HeroStat(if (state.autoFillPage) "开" else "关", "自动补满")
+                }
+                Spacer(Modifier.height(16.dp))
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(Color.White.copy(alpha = 0.16f))
+                        .clickable { scope.launch { state.generateDaily() } }
+                        .padding(horizontal = 14.dp, vertical = 11.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "每日一练 · 今天这套，明天自动换新",
+                        fontSize = PaperDimens.LabelSp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color.White,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text("›", fontSize = 20.sp, color = Color.White)
+                }
             }
         }
     }
 
     // 特色入口：自由组合。紧贴 Hero 下方，点整张卡进面板。
     // 这是本 App 区别于「点一下就出卷」的题库类 App 的核心 —— 题由你配，不由我们限死。
-    Spacer(Modifier.height(12.dp))
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .shadow(Surface3.cardShadow, Surface3.shape)
-            .clip(Surface3.shape)
-            .background(PaperColors.Surface)
-            .clickable { state.screen = Screen.CREATE }
-            .padding(16.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(Modifier.weight(1f)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+    item {
+        Spacer(Modifier.height(12.dp))
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .shadow(Surface3.cardShadow, Surface3.shape)
+                .clip(Surface3.shape)
+                .background(PaperColors.Surface)
+                .clickable { state.screen = Screen.CREATE }
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "自由组合出题",
+                        fontSize = 17.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = PaperColors.OnSurface,
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    StatChip("特色", PaperColors.Accent, PaperColors.AccentContainer)
+                }
+                Spacer(Modifier.height(5.dp))
                 Text(
-                    "自由组合出题",
-                    fontSize = 17.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = PaperColors.OnSurface,
+                    "${GeneratorRegistry.count} 种题型随便挑：智能配比、搜索、一键加题，题量自己定",
+                    fontSize = PaperDimens.CaptionSp,
+                    color = PaperColors.OnSurfaceVariant,
+                    lineHeight = 17.sp,
                 )
-                Spacer(Modifier.width(8.dp))
-                StatChip("特色", PaperColors.Accent, PaperColors.AccentContainer)
             }
-            Spacer(Modifier.height(5.dp))
-            Text(
-                "${GeneratorRegistry.count} 种题型随便挑：智能配比、搜索、一键加题，题量自己定",
-                fontSize = PaperDimens.CaptionSp,
-                color = PaperColors.OnSurfaceVariant,
-                lineHeight = 17.sp,
-            )
+            Text("›", fontSize = 22.sp, color = PaperColors.Primary)
         }
-        Text("›", fontSize = 22.sp, color = PaperColors.Primary)
     }
 
-    Spacer(Modifier.height(12.dp))
-    SectionLabel("01", "年级", "小学 1–6 / 初中 7–9")
-    Spacer(Modifier.height(8.dp))
-    CompactChipGrid(
-        items = (1..9).toList(),
-        perRow = 6,
-        label = { GradeProfiles.gradeLabel(it) },
-        selected = { it == state.grade },
-        onClick = { state.selectGrade(it) },
-    )
+    item {
+        Spacer(Modifier.height(12.dp))
+        SectionLabel("01", "年级", "小学 1–6 / 初中 7–9")
+        Spacer(Modifier.height(8.dp))
+        CompactChipGrid(
+            items = (1..9).toList(),
+            perRow = 6,
+            label = { GradeProfiles.gradeLabel(it) },
+            selected = { it == state.grade },
+            onClick = { state.selectGrade(it) },
+        )
+    }
 
-    Spacer(Modifier.height(12.dp))
-    SectionLabel("02", "科目", "可多选 · 灰色未开课")
-    Spacer(Modifier.height(8.dp))
-    CompactChipGrid(
-        items = Subject.values().toList(),
-        perRow = 5,
-        label = { it.label },
-        selected = { it in state.subjects },
-        enabled = { it.availableFor(state.grade) },
-        onClick = { state.toggleSubject(it) },
-    )
+    item {
+        Spacer(Modifier.height(12.dp))
+        SectionLabel("02", "科目", "可多选 · 灰色未开课")
+        Spacer(Modifier.height(8.dp))
+        CompactChipGrid(
+            items = Subject.values().toList(),
+            perRow = 5,
+            label = { it.label },
+            selected = { it in state.subjects },
+            enabled = { it.availableFor(state.grade) },
+            onClick = { state.toggleSubject(it) },
+        )
+    }
 
-    Spacer(Modifier.height(12.dp))
-    SectionLabel("03", "选个卷子", "点一下直接出卷")
-    Spacer(Modifier.height(8.dp))
+    item {
+        Spacer(Modifier.height(12.dp))
+        SectionLabel("03", "选个卷子", "点一下直接出卷")
+        Spacer(Modifier.height(8.dp))
+    }
+    // 每行两张卡各自一个 item：8 张卷子不再一次性全组合
     presets.chunked(2).forEach { row ->
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(PaperDimens.GapSmall)) {
-            row.forEach { preset ->
-                PresetCard(
-                    title = preset.label,
-                    desc = preset.desc,
-                    meta = "${preset.wanted.values.sum()} 题 · 出卷",
-                    onClick = {
-                        state.useTemplate(preset.wanted)
-                        scope.launch { state.generate() }
-                    },
-                    modifier = Modifier.weight(1f),
-                )
+        item {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = PaperDimens.GapSmall),
+                horizontalArrangement = Arrangement.spacedBy(PaperDimens.GapSmall),
+            ) {
+                row.forEach { preset ->
+                    PresetCard(
+                        title = preset.label,
+                        desc = preset.desc,
+                        meta = "${preset.wanted.values.sum()} 题 · 出卷",
+                        onClick = {
+                            state.useTemplate(preset.wanted)
+                            scope.launch { state.generate() }
+                        },
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                if (row.size == 1) Spacer(Modifier.weight(1f))
             }
-            if (row.size == 1) Spacer(Modifier.weight(1f))
         }
-        Spacer(Modifier.height(PaperDimens.GapSmall))
     }
 
     // 专项卷：不依赖当前勾选的科目，点一下自动切科目并直接出卷。
     // 低年级没开英语，按年级隐藏对应卡片。
-    Spacer(Modifier.height(12.dp))
-    SectionLabel("04", "专项卷", "英语 · 音标语法 · 课本同步 · 主题识字")
-    Spacer(Modifier.height(8.dp))
+    item {
+        Spacer(Modifier.height(12.dp))
+        SectionLabel("04", "专项卷", "英语 · 音标语法 · 课本同步 · 主题识字")
+        Spacer(Modifier.height(8.dp))
+    }
 
     val specials = ArrayList<Triple<String, String, String>>(4)
     if (state.grade >= 3) {
@@ -454,63 +502,73 @@ private fun HomeScreen(state: AppState, scope: CoroutineScope) {
     }
 
     specials.chunked(2).forEach { row ->
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(PaperDimens.GapSmall)) {
-            row.forEach { (title, desc, metaText) ->
-                PresetCard(
-                    title = title,
-                    desc = desc,
-                    meta = metaText,
-                    onClick = {
-                        scope.launch {
-                            when (title) {
-                                "英语趣味练" -> state.generateForSubject(
-                                    Subject.ENGLISH, PaperTemplates.englishFunCounts,
-                                )
-                                "音标语法卷" -> state.generateForSubject(
-                                    Subject.ENGLISH, PaperTemplates.ipaGrammarCounts,
-                                )
-                                "课本同步卷" -> state.generateForSubjects(
-                                    listOf(Subject.CHINESE, Subject.ENGLISH),
-                                    PaperTemplates.textbookCounts,
-                                )
-                                else -> state.generateForSubject(
-                                    Subject.CHINESE, PaperTemplates.themeLiteracyCounts,
-                                )
+        item {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = PaperDimens.GapSmall),
+                horizontalArrangement = Arrangement.spacedBy(PaperDimens.GapSmall),
+            ) {
+                row.forEach { (title, desc, metaText) ->
+                    PresetCard(
+                        title = title,
+                        desc = desc,
+                        meta = metaText,
+                        onClick = {
+                            scope.launch {
+                                when (title) {
+                                    "英语趣味练" -> state.generateForSubject(
+                                        Subject.ENGLISH, PaperTemplates.englishFunCounts,
+                                    )
+                                    "音标语法卷" -> state.generateForSubject(
+                                        Subject.ENGLISH, PaperTemplates.ipaGrammarCounts,
+                                    )
+                                    "课本同步卷" -> state.generateForSubjects(
+                                        listOf(Subject.CHINESE, Subject.ENGLISH),
+                                        PaperTemplates.textbookCounts,
+                                    )
+                                    else -> state.generateForSubject(
+                                        Subject.CHINESE, PaperTemplates.themeLiteracyCounts,
+                                    )
+                                }
                             }
-                        }
-                    },
-                    modifier = Modifier.weight(1f),
-                )
+                        },
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                if (row.size == 1) Spacer(Modifier.weight(1f))
             }
-            if (row.size == 1) Spacer(Modifier.weight(1f))
         }
-        Spacer(Modifier.height(PaperDimens.GapSmall))
     }
 
-    Spacer(Modifier.height(10.dp))
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Text(
-            "${PracticeData.themeSheets.size} 张主题识字纸：识字卡描红 / 默写格，点开即打印",
-            fontSize = PaperDimens.CaptionSp,
-            color = PaperColors.OnSurfaceVariant,
-            lineHeight = 16.sp,
-            modifier = Modifier.weight(1f),
-        )
-        Spacer(Modifier.width(8.dp))
-        MiniAction("去看看") { state.goTab(NavTab.REFERENCE) }
+    item {
+        Spacer(Modifier.height(10.dp))
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "${PracticeData.themeSheets.size} 张主题识字纸：识字卡描红 / 默写格，点开即打印",
+                fontSize = PaperDimens.CaptionSp,
+                color = PaperColors.OnSurfaceVariant,
+                lineHeight = 16.sp,
+                modifier = Modifier.weight(1f),
+            )
+            Spacer(Modifier.width(8.dp))
+            MiniAction("去看看") { state.goTab(NavTab.REFERENCE) }
+        }
     }
 
-    Spacer(Modifier.height(PaperDimens.Gap))
     if (state.savedPapers.isNotEmpty()) {
-        Spacer(Modifier.height(PaperDimens.Gap))
-        CardSection(title = "最近的卷子") {
-            state.savedPapers.take(2).forEachIndexed { i, p ->
-                if (i > 0) Divider()
-                ListRow(
-                    p.title,
-                    "${GradeProfiles.gradeLabel(p.grade)} · ${p.questions.size} 题",
-                    trailing = "重开 ›",
-                ) { scope.launch { state.reopen(p) } }
+        item {
+            Spacer(Modifier.height(PaperDimens.Gap))
+            Spacer(Modifier.height(PaperDimens.Gap))
+            CardSection(title = "最近的卷子") {
+                state.savedPapers.take(2).forEachIndexed { i, p ->
+                    if (i > 0) Divider()
+                    ListRow(
+                        p.title,
+                        "${GradeProfiles.gradeLabel(p.grade)} · ${p.questions.size} 题",
+                        trailing = "重开 ›",
+                    ) { scope.launch { state.reopen(p) } }
+                }
             }
         }
     }
@@ -1059,79 +1117,90 @@ private fun PreviewScreen(
 
 // ------------------------------------------------------------------ 速查表：2 列网格
 
-@Composable
-private fun ReferenceScreen(state: AppState, scope: CoroutineScope) {
-    CardSection {
-        Text(
-            "点任意一张即可生成 1 页 A4 PDF，用底部「系统打印」或「分享」远程打印。" +
-                "速查表只收基础事实与公式；练习纸与主题识字纸按词数 / 格数铺满整页，不浪费纸。",
-            fontSize = PaperDimens.BodySp,
-            color = PaperColors.OnSurfaceVariant,
-            lineHeight = 18.sp,
-        )
+private fun LazyListScope.referenceScreenItems(state: AppState, scope: CoroutineScope) {
+    item {
+        CardSection {
+            Text(
+                "点任意一张即可生成 1 页 A4 PDF，用底部「系统打印」或「分享」远程打印。" +
+                    "速查表只收基础事实与公式；练习纸与主题识字纸按词数 / 格数铺满整页，不浪费纸。",
+                fontSize = PaperDimens.BodySp,
+                color = PaperColors.OnSurfaceVariant,
+                lineHeight = 18.sp,
+            )
+        }
     }
 
-    Spacer(Modifier.height(PaperDimens.Gap))
-    SectionLabel("01", "速查表", "${ReferenceData.sheets.size} 张 · 事实与公式")
+    item { Spacer(Modifier.height(PaperDimens.Gap)) }
+    item { SectionLabel("01", "速查表", "${ReferenceData.sheets.size} 张 · 事实与公式") }
     ReferenceData.grouped.forEach { (group, list) ->
-        Spacer(Modifier.height(PaperDimens.GapSmall))
-        Text(
-            group,
-            fontSize = PaperDimens.LabelSp,
-            fontWeight = FontWeight.SemiBold,
-            color = PaperColors.OnSurface,
-            modifier = Modifier.padding(start = 2.dp, bottom = 8.dp),
-        )
-        SheetGrid(
+        item {
+            Spacer(Modifier.height(PaperDimens.GapSmall))
+            Text(
+                group,
+                fontSize = PaperDimens.LabelSp,
+                fontWeight = FontWeight.SemiBold,
+                color = PaperColors.OnSurface,
+                modifier = Modifier.padding(start = 2.dp, bottom = 8.dp),
+            )
+        }
+        sheetRows(
             items = list,
             titleOf = { it.title },
             descOf = { it.subtitle },
             metaOf = { "A4 · 立即打印" },
-        ) { sheet -> scope.launch { state.renderReference(sheet) } }
+            onClick = { sheet -> scope.launch { state.renderReference(sheet) } },
+        )
     }
 
-    Spacer(Modifier.height(PaperDimens.Gap))
-    SectionLabel("02", "练习纸", "${PracticeData.sheets.size} 张 · 格子铺满整页")
-    Spacer(Modifier.height(PaperDimens.GapSmall))
-    SheetGrid(
+    item { Spacer(Modifier.height(PaperDimens.Gap)) }
+    item { SectionLabel("02", "练习纸", "${PracticeData.sheets.size} 张 · 格子铺满整页") }
+    item { Spacer(Modifier.height(PaperDimens.GapSmall)) }
+    sheetRows(
         items = PracticeData.sheets,
         titleOf = { it.title },
         descOf = { it.subtitle },
         metaOf = { "1 页 ${it.orientation.shortLabel}" },
-    ) { sheet -> scope.launch { state.renderPractice(sheet) } }
-
-    Spacer(Modifier.height(PaperDimens.Gap))
-    SectionLabel("03", "主题识字纸", "${PracticeData.themeSheets.size} 张 · 6 大生活场景 × 描红 / 默写")
-    Spacer(Modifier.height(8.dp))
-    Text(
-        "每个主题把人物、物品、设施的词做成一页：识字卡印浅灰范字供描红，" +
-            "默写格只给拼音、田字格留空。词表自编、拼音逐条校对，按词数自动铺满一页。",
-        fontSize = PaperDimens.CaptionSp,
-        color = PaperColors.OnSurfaceVariant,
-        lineHeight = 17.sp,
+        onClick = { sheet -> scope.launch { state.renderPractice(sheet) } },
     )
-    Spacer(Modifier.height(8.dp))
-    SheetGrid(
+
+    item { Spacer(Modifier.height(PaperDimens.Gap)) }
+    item {
+        SectionLabel("03", "主题识字纸", "${PracticeData.themeSheets.size} 张 · 6 大生活场景 × 描红 / 默写")
+    }
+    item {
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "每个主题把人物、物品、设施的词做成一页：识字卡印浅灰范字供描红，" +
+                "默写格只给拼音、田字格留空。词表自编、拼音逐条校对，按词数自动铺满一页。",
+            fontSize = PaperDimens.CaptionSp,
+            color = PaperColors.OnSurfaceVariant,
+            lineHeight = 17.sp,
+        )
+    }
+    item { Spacer(Modifier.height(8.dp)) }
+    sheetRows(
         items = PracticeData.themeSheets,
         titleOf = { it.title },
         descOf = { it.subtitle },
         metaOf = { "1 页 竖版 · 立即打印" },
-    ) { sheet -> scope.launch { state.renderPractice(sheet) } }
-
-    Spacer(Modifier.height(PaperDimens.Gap))
-    Text(
-        "练习纸版式参考 namishu/printables（MIT），全部用本 App 自绘线条重新实现，" +
-            "未打包其 PDF 与字体；田字格、米字格、坐标纸等为通行基础版式，自行编排。" +
-            "主题识字只借鉴「拼音在上、汉字在下」的通用卡式版式，词表与拼音均为自编重录。",
-        fontSize = PaperDimens.CaptionSp,
-        color = PaperColors.OnSurfaceVariant,
-        lineHeight = 17.sp,
+        onClick = { sheet -> scope.launch { state.renderPractice(sheet) } },
     )
+
+    item {
+        Spacer(Modifier.height(PaperDimens.Gap))
+        Text(
+            "练习纸版式参考 namishu/printables（MIT），全部用本 App 自绘线条重新实现，" +
+                "未打包其 PDF 与字体；田字格、米字格、坐标纸等为通行基础版式，自行编排。" +
+                "主题识字只借鉴「拼音在上、汉字在下」的通用卡式版式，词表与拼音均为自编重录。",
+            fontSize = PaperDimens.CaptionSp,
+            color = PaperColors.OnSurfaceVariant,
+            lineHeight = 17.sp,
+        )
+    }
 }
 
-/** 速查表 / 练习纸共用的 2 列卡片网格 */
-@Composable
-private fun <T> SheetGrid(
+/** 速查表 / 练习纸共用的 2 列卡片网格（Lazy 版：每行一个 item，滑到哪才组合哪几行） */
+private fun <T> LazyListScope.sheetRows(
     items: List<T>,
     titleOf: (T) -> String,
     descOf: (T) -> String,
@@ -1139,76 +1208,95 @@ private fun <T> SheetGrid(
     onClick: (T) -> Unit,
 ) {
     items.chunked(2).forEach { row ->
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(PaperDimens.GapSmall)) {
-            row.forEach { item ->
-                PresetCard(
-                    title = titleOf(item),
-                    desc = descOf(item),
-                    meta = metaOf(item),
-                    onClick = { onClick(item) },
-                    modifier = Modifier.weight(1f),
-                )
+        item {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = PaperDimens.GapSmall),
+                horizontalArrangement = Arrangement.spacedBy(PaperDimens.GapSmall),
+            ) {
+                row.forEach { entry ->
+                    PresetCard(
+                        title = titleOf(entry),
+                        desc = descOf(entry),
+                        meta = metaOf(entry),
+                        onClick = { onClick(entry) },
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                if (row.size == 1) Spacer(Modifier.weight(1f))
             }
-            if (row.size == 1) Spacer(Modifier.weight(1f))
         }
-        Spacer(Modifier.height(PaperDimens.GapSmall))
     }
 }
 
 // ------------------------------------------------------------------ 错题本
 
-@Composable
-private fun MistakesScreen(state: AppState) {
+private fun LazyListScope.mistakesScreenItems(state: AppState) {
     val filtered = state.mistakes.filter {
         state.masteryFilter == "ALL" || it.mastery == state.masteryFilter
     }
     val pending = state.mistakes.count { it.mastery != "MASTERED" }
 
-    CardSection {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("共 ${state.mistakes.size} 条", fontSize = PaperDimens.BodySp, modifier = Modifier.weight(1f))
-            StatChip("待练 $pending 条", color = PaperColors.Accent, bg = PaperColors.AccentContainer)
-        }
-        Spacer(Modifier.height(10.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            listOf("ALL" to "全部", "NEW" to "未练", "PRACTICED" to "练过", "MASTERED" to "已掌握")
-                .forEach { (k, label) ->
-                    ChoiceChip(label, state.masteryFilter == k) { state.masteryFilter = k }
-                }
+    item {
+        CardSection {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("共 ${state.mistakes.size} 条", fontSize = PaperDimens.BodySp, modifier = Modifier.weight(1f))
+                StatChip("待练 $pending 条", color = PaperColors.Accent, bg = PaperColors.AccentContainer)
+            }
+            Spacer(Modifier.height(10.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                listOf("ALL" to "全部", "NEW" to "未练", "PRACTICED" to "练过", "MASTERED" to "已掌握")
+                    .forEach { (k, label) ->
+                        ChoiceChip(label, state.masteryFilter == k) { state.masteryFilter = k }
+                    }
+            }
         }
     }
 
-    Spacer(Modifier.height(PaperDimens.Gap))
+    item { Spacer(Modifier.height(PaperDimens.Gap)) }
+
+    // 一条错题一个 item：错题攒到几十条时不会再一次性铺满整页
     filtered.forEach { m ->
-        CardSection(title = "第 ${m.sourceNo} 题 · ${m.topic}", hint = "${GradeProfiles.gradeLabel(m.grade)} · ${m.type}") {
-            Text(m.stem, fontSize = PaperDimens.BodySp, color = PaperColors.OnSurface, lineHeight = 18.sp)
-            Spacer(Modifier.height(5.dp))
-            Text("答案：${m.answer}", fontSize = PaperDimens.CaptionSp, color = PaperColors.OnSurfaceVariant)
-            Spacer(Modifier.height(10.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(PaperDimens.GapSmall)) {
-                ChoiceChip("状态：${masteryLabel(m.mastery)}", false) {}
-                ChoiceChip("标记已掌握", false) { state.setMastery(m.id, "MASTERED") }
-                ChoiceChip("重新待练", false) { state.setMastery(m.id, "NEW") }
+        item {
+            CardSection(
+                title = "第 ${m.sourceNo} 题 · ${m.topic}",
+                hint = "${GradeProfiles.gradeLabel(m.grade)} · ${m.type}",
+            ) {
+                Text(m.stem, fontSize = PaperDimens.BodySp, color = PaperColors.OnSurface, lineHeight = 18.sp)
+                Spacer(Modifier.height(5.dp))
+                Text("答案：${m.answer}", fontSize = PaperDimens.CaptionSp, color = PaperColors.OnSurfaceVariant)
+                Spacer(Modifier.height(10.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(PaperDimens.GapSmall)) {
+                    ChoiceChip("状态：${masteryLabel(m.mastery)}", false) {}
+                    ChoiceChip("标记已掌握", false) { state.setMastery(m.id, "MASTERED") }
+                    ChoiceChip("重新待练", false) { state.setMastery(m.id, "NEW") }
+                }
             }
+            Spacer(Modifier.height(10.dp))
         }
-        Spacer(Modifier.height(10.dp))
     }
 
     if (filtered.isEmpty()) {
-        CardSection(title = "还没有错题") {
-            Text(
-                "打印并批改后，到试卷预览的「题目清单」勾做错的题，就会进这里。",
-                fontSize = PaperDimens.BodySp,
-                color = PaperColors.OnSurfaceVariant,
-            )
+        item {
+            CardSection(title = "还没有错题") {
+                Text(
+                    "打印并批改后，到试卷预览的「题目清单」勾做错的题，就会进这里。",
+                    fontSize = PaperDimens.BodySp,
+                    color = PaperColors.OnSurfaceVariant,
+                )
+            }
+            Spacer(Modifier.height(10.dp))
         }
-        Spacer(Modifier.height(10.dp))
     }
-    Text(
-        "已掌握的题不参与组卷；同一知识点最多取 3 题。",
-        fontSize = PaperDimens.CaptionSp,
-        color = PaperColors.OnSurfaceVariant,
-    )
+
+    item {
+        Text(
+            "已掌握的题不参与组卷；同一知识点最多取 3 题。",
+            fontSize = PaperDimens.CaptionSp,
+            color = PaperColors.OnSurfaceVariant,
+        )
+    }
 }
 
 private fun masteryLabel(m: String) = when (m) {
@@ -1217,59 +1305,64 @@ private fun masteryLabel(m: String) = when (m) {
 
 // ------------------------------------------------------------------ 更多
 
-@Composable
-private fun MoreScreen(state: AppState, scope: CoroutineScope, onImport: () -> Unit) {
+private fun LazyListScope.moreScreenItems(state: AppState, scope: CoroutineScope, onImport: () -> Unit) {
     // 内置内容：数字全部当场从数据源算，不写死文案 —— 题库扩容后这里自动跟着变
-    ContentSummaryCard(state.bankSize)
+    item { ContentSummaryCard(state.bankSize) }
 
-    Spacer(Modifier.height(PaperDimens.Gap))
-    CardSection(title = "数据") {
-        ListRow("试卷库", "${state.savedPapers.size} 张卷子") { state.screen = Screen.HISTORY }
-        Divider()
-        ListRow("分享备份文件", "导出 JSON，含试卷库与错题本") { state.shareBackup() }
-        Divider()
-        ListRow("从备份恢复", "选择之前导出的 JSON") { onImport() }
-    }
-
-    Spacer(Modifier.height(PaperDimens.Gap))
-    CardSection(title = "打印与更新") {
-        ListRow("打印帮助", "在家 / 远程两种方式") { state.screen = Screen.HELP }
-        Divider()
-        ListRow(
-            "检查更新",
-            state.updateInfo.ifEmpty { "当前版本 v${state.versionName} · 点击检查 GitHub Release" },
-            trailing = if (state.busy) "…" else "›",
-        ) { scope.launch { state.checkUpdate() } }
-        val release = state.updateRelease
-        if (release != null) {
+    item { Spacer(Modifier.height(PaperDimens.Gap)) }
+    item {
+        CardSection(title = "数据") {
+            ListRow("试卷库", "${state.savedPapers.size} 张卷子") { state.screen = Screen.HISTORY }
             Divider()
-            ListRow("打开 Release 页面", release.name) { state.openUrl(release.pageUrl) }
-            if (release.apkUrl != null) {
-                Divider()
-                ListRow("下载新版 APK", release.version) { state.openUrl(release.apkUrl) }
-            }
+            ListRow("分享备份文件", "导出 JSON，含试卷库与错题本") { state.shareBackup() }
+            Divider()
+            ListRow("从备份恢复", "选择之前导出的 JSON") { onImport() }
         }
-        Divider()
-        ListRow("GitHub 仓库", UpdateChecker.REPO) { state.openUrl(UpdateChecker.REPO_URL) }
     }
 
-    Spacer(Modifier.height(PaperDimens.Gap))
-    CardSection(title = "关于") {
-        Text(
-            "题目全部由本 App 程序生成，或按知识点自编（内置 ${state.bankSize} 道选择 / 判断题）。" +
-                "不抓取也不收录任何教辅、题库或教材原文；外部练习网站只借鉴题型规则，" +
-                "不打包其原始 PDF / 图片 / 原题。速查表只收基础事实与公式，" +
-                "练习纸版式参考 namishu/printables（MIT，声明随包放在 assets/licenses）。",
-            fontSize = PaperDimens.BodySp,
-            color = PaperColors.OnSurface,
-            lineHeight = 19.sp,
-        )
-        Spacer(Modifier.height(10.dp))
-        Text(
-            "v${state.versionName} · 检查更新是唯一需要联网的动作，出卷、排版、打印全程离线可用。",
-            fontSize = PaperDimens.CaptionSp,
-            color = PaperColors.OnSurfaceVariant,
-        )
+    item { Spacer(Modifier.height(PaperDimens.Gap)) }
+    item {
+        CardSection(title = "打印与更新") {
+            ListRow("打印帮助", "在家 / 远程两种方式") { state.screen = Screen.HELP }
+            Divider()
+            ListRow(
+                "检查更新",
+                state.updateInfo.ifEmpty { "当前版本 v${state.versionName} · 点击检查 GitHub Release" },
+                trailing = if (state.busy) "…" else "›",
+            ) { scope.launch { state.checkUpdate() } }
+            val release = state.updateRelease
+            if (release != null) {
+                Divider()
+                ListRow("打开 Release 页面", release.name) { state.openUrl(release.pageUrl) }
+                if (release.apkUrl != null) {
+                    Divider()
+                    ListRow("下载新版 APK", release.version) { state.openUrl(release.apkUrl) }
+                }
+            }
+            Divider()
+            ListRow("GitHub 仓库", UpdateChecker.REPO) { state.openUrl(UpdateChecker.REPO_URL) }
+        }
+    }
+
+    item { Spacer(Modifier.height(PaperDimens.Gap)) }
+    item {
+        CardSection(title = "关于") {
+            Text(
+                "题目全部由本 App 程序生成，或按知识点自编（内置 ${state.bankSize} 道选择 / 判断题）。" +
+                    "不抓取也不收录任何教辅、题库或教材原文；外部练习网站只借鉴题型规则，" +
+                    "不打包其原始 PDF / 图片 / 原题。速查表只收基础事实与公式，" +
+                    "练习纸版式参考 namishu/printables（MIT，声明随包放在 assets/licenses）。",
+                fontSize = PaperDimens.BodySp,
+                color = PaperColors.OnSurface,
+                lineHeight = 19.sp,
+            )
+            Spacer(Modifier.height(10.dp))
+            Text(
+                "v${state.versionName} · 检查更新是唯一需要联网的动作，出卷、排版、打印全程离线可用。",
+                fontSize = PaperDimens.CaptionSp,
+                color = PaperColors.OnSurfaceVariant,
+            )
+        }
     }
 }
 
