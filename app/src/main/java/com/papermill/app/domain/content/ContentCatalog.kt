@@ -89,6 +89,14 @@ object ContentCatalog {
             "按年级分级的基础词，用于单词默写与拼装题型。",
         ),
         CatalogEntry(
+            "课标题库",
+            "${CurriculumBank.totalQuestions()} 道 · ${CurriculumBank.totalTopics()} 个知识点",
+            "1–9 年级五科知识点配套题（数学 / 语文 / 英语 / 物理 / 化学），" +
+                "来自开源项目 cn-math-taxonomy，许可是 CC BY-NC 4.0（署名 + 不得商用）。" +
+                "已裁到 1–9 年级，剔除了依赖配图、印出来没法做的题；" +
+                "出题时选项会洗牌并同步换算答案。注意：许可是非商业，本 App 一旦商业化必须删掉这批题。",
+        ),
+        CatalogEntry(
             "速查表",
             "${ReferenceData.sheets.size} 张",
             "乘法表、拼音表、音标表、语法表、公式表、动词表、课本同步表，全部 Canvas 自绘排版。",

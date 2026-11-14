@@ -105,6 +105,11 @@ enum class QuestionType(
     IDIOM_MEANING("成语释义", 1),
     POEM_FILL("古诗接句", 1),
     POEM_MATCH("古诗常识", 1),
+
+    // v0.9.0 课标题库（cn-math-taxonomy，CC BY-NC 4.0）：五科知识点配套题，跨科通用
+    // 题干普遍是整句（数学中位 33 字、英语最长 136 字），半栏会折成竖条，只能整行
+    CURRIC_BLANK("知识点填空", 1),
+    CURRIC_CHOICE("知识点选择", 1),
 }
 
 enum class AnswerMode(val label: String) {

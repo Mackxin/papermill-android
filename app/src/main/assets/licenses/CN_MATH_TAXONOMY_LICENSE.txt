@@ -1,0 +1,130 @@
+xiaoyang111222/cn-math-taxonomy — CC BY-NC 4.0
+https://github.com/xiaoyang111222/cn-math-taxonomy
+
+本 App 的「知识点填空」「知识点选择」两个题型使用该项目的数据
+（位于 app/src/main/assets/taxonomy/*.json）。
+
+-------------------------------------------------------------------------------
+一、本 App 做了什么改动（CC BY-NC 4.0 要求注明）
+-------------------------------------------------------------------------------
+1. 裁剪：只保留 1–9 年级、数学 / 语文 / 英语 / 物理 / 化学五科的内容，
+   高中及其他学段、以及不属于五科的内容全部丢弃。
+2. 精简字段：JSON 字段名压缩为短键，去掉缩进与冗余字段，体积由约 14MB 压到约 2.9MB。
+3. 剔除残缺题：上游只提供文字、没有配图，"如图，入射光线 AO 与镜面的夹角是 30°"
+   这类题印到纸上无法作答，已删除（其余题目文字未作任何改写）。
+4. 重新组织：按科目拆成五个文件，App 端按需加载。
+5. 出题时对选择题的选项顺序做随机重排，并同步换算正确答案的字母。
+
+除上述改动外，题目文字、选项、答案、解析均保持上游原样。
+
+-------------------------------------------------------------------------------
+二、署名与非商业限制（重要）
+-------------------------------------------------------------------------------
+本 App 以 CC BY-NC 4.0 使用该数据，因此：
+
+- 允许：署名后免费使用、复制、分发、修改，包括本 App 的免费分发。
+- 禁止：任何商业性使用。这包括但不限于——付费下载、内购、广告变现、
+  随硬件捆绑销售、企业付费部署。
+
+一旦本 App 商业化，必须：
+  1. 删除 app/src/main/assets/taxonomy/ 整个目录；
+  2. 移除 QuestionType.CURRIC_BLANK / CURRIC_CHOICE 两个题型及其生成器
+     （app/src/main/java/com/papermill/app/domain/generate/CurricBankGenerators.kt）；
+  3. 删除「关于」页与本文件中的相应署名段落。
+此时 App 其余部分（全部由本项目自行生成或自编的内容）不受影响。
+
+-------------------------------------------------------------------------------
+三、许可全文
+-------------------------------------------------------------------------------
+CC BY-NC 4.0（Creative Commons Attribution-NonCommercial 4.0 International）
+官方文本：https://creativecommons.org/licenses/by-nc/4.0/legalcode
+中文摘要：https://creativecommons.org/licenses/by-nc/4.0/deed.zh
+
+Attribution-NonCommercial 4.0 International
+
+By exercising the Licensed Rights (defined below), You accept and agree to be
+bound by the terms and conditions of this Creative Commons
+Attribution-NonCommercial 4.0 International Public License ("Public License").
+To the extent this Public License may be interpreted as a contract, You are
+granted the Licensed Rights in consideration of Your acceptance of these terms
+and conditions, and the Licensor grants You such rights in consideration of
+benefits the Licensor receives from making the Licensed Material available
+under these terms and conditions.
+
+Section 1 – Definitions.
+
+a. Adapted Material means material subject to Copyright and Similar Rights that
+   is derived from or based upon the Licensed Material and in which the Licensed
+   Material is translated, altered, arranged, transformed, or otherwise modified
+   in a manner requiring permission under the Copyright and Similar Rights held
+   by the Licensor.
+
+b. NonCommercial means not primarily intended for or directed towards commercial
+   advantage or monetary compensation. For purposes of this Public License, the
+   exchange of the Licensed Material for other material subject to Copyright and
+   Similar Rights by digital file-sharing or similar means is NonCommercial
+   provided there is no payment of monetary compensation in connection with the
+   exchange.
+
+c. Share means to provide material to the public by any means or process that
+   requires permission under the Licensed Rights, such as reproduction, public
+   display, public performance, distribution, dissemination, communication, or
+   importation, and to make material available to the public including in ways
+   that members of the public may access the material from a place and at a time
+   individually chosen by them.
+
+d. You means the individual or entity exercising the Licensed Rights under this
+   Public License.
+
+Section 2 – Scope.
+
+a. License grant.
+   1. Subject to the terms and conditions of this Public License, the Licensor
+      hereby grants You a worldwide, royalty-free, non-sublicensable,
+      non-exclusive, irrevocable license to exercise the Licensed Rights in the
+      Licensed Material to reproduce and Share the Licensed Material, in whole
+      or in part, for NonCommercial purposes only; and produce, reproduce, and
+      Share Adapted Material for NonCommercial purposes only.
+
+b. Attribution.
+   1. If You Share the Licensed Material (including in modified form), You must
+      retain the following if it is supplied by the Licensor with the Licensed
+      Material: identification of the creator(s), a copyright notice, a notice
+      that refers to this Public License, a notice that refers to the disclaimer
+      of warranties, a URI or hyperlink to the Licensed Material, and indicate
+      the Licensed Material is licensed under this Public License.
+
+Section 3 – License Conditions.
+
+Your exercise of the Licensed Rights is expressly made subject to the following
+conditions.
+
+a. Attribution. If You Share the Licensed Material (including in modified form),
+   You must (as reasonably practicable) give appropriate credit, provide a link
+   to the license, and indicate if changes were made. You may do so in any
+   reasonable manner, but not in any way that suggests the Licensor endorses You
+   or Your use.
+
+b. NonCommercial. You may not use the Licensed Material for commercial purposes.
+
+Section 4 – Sui Generis Database Rights.
+
+Where the Licensed Rights include Sui Generis Database Rights that apply to Your
+use of the Licensed Material, the Licensor waives and/or agrees not to assert
+any right to forbid Your producing, reproducing, and Sharing of Adapted
+Material for NonCommercial purposes only.
+
+Section 5 – Disclaimer of Warranties and Limitation of Liability.
+
+a. UNLESS OTHERWISE SEPARATELY UNDERTAKEN BY THE LICENSOR, TO THE EXTENT
+   POSSIBLE, THE LICENSOR OFFERS THE LICENSED MATERIAL AS-IS AND AS-AVAILABLE,
+   AND MAKES NO REPRESENTATIONS OR WARRANTIES OF ANY KIND CONCERNING THE
+   LICENSED MATERIAL.
+
+b. TO THE EXTENT POSSIBLE, IN NO EVENT WILL THE LICENSOR BE LIABLE TO YOU
+   UNDER ANY LEGAL THEORY FOR ANY DIRECT, SPECIAL, INDIRECT, INCIDENTAL,
+   CONSEQUENTIAL, PUNITIVE, EXEMPLARY, OR OTHER LOSSES ARISING OUT OF THIS
+   PUBLIC LICENSE OR USE OF THE LICENSED MATERIAL.
+
+The full legal code is available at
+https://creativecommons.org/licenses/by-nc/4.0/legalcode

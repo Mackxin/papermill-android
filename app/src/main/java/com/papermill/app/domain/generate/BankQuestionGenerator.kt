@@ -91,6 +91,9 @@ object BankQuestionGenerator : BaseGenerator() {
     override val subject = Subject.MATH
     override val topic = "知识点综合"
 
+    // 题库里数学/语文/英语/物理/化学都有，勾哪科就出哪科的题
+    override val crossSubject = true
+
     private val LETTERS = arrayOf("A", "B", "C", "D", "E", "F")
 
     // 题库是跨科通用的，所以不按 subject.availableFor 过滤

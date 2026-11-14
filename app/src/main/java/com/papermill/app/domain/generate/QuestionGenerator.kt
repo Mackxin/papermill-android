@@ -19,8 +19,22 @@ interface QuestionGenerator {
     val minGrade: Int get() = 1
     val maxGrade: Int get() = 9
 
+    /**
+     * 这个题型是否「跨科目」。
+     *
+     * 大部分题型绑死一科（口算只给数学、音标只给英语），勾了那科才出现。
+     * 但内置题库（自编题库 / 课标题库）内容本身就是各科混装的：
+     * 勾物理也该能出物理题，不能因为它的 `subject` 字段写着 MATH 就在物理卷里消失。
+     * 这类题型把 [crossSubject] 置 true，再由 [usableIn] 决定「当前勾选里到底有没有货」。
+     */
+    val crossSubject: Boolean get() = false
+
     fun supports(grade: Int): Boolean =
         subject.availableFor(grade) && grade in minGrade..maxGrade
+
+    /** 勾了 [subjects] 这些科目时，这个题型该不该出现在参数页 */
+    fun usableIn(subjects: Collection<Subject>): Boolean =
+        crossSubject || subject in subjects
 
     fun generate(ctx: GenContext): List<GeneratedQuestion>
 }
@@ -98,6 +112,8 @@ object GeneratorRegistry {
         IdiomFillGenerator, IdiomMeaningGenerator, PoemFillGenerator, PoemMatchGenerator,
         // v0.8.0 口算变式（找未知项 / 带余数除法）
         OralMissingGenerator, OralRemainderGenerator,
+        // v0.9.0 课标题库（cn-math-taxonomy · CC BY-NC 4.0，内容见 domain/content/CurriculumBank.kt）
+        CurricBlankGenerator, CurricChoiceGenerator,
     )
 
     /** 关于页实时统计题型总数 */
@@ -108,12 +124,14 @@ object GeneratorRegistry {
 
     /**
      * 交叉学科：返回所有勾选科目能出的题型。
-     * KNOWLEDGE（自编题库）是跨科通用题型，只要勾了任意科目就出现。
+     *
+     * 是否「该出现」交给每个生成器自己判断（[QuestionGenerator.usableIn]）：
+     *  - 普通题型：勾了它的科目就出现；
+     *  - 跨科题型（自编题库 / 课标题库）：得真的挑得出题才出现 ——
+     *    语文没有填空题，勾语文时「知识点填空」就不该摆在那儿让人点了没反应。
      */
     fun availableFor(grade: Int, subjects: Collection<Subject>): List<QuestionType> =
-        all.filter {
-            it.supports(grade) && (it.type == QuestionType.KNOWLEDGE || it.subject in subjects)
-        }.map { it.type }.distinct()
+        all.filter { it.supports(grade) && it.usableIn(subjects) }.map { it.type }.distinct()
 
     fun subjectOf(type: QuestionType): Subject? = all.firstOrNull { it.type == type }?.subject
 

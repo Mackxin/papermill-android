@@ -42,8 +42,10 @@ object PaperComposer {
             if (questions.isEmpty()) return@forEachIndexed
 
             // 多学科交叉时给大题加科目前缀，例如「二、语文·看拼音写词语」
+            // 跨科题型（自编题库 / 课标题库）不加：同一个大题里本身就是几科混着的，
+            // 写「数学·知识点选择」反而会误导
             val crossSubject = spec.effectiveSubjects().size > 1
-            val prefix = if (crossSubject && type != QuestionType.KNOWLEDGE) {
+            val prefix = if (crossSubject && !generator.crossSubject) {
                 GeneratorRegistry.subjectOf(type)?.let { "${it.label}·" } ?: ""
             } else ""
 
@@ -200,6 +202,10 @@ object PaperTemplates {
             )),
             Preset("knowledge", "知识点题库", "内置自编选择 / 判断题，按所选科目抽题", mapOf(
                 QuestionType.KNOWLEDGE to 20,
+            )),
+            // v0.9.0：课标题库（cn-math-taxonomy），五科知识点配套题，题库随上游持续变大
+            Preset("curric", "知识点闯关", "课标知识点：填空 + 选择，按所选科目抽题", mapOf(
+                QuestionType.CURRIC_BLANK to 10, QuestionType.CURRIC_CHOICE to 10,
             )),
         )
         return raw.mapNotNull { p ->

@@ -56,6 +56,15 @@ DOMAIN_TO_SUBJECT = {
 
 DIFF = {"basic": 1, "standard": 2, "challenge": 3, "advanced": 3}
 
+# 依赖配图的题干一律不要。
+# 上游题库只有文字、没有图片，"如图，入射光线 AO 与镜面的夹角是 30°" 印到纸上就是一道
+# 无解的题 —— 孩子看不到图，家长也画不出来。宁可少几十道，也不印残缺题。
+#
+# 只按「明确指向配图」的字眼判（如图 / 下图 / 右图 / 图所示…）。
+# 不能把「数轴」「统计图」也算进来：那类题干通常已经把数据写在文字里
+# （"条形统计图上，喜欢苹果的直条对着 15"），本身是自洽的，误删等于白丢几百道题。
+FIGURE_RE = re.compile(r"(如图|如下图所示|下图|右图|左图|上图|图所示|见图)")
+
 SUBJECT_LABEL = {
     "math": "数学", "chinese": "语文", "english": "英语",
     "physics": "物理", "chemistry": "化学",
@@ -145,6 +154,11 @@ def main():
             continue
         # 答案或题干为空的题一律不要
         if not q.get("prompt", "").strip() or not str(q.get("answer", "")).strip():
+            dropped += 1
+            continue
+        # 依赖配图的题：上游没有图片资源，印出来是无解题
+        prompt = q["prompt"]
+        if FIGURE_RE.search(prompt):
             dropped += 1
             continue
         sq = short_question(q)

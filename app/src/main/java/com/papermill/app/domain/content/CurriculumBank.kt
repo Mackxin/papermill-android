@@ -31,6 +31,8 @@ data class CurricQuestion(
     val id: String,
     val topicId: String,
     val grade: Int,
+    /** 这道题属于哪一科：选择题要按科目分组出大题，答案页也要标出科目 */
+    val subject: Subject,
     /** true = 选择题（answer 是 A/B/C/D），false = 填空或简答（answer 是一段文字） */
     val choice: Boolean,
     val prompt: String,
@@ -94,7 +96,7 @@ object CurriculumBank {
             val root = JSONObject(readAsset("taxonomy/$key.json"))
             SubjectData(
                 topics = parseTopics(root.optJSONArray("topics")),
-                questions = parseQuestions(root.optJSONArray("questions")),
+                questions = parseQuestions(root.optJSONArray("questions"), subject),
             )
         }.getOrDefault(SubjectData(emptyList(), emptyList()))
         cache[key] = parsed
@@ -126,7 +128,7 @@ object CurriculumBank {
         return out
     }
 
-    private fun parseQuestions(arr: JSONArray?): List<CurricQuestion> {
+    private fun parseQuestions(arr: JSONArray?, subject: Subject): List<CurricQuestion> {
         if (arr == null) return emptyList()
         val out = ArrayList<CurricQuestion>(arr.length())
         for (i in 0 until arr.length()) {
@@ -144,6 +146,7 @@ object CurriculumBank {
                     id = o.optString("i"),
                     topicId = o.optString("ti"),
                     grade = o.optInt("g"),
+                    subject = subject,
                     choice = o.optInt("t") == 2,
                     prompt = o.optString("p"),
                     options = opts,
@@ -156,13 +159,30 @@ object CurriculumBank {
         return out
     }
 
+    /** 知识点 id → 名称。答案页/错题本用名称归类，不显示 cnm_p123 这种内部 id。 */
+    @Synchronized
+    fun topicName(subject: Subject, topicId: String): String {
+        val map = topicNames.getOrPut(keyOf(subject)) {
+            data(subject).topics.associate { it.id to it.name }
+        }
+        return map[topicId] ?: ""
+    }
+
+    private val topicNames = HashMap<String, Map<String, String>>()
+
     // ---------------------------------------------------------------- 查询
 
     /**
      * 某年级 + 勾选科目的题池。
      *
-     * 跨年级混出：只取 `grade <= 当前年级` 的题（低年级复习题可以用，高年级超前题不能）。
-     * 难度：优先取同难度的，不够再放宽 —— 宁可难度不齐，也不要空着不出题。
+     * 三层收窄，越靠前越「对味」：
+     *  1. **本年级**的题（四年级卷子就该是四年级的题）；
+     *  2. 不够时补**近两年**（三、四年级），当作复习题 —— 四年级混进一道「5 的前面是几」
+     *     那种一年级的题，孩子一眼就知道不是这学期的，卷子立刻显得敷衍；
+     *  3. 还不够（小学一二年级只有一年可退）才放宽到全部低年级。
+     *
+     * 绝不取高年级的题：超前题孩子没学过，做不出来只会挫败。
+     * 难度在同一年段内再筛一次，同难度不足 8 道就放宽 —— 宁可难度不齐，也不要空着不出题。
      */
     fun pool(
         subjects: Set<Subject>,
@@ -171,20 +191,48 @@ object CurriculumBank {
         choice: Boolean?,
     ): List<CurricQuestion> {
         val targets = if (subjects.isEmpty()) Subject.entries else subjects.toList()
-        val all = ArrayList<CurricQuestion>()
+        val collected = ArrayList<CurricQuestion>()
         targets.forEach { s ->
             data(s).questions.forEach { q ->
-                if (q.grade <= grade && (choice == null || q.choice == choice)) all.add(q)
+                if (q.grade <= grade && (choice == null || q.choice == choice)) collected.add(q)
             }
         }
-        if (all.isEmpty()) return all
-        val same = all.filter { it.difficulty == difficulty }
-        return if (same.size >= 8) same else all
+        if (collected.isEmpty()) return collected
+
+        val sameGrade = collected.filter { it.grade == grade }
+        if (sameGrade.size >= MIN_POOL) return byDifficulty(sameGrade, difficulty)
+
+        val nearby = collected.filter { it.grade in (grade - 2)..grade }
+        if (nearby.size >= MIN_POOL) return byDifficulty(nearby, difficulty)
+
+        return byDifficulty(collected, difficulty)
     }
+
+    private fun byDifficulty(list: List<CurricQuestion>, difficulty: Int): List<CurricQuestion> {
+        val same = list.filter { it.difficulty == difficulty }
+        return if (same.size >= MIN_POOL / 2) same else list
+    }
+
+    /** 池子小于这个数就往外扩一层 —— 太小的话洗牌一遍都不够出一大题 */
+    private const val MIN_POOL = 16
 
     /** 某科目某年级的知识点（含更低年级），按年级升序 */
     fun topics(subject: Subject, grade: Int): List<CurricTopic> =
         data(subject).topics.filter { it.grade <= grade }.sortedBy { it.grade }
+
+    /**
+     * 按题干原文找回源题（debug 自检用）。
+     *
+     * 不能借道 [pool]：pool 会按年级/难度筛，四年级的题在九年级池里根本不会出现，
+     * 自检就会一直报「找不到」。
+     */
+    fun findByPrompt(prompt: String): CurricQuestion? {
+        val p = prompt.trim()
+        Subject.entries.forEach { s ->
+            data(s).questions.firstOrNull { it.prompt.trim() == p }?.let { return it }
+        }
+        return null
+    }
 
     // ---------------------------------------------------------------- 统计
 
@@ -209,6 +257,7 @@ object CurriculumBank {
     /** debug 用：清掉缓存（换数据文件后重新读） */
     fun clearCache() {
         cache.clear()
+        topicNames.clear()
     }
 
     /** 供导入脚本校验用：assets 里到底有没有这些文件 */

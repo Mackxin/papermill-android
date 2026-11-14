@@ -1460,6 +1460,17 @@ private fun LazyListScope.moreScreenItems(state: AppState, scope: CoroutineScope
                 lineHeight = 19.sp,
             )
             Spacer(Modifier.height(10.dp))
+            // CC BY-NC 4.0 要求署名，这一段不能删；商业化前要先删 assets/taxonomy
+            Text(
+                "「课标知识点」题型的题目来自开源项目 cn-math-taxonomy" +
+                    "（xiaoyang111222/cn-math-taxonomy），许可 CC BY-NC 4.0：" +
+                    "允许署名使用、不允许商业使用。本 App 已把数据裁剪为 1–9 年级五科，" +
+                    "并剔除依赖配图的题；完整许可文本见 assets/licenses/CN_MATH_TAXONOMY_LICENSE.txt。",
+                fontSize = PaperDimens.CaptionSp,
+                color = PaperColors.OnSurfaceVariant,
+                lineHeight = 17.sp,
+            )
+            Spacer(Modifier.height(10.dp))
             Text(
                 "v${state.versionName} · 检查更新是唯一需要联网的动作，出卷、排版、打印全程离线可用。",
                 fontSize = PaperDimens.CaptionSp,

@@ -23,7 +23,12 @@ class MainActivity : ComponentActivity() {
         }
         // 题型抽样：核对题干与答案是否配套（选择题选项洗牌后答案字母最容易错位）
         if (BuildConfig.DEBUG && intent?.getBooleanExtra("dumpQuestions", false) == true) {
-            DebugSheetDump.dumpQuestions()
+            DebugSheetDump.dumpQuestions(this)
+            return
+        }
+        // 真卷体检：按课标题库出一张卷，渲成 PNG 看排版
+        if (BuildConfig.DEBUG && intent?.getBooleanExtra("dumpPaper", false) == true) {
+            DebugSheetDump.dumpPaper(this)
             return
         }
         setContent {

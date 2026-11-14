@@ -24,6 +24,7 @@ import com.papermill.app.core.store.LocalStore
 import com.papermill.app.core.store.MistakeItem
 import com.papermill.app.core.store.SavedPaper
 import com.papermill.app.core.update.UpdateChecker
+import com.papermill.app.domain.content.CurriculumBank
 import com.papermill.app.domain.generate.AnswerMode
 import com.papermill.app.domain.generate.BankQuestionSource
 import com.papermill.app.domain.generate.GenContext
@@ -256,6 +257,9 @@ class AppState(private val rawContext: Context) {
 
     init {
         bankSize = BankQuestionSource.loadFromAssets(ctx)
+        // 课标题库必须先 init：题型可用性判断要读 index.json 的题量统计，
+        // 没初始化时 countOf 一律返回 0，那两个题型会静默消失
+        CurriculumBank.init(ctx)
         dockGlass = LocalStore.loadSettings(ctx).dockGlass
         counts = PaperComposer.defaultSpec(grade, subjects).counts
         refreshLists()
