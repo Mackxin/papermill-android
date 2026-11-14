@@ -136,6 +136,20 @@ object PaperTemplates {
         val wanted: Map<QuestionType, Int>,
     )
 
+    /** v0.5.0 英语专项：单词拼装 + 连词成句 + 选词填空（句子长，均为单栏题型） */
+    val englishFunCounts: Map<QuestionType, Int> = mapOf(
+        QuestionType.WORD_SCRAMBLE to 10,
+        QuestionType.SENTENCE_ORDER to 5,
+        QuestionType.CLOZE to 6,
+    )
+
+    /** v0.5.0 主题识字专项：6 大生活场景，看拼音写词 + 找不同类 + 归类填空 */
+    val themeLiteracyCounts: Map<QuestionType, Int> = mapOf(
+        QuestionType.THEME_PINYIN to 12,
+        QuestionType.THEME_SORT to 6,
+        QuestionType.THEME_GROUP to 6,
+    )
+
     fun forSelection(grade: Int, subject: Subject): List<Preset> = forSelection(grade, listOf(subject))
 
     fun forSelection(grade: Int, subjects: List<Subject>): List<Preset> {
@@ -161,6 +175,9 @@ object PaperTemplates {
                     put(t, if (t.answerLines > 0) 3 else if (i == 0) 20 else 8)
                 }
             }),
+            // v0.5.0：英语 3 题型 / 主题识字 3 题型，词表句式全部自编
+            Preset("english_fun", "英语趣味练", "单词拼装 + 连词成句 + 选词填空", englishFunCounts),
+            Preset("theme_literacy", "主题识字卷", "超市 / 学校 / 交通…6 大生活场景", themeLiteracyCounts),
             Preset("words", "字词默写", "看拼音写词语 + 补全", mapOf(
                 QuestionType.PINYIN to 16, QuestionType.DICTATION to 12, QuestionType.HANZI to 8,
                 QuestionType.ENGLISH_WORD to 24,

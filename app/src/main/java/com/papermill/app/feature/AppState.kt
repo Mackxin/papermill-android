@@ -159,6 +159,22 @@ class AppState(private val rawContext: Context) {
         previewSeed = System.currentTimeMillis()
     }
 
+    /**
+     * v0.5.0 首页「本版新增」快捷卷：自动切到对应科目再出卷。
+     * 不切的话卷头会写「三年级 · 数学练习」，纸上却印着英语 / 识字题，
+     * 家长拿到纸会觉得出错了；同时低年级没开英语、初中不开主题识字，先拦一下。
+     */
+    suspend fun generateForSubject(target: Subject, newCounts: Map<QuestionType, Int>) {
+        if (!target.availableFor(grade)) {
+            toast = "${target.label}在${GradeProfiles.gradeLabel(grade)}尚未开课，请先换年级"
+            return
+        }
+        subjects = listOf(target)
+        subject = target
+        useTemplate(newCounts)
+        generate()
+    }
+
     fun addType(type: QuestionType) = setCount(type, 10)
 
     fun nextPreviewPage(delta: Int) {
@@ -816,7 +832,7 @@ class AppState(private val rawContext: Context) {
             wrongNumbers = emptySet()
             showQuestionList = false
             isReference = true
-            toast = "《${sheet.title}》1 页 ${sheet.orientation.shortLabel}，格子已铺满整页，可直接打印"
+            toast = "《${sheet.title}》1 页 ${sheet.orientation.shortLabel}，已铺满整页，可直接打印"
             screen = Screen.PREVIEW
         } catch (t: Throwable) {
             toast = "生成练习纸失败：${t.message}"

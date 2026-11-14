@@ -10,7 +10,8 @@ object PracticeRenderer {
         subtitle = sheet.subtitle,
         showNameRow = false,
         sections = listOf(PaperSection(title = "", grid = sheet.grid)),
-        footerText = "卷子 · 自绘练习纸 · 可反复打印（版式参考 namishu/printables，MIT）",
+        footerText = sheet.footer
+            ?: "卷子 · 自绘练习纸 · 可反复打印（版式参考 namishu/printables，MIT）",
         orientation = sheet.orientation,
     )
 }

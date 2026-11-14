@@ -29,6 +29,11 @@ enum class GridStyle(val label: String, val defaultCell: Float) {
     DOT_GRID("点阵纸", 20f),
     /** 带坐标轴的方格，初中函数作图 */
     COORDINATE("坐标纸", 20f),
+    /**
+     * v0.5.0 主题识字卡：拼音在上、田字格在下，一页按词数自动铺满。
+     * 只借鉴「拼音在上、汉字在下」这一通用识字卡版式，词表与拼音全部自编重录。
+     */
+    THEME_CARD("主题识字卡", 72f),
 }
 
 data class PaperGrid(
@@ -37,4 +42,8 @@ data class PaperGrid(
     val cell: Float = 0f,
     /** 每页左侧的书写提示（打印在标题下方） */
     val hint: String = "",
+    /** 主题识字卡内容：拼音 to 词语；非空时按 [THEME_CARD][GridStyle.THEME_CARD] 版式绘制 */
+    val themeCards: List<Pair<String, String>> = emptyList(),
+    /** true = 田字格里印浅灰范字供描红；false = 只给拼音，格子留空默写 */
+    val showThemeWords: Boolean = true,
 )

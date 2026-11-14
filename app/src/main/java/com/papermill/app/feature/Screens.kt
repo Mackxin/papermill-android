@@ -164,7 +164,8 @@ private fun screenTitle(state: AppState): Pair<String, String> = when (state.scr
     } else {
         "试卷预览" to "共 ${state.paper?.questions?.size ?: 0} 题 · ${state.pdf?.pageCount ?: 0} 页 ${state.orientation.label}"
     }
-    Screen.REFERENCE -> "速查表与练习纸" to "${ReferenceData.sheets.size} 张速查表 · ${PracticeData.sheets.size} 张练习纸，点开即打印"
+    Screen.REFERENCE -> "速查表与打印纸" to
+        "${ReferenceData.sheets.size} 张速查表 · ${PracticeData.sheets.size} 张练习纸 · ${PracticeData.themeSheets.size} 张主题识字纸"
     Screen.MISTAKES -> "错题本" to "数据只存在这台手机"
     Screen.MORE -> "更多" to "数据 / 打印 / 更新 / 关于"
     Screen.HISTORY -> "试卷库" to "只存题目快照，随时重开"
@@ -183,7 +184,7 @@ private fun Divider() = Box(
 
 @Composable
 private fun HomeScreen(state: AppState, scope: CoroutineScope) {
-    val presets = PaperTemplates.forSelection(state.grade, state.subjects).take(6)
+    val presets = PaperTemplates.forSelection(state.grade, state.subjects).take(8)
     val subjectLabel = state.subjects.joinToString(" + ") { it.label }
 
     CardSection {
@@ -262,6 +263,55 @@ private fun HomeScreen(state: AppState, scope: CoroutineScope) {
             if (row.size == 1) Spacer(Modifier.weight(1f))
         }
         Spacer(Modifier.height(PaperDimens.GapSmall))
+    }
+
+    // v0.5.0 本版新增：这两张卡不依赖「当前选的科目」，点一下自动切科目并直接出卷。
+    // 低年级没开英语、初中不开主题识字，按年级隐藏对应卡片。
+    Spacer(Modifier.height(12.dp))
+    SectionLabel("04", "本版新增", "英语趣味练 · 6 大场景主题识字")
+    Spacer(Modifier.height(8.dp))
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(PaperDimens.GapSmall)) {
+        if (state.grade >= 3) {
+            PresetCard(
+                title = "英语趣味练",
+                desc = "单词拼装 + 连词成句 + 选词填空，句子自编",
+                meta = "${PaperTemplates.englishFunCounts.values.sum()} 题 · 直接出卷",
+                onClick = {
+                    scope.launch {
+                        state.generateForSubject(Subject.ENGLISH, PaperTemplates.englishFunCounts)
+                    }
+                },
+                modifier = Modifier.weight(1f),
+            )
+        }
+        if (state.grade <= 6) {
+            PresetCard(
+                title = "主题识字卷",
+                desc = "超市 / 学校 / 交通…看拼音写词 + 归类",
+                meta = "${PaperTemplates.themeLiteracyCounts.values.sum()} 题 · 直接出卷",
+                onClick = {
+                    scope.launch {
+                        state.generateForSubject(Subject.CHINESE, PaperTemplates.themeLiteracyCounts)
+                    }
+                },
+                modifier = Modifier.weight(1f),
+            )
+        }
+        // 3–6 年级两张刚好占满一行；其余年级只有一张，补位保持等宽
+        if (state.grade !in 3..6) Spacer(Modifier.weight(1f))
+    }
+
+    Spacer(Modifier.height(10.dp))
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            "${PracticeData.themeSheets.size} 张主题识字纸：识字卡描红 / 默写格，点开即打印",
+            fontSize = PaperDimens.CaptionSp,
+            color = PaperColors.OnSurfaceVariant,
+            lineHeight = 16.sp,
+            modifier = Modifier.weight(1f),
+        )
+        Spacer(Modifier.width(8.dp))
+        MiniAction("去看看") { state.goTab(NavTab.REFERENCE) }
     }
 
     Spacer(Modifier.height(PaperDimens.Gap))
@@ -646,8 +696,9 @@ private fun PreviewScreen(
     } else if (isRef) {
         CardSection(title = "关于这一页") {
             Text(
-                "这一页由本 App 自行编排绘制：速查表只收基础事实与公式，练习纸用 Canvas 自绘格子。" +
-                    "可反复打印使用，不含任何第三方原题、PDF 或图片，也不需要答案页。",
+                "这一页由本 App 自行编排绘制：速查表只收基础事实与公式，练习纸和主题识字纸" +
+                    "用 Canvas 自绘格子与词卡，词表拼音自编重录。可反复打印使用，" +
+                    "不含任何第三方原题、PDF 或图片，也不需要答案页。",
                 fontSize = PaperDimens.BodySp,
                 color = PaperColors.OnSurface,
                 lineHeight = 19.sp,
@@ -721,7 +772,7 @@ private fun ReferenceScreen(state: AppState, scope: CoroutineScope) {
     CardSection {
         Text(
             "点任意一张即可生成 1 页 A4 PDF，用底部「系统打印」或「分享」远程打印。" +
-                "速查表只收基础事实与公式；练习纸的格子铺满整页，不浪费纸。",
+                "速查表只收基础事实与公式；练习纸与主题识字纸按词数 / 格数铺满整页，不浪费纸。",
             fontSize = PaperDimens.BodySp,
             color = PaperColors.OnSurfaceVariant,
             lineHeight = 18.sp,
@@ -749,9 +800,28 @@ private fun ReferenceScreen(state: AppState, scope: CoroutineScope) {
     ) { sheet -> scope.launch { state.renderPractice(sheet) } }
 
     Spacer(Modifier.height(PaperDimens.Gap))
+    SectionLabel("03", "主题识字纸", "${PracticeData.themeSheets.size} 张 · 6 大生活场景 × 描红 / 默写")
+    Spacer(Modifier.height(8.dp))
+    Text(
+        "每个主题把人物、物品、设施的词做成一页：识字卡印浅灰范字供描红，" +
+            "默写格只给拼音、田字格留空。词表自编、拼音逐条校对，按词数自动铺满一页。",
+        fontSize = PaperDimens.CaptionSp,
+        color = PaperColors.OnSurfaceVariant,
+        lineHeight = 17.sp,
+    )
+    Spacer(Modifier.height(8.dp))
+    SheetGrid(
+        items = PracticeData.themeSheets,
+        titleOf = { it.title },
+        descOf = { it.subtitle },
+        metaOf = { "1 页 竖版 · 立即打印" },
+    ) { sheet -> scope.launch { state.renderPractice(sheet) } }
+
+    Spacer(Modifier.height(PaperDimens.Gap))
     Text(
         "练习纸版式参考 namishu/printables（MIT），全部用本 App 自绘线条重新实现，" +
-            "未打包其 PDF 与字体；田字格、米字格、坐标纸等为通行基础版式，自行编排。",
+            "未打包其 PDF 与字体；田字格、米字格、坐标纸等为通行基础版式，自行编排。" +
+            "主题识字只借鉴「拼音在上、汉字在下」的通用卡式版式，词表与拼音均为自编重录。",
         fontSize = PaperDimens.CaptionSp,
         color = PaperColors.OnSurfaceVariant,
         lineHeight = 17.sp,

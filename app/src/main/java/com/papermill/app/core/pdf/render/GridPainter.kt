@@ -140,6 +140,9 @@ object GridPainter {
                     }
                 }
             }
+
+            // v0.5.0：主题识字卡走自己的绘制器，hint 已在上面统一扣掉高度
+            GridStyle.THEME_CARD -> ThemeCardPainter.draw(b, tp, grid, g, y0)
         }
     }
 }
