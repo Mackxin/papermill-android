@@ -80,8 +80,9 @@ enum class QuestionType(
 
     // v0.5.0 主题识字：6 大生活主题的自编词库（拼音已逐条校对）
     THEME_PINYIN("主题·看拼音写词语", 2),
-    THEME_SORT("主题·找不同类", 2),
-    THEME_GROUP("主题·归类填空", 2),
+    // 带 A/B/C 三个选项的长题干必须占整行：半栏会把选项折得七零八落
+    THEME_SORT("主题·找不同类", 1),
+    THEME_GROUP("主题·归类填空", 1),
 }
 
 enum class AnswerMode(val label: String) {

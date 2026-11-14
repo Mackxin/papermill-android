@@ -276,26 +276,48 @@ class AppState(private val rawContext: Context) {
     /** 正式卷用：还差多少题 */
     val finalSuggestExtra: Int get() = suggestedExtra(lastContentFillPercent / 100f)
 
-    private fun suggestedExtra(ratio: Float): Int {
+    private fun suggestedExtra(ratio: Float): Int = suggestedExtra(ratio, null)
+
+    /**
+     * v0.5.0：补题量按「实际要补的那个题型」折算栏数。
+     * 连词成句 / 选词填空是单栏整行题，一道顶 2 道两栏口算的高度；
+     * 之前统一按全局 columns=2 估算，一次补 16 题直接顶到第二页，
+     * 触发「不增页」硬约束后整轮回退，结果一题没补、末页只有 65%。
+     */
+    private fun suggestedExtra(ratio: Float, fillType: QuestionType?): Int {
         if (ratio >= FILL_TARGET) return 0
         val pageH = if (orientation == PageOrientation.LANDSCAPE) {
             TYPICAL_CONTENT_H_LANDSCAPE
         } else {
             TYPICAL_CONTENT_H
         }
-        // 2 栏时一道题只占约半行高度，补题量必须按栏数折算。
-        // 旧版不折算，连续 5 轮都觉得「还差很多」，46 题被一路补到 99 题。
-        val gainPerQuestion = TYPICAL_QUESTION_H / columns.coerceAtLeast(1)
+        // 2 栏时一道题只占约半行高度；单栏长句题按 1 栏算
+        val effectiveCols = if (fillType != null &&
+            (fillType.answerLines > 0 || fillType.columns <= 1)
+        ) 1 else columns.coerceAtLeast(1)
+        val gainPerQuestion = TYPICAL_QUESTION_H / effectiveCols
         return ceil((0.90f - ratio) * pageH / gainPerQuestion)
             .toInt().coerceIn(1, 16)
     }
 
-    /** 优先补「最后一个大题」的题型 —— 它就在最后一页正文上，补它才真的把最后一张纸填满 */
+    /**
+     * 优先补「最后一个大题」的题型 —— 它就在最后一页正文上，补它才真的把最后一张纸填满。
+     *
+     * v0.5.0：先排除「已经补不动」的题型。像选词填空只有有限条自编小题库，
+     * 请求 20 题实际只能出 8 题时，继续给它加题只会空转，还会弹出
+     * 「可用题量不足」却始终填不满纸。这时改补其它还有容量的题型。
+     */
     private fun pickFillType(map: Map<QuestionType, Int>, probe: Built?): QuestionType? {
         val used = map.filter { it.value > 0 }.keys
+        val exhausted = probe?.paper?.sections
+            ?.filter { it.questions.size < (map[it.type] ?: 0) }
+            ?.map { it.type }
+            ?.toSet() ?: emptySet()
         val last = probe?.paper?.sections?.lastOrNull()?.type
-        if (last != null && last in used) return last
-        return used.firstOrNull { it.answerLines == 0 }
+        if (last != null && last in used && last !in exhausted) return last
+        return used.firstOrNull { it.answerLines == 0 && it !in exhausted }
+            ?: used.firstOrNull { it !in exhausted }
+            ?: used.firstOrNull { it.answerLines == 0 }
             ?: used.firstOrNull()
             ?: availableTypes.firstOrNull()
     }
@@ -405,15 +427,16 @@ class AppState(private val rawContext: Context) {
 
                 // 只有「正文就一页」才自动补：已经要印 2 页正文时再补只会越补越多，
                 // 那种情况交给预览页的显式「补满这一页 / 加 N 题」。
-                val need = if (autoFillPage && basePages == 1 && extraAdded < MAX_AUTO_EXTRA) {
-                    suggestedExtra(ratio)
-                } else 0
                 val fillType = pickFillType(working, probe)
+                val need = if (autoFillPage && basePages == 1 && extraAdded < MAX_AUTO_EXTRA) {
+                    suggestedExtra(ratio, fillType)
+                } else 0
                 if (need <= 0 || fillType == null || attempt == 4 || noProgress) break
 
-                // need 按「一行题干」估算；带答题横线的题更占地方，按行数折算
+                // 每轮只走估算量的 80%，靠多轮试排逼近 90%：
+                // 一次补满容易越过页边界，被「不增页」约束整轮回退。
                 val lineFactor = 1f + fillType.answerLines
-                val step = (need / lineFactor).toInt()
+                val step = (need * 0.8f / lineFactor).toInt()
                     .coerceIn(1, need)
                     .coerceAtMost(MAX_AUTO_EXTRA - extraAdded)
                 if (step <= 0) break

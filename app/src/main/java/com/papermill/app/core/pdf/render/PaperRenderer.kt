@@ -76,9 +76,13 @@ object PaperRenderer {
                 }
                 target.add(FullWidthBlock(NoteBlock("本表可直接打印张贴，题目均由本 App 整理编排。")))
             } else {
+                // 长题干 / 英文句子 / 带选项的单选题必须占整行：
+                // 正文流统一按 bodyColumns 分栏，只判断 answerLines 会让
+                // 连词成句、选词填空被塞进半栏，英文句子和 A/B/C 选项被折得七零八落。
+                val forceFullWidth = section.answerLines > 0 || section.columns <= 1
                 section.questions.forEach { q ->
                     val qb = QuestionBlock(no = q.no, stem = q.stem, answerLines = section.answerLines)
-                    target.add(if (section.answerLines > 0) FullWidthBlock(qb) else qb)
+                    target.add(if (forceFullWidth) FullWidthBlock(qb) else qb)
                 }
                 if (!section.isAnswer) bodyColumns = maxOf(bodyColumns, section.columns)
             }

@@ -39,10 +39,15 @@ object ThemePinyinGenerator : BaseGenerator() {
     override val maxGrade = 6
     override val topic = "主题识字"
 
+    /** 只用来避免「相邻两题考同一个词」，不参与去重哈希，跨卷无副作用 */
+    private var lastWord: String = ""
+
     override fun make(ctx: GenContext): Pair<String, String> {
         val group = ThemeBank.themes[ctx.rng.nextInt(ThemeBank.themes.size)]
         val list = group.words
-        val w = list[ctx.rng.nextInt(list.size)]
+        var w = list[ctx.rng.nextInt(list.size)]
+        repeat(5) { if (w.word == lastWord) w = list[ctx.rng.nextInt(list.size)] }
+        lastWord = w.word
         return when (ctx.rng.nextInt(3)) {
             0 -> "【${group.name}】看拼音写词语：${w.pinyin} →（　　）" to w.word
             1 -> "【${group.name}】${w.pinyin}，写出词语（　　）" to w.word
@@ -90,9 +95,19 @@ object ThemeGroupGenerator : BaseGenerator() {
     override val maxGrade = 6
     override val topic = "场景归类"
 
+    /** 同上：同一页连出两次「长椅」会显得敷衍 */
+    private var lastWord: String = ""
+
     override fun make(ctx: GenContext): Pair<String, String> {
         val rng = ctx.rng
-        val (word, correctTheme) = uniqueThemeWords[rng.nextInt(uniqueThemeWords.size)]
+        var pick = uniqueThemeWords[rng.nextInt(uniqueThemeWords.size)]
+        repeat(5) {
+            if (pick.first.word == lastWord) {
+                pick = uniqueThemeWords[rng.nextInt(uniqueThemeWords.size)]
+            }
+        }
+        val (word, correctTheme) = pick
+        lastWord = word.word
         val wrong = shuffled(
             ThemeBank.themes.filter { it.id != correctTheme.id }.map { it.name },
             rng,

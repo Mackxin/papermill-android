@@ -39,9 +39,17 @@ object PaperAssembler {
             )
         }
 
+        // 卷头题数必须用「实际生成出来的题数」：某些题型受去重 / 题库容量限制，
+        // 请求 37 题可能只出到 23 题。照 spec.subtitle 印会把错误数字印在纸上。
+        // 只改写自动生成的「共 N 题」副标题，用户自定义的副标题原样保留。
+        val actual = paper.questions.size
+        val subtitle = if (spec.subtitle.startsWith("共 ") && spec.subtitle.contains("题")) {
+            "共 $actual 题　满分 ${actual * 2} 分"
+        } else spec.subtitle
+
         return PaperDocument(
             title = if (spec.isMistakePaper) "${spec.title}（错题重练）" else spec.title,
-            subtitle = spec.subtitle,
+            subtitle = subtitle,
             showNameRow = spec.showNameRow,
             sections = sections,
             footerText = "卷子 · 题目由本 App 程序生成，非官方教材配套",
