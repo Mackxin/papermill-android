@@ -46,6 +46,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -86,6 +87,17 @@ import kotlinx.coroutines.launch
 private val TAB_SCREENS = setOf(Screen.HOME, Screen.REFERENCE, Screen.MISTAKES, Screen.MORE)
 private val TAB_ORDER = listOf(NavTab.HOME, NavTab.REFERENCE, NavTab.MISTAKES, NavTab.MORE)
 
+/**
+ * 底部玻璃 dock 占位高度（外 padding 8 + 内 padding 6 + 胶囊 42 + 6 + 8 = 70dp）。
+ *
+ * dock 现在是浮层，不占布局位；内容区要按这个高度留出底部内边距，
+ * 否则滚到最底时最后一行会被 dock 压住。
+ */
+private val DOCK_SPACE = 70.dp
+
+/** 页内可滚动内容需要额外留出的底部空间：操作条 + dock + 呼吸余量 */
+private val BOTTOM_SAFE = DOCK_SPACE + PaperDimens.ActionBarH + 16.dp
+
 @Composable
 fun PaperMillRoot(state: AppState) {
     val context = LocalContext.current
@@ -125,18 +137,40 @@ fun PaperMillRoot(state: AppState) {
         initialPage = TAB_ORDER.indexOf(state.navTab).coerceAtLeast(0),
     ) { TAB_ORDER.size }
 
-    LaunchedEffect(pager.currentPage, pager.isScrollInProgress) {
-        if (!pager.isScrollInProgress && state.screen in TAB_SCREENS) {
-            val target = TAB_ORDER[pager.currentPage]
-            if (state.navTab != target) state.goTab(target)
+    // ============================================================
+    // 高亮与 pager 的三段联动（用 snapshotFlow 而不是 LaunchedEffect(key)）
+    // ============================================================
+    // 踩过的坑：把 key 设成 pager.currentPage 时，带动画的跳页本身会让 currentPage
+    // 中途变化 → 触发 goTab → screen 变 → 那个 effect 被重启 → 正在跑的
+    // animateScrollToPage 被协程取消 → pager 卡在两页中间不动。
+    // snapshotFlow 挂在 LaunchedEffect(Unit) 里，永不重启，也就不会互相取消。
+
+    // ① 手指拖动时高亮立刻跟随（滑过半页就切），这就是用户要的「跟着一起动」
+    LaunchedEffect(Unit) {
+        snapshotFlow { pager.currentPage }.collect { page ->
+            if (pager.isScrollInProgress && state.screen in TAB_SCREENS) {
+                val target = TAB_ORDER[page]
+                if (state.navTab != target) state.goTab(target)
+            }
         }
     }
-    // 代码里跳页（点 dock / 从子页面回来）时把 pager 滑过去，而不是硬切。
-    // 必须排除「手指正在滑」的情况：否则松手那一刻 settle 还没走完，
-    // 这里又发一个 animateScrollToPage 去抢，两个动画互相打断就是顿挫感。
-    LaunchedEffect(state.navTab, state.screen) {
-        if (state.screen in TAB_SCREENS && !pager.isScrollInProgress) {
-            val idx = TAB_ORDER.indexOf(state.navTab)
+
+    // ② 落页后校正一次：程序动画途中被 ① 改掉的 navTab，在停下来时对齐到真实页
+    LaunchedEffect(Unit) {
+        snapshotFlow { pager.settledPage }.collect { page ->
+            if (state.screen in TAB_SCREENS) {
+                val target = TAB_ORDER[page]
+                if (state.navTab != target) state.goTab(target)
+            }
+        }
+    }
+
+    // ③ 点 dock / 从子页面回来时把 pager 滑过去。
+    // 手指正在滑的时候不发指令，否则松手那刻 settle 还没走完就被抢走。
+    LaunchedEffect(Unit) {
+        snapshotFlow { state.navTab }.collect { tab ->
+            if (state.screen !in TAB_SCREENS || pager.isScrollInProgress) return@collect
+            val idx = TAB_ORDER.indexOf(tab)
             if (idx >= 0 && pager.currentPage != idx) {
                 pager.animateScrollToPage(
                     page = idx,
@@ -146,121 +180,134 @@ fun PaperMillRoot(state: AppState) {
         }
     }
 
+    // ④ 「更多」页的数字要随时反映最新状态：每次切回本页都重读一次。
+    // 读盘在 IO 线程，不会卡帧；不能挂在 LazyColumn 的 item 里，那会被回收后反复重跑。
+    LaunchedEffect(state.screen) {
+        if (state.screen == Screen.MORE) state.refreshListsAsync()
+    }
+
     val (title, subtitle) = screenTitle(state)
     // 页签页不显示返回箭头（现代 App 惯例），子页面才显示
     val onBack: (() -> Unit)? = if (state.screen in TAB_SCREENS) null else ({ state.back() })
 
-    Column(Modifier.fillMaxSize().background(PaperColors.Background)) {
-        AppTopBar(title = title, subtitle = subtitle, onBack = onBack)
+    Box(Modifier.fillMaxSize().background(PaperColors.Background)) {
+        // 内容层一路铺到屏幕底部：滚动内容会从 dock 背后穿过去，玻璃质感才透得出来
+        Column(Modifier.fillMaxSize()) {
+            AppTopBar(title = title, subtitle = subtitle, onBack = onBack)
 
-        Box(Modifier.weight(1f)) {
-            if (state.screen in TAB_SCREENS) {
-                HorizontalPager(
-                    state = pager,
-                    modifier = Modifier.fillMaxSize(),
-                    // 预先组合相邻页：默认只组合当前页，滑到新页时才现场搭整页内容
-                    // （工具页有 36 张卡），首帧就会卡一下；多挂一页换顺滑。
-                    // Compose 1.6 里这个参数叫 beyondBoundsPageCount（1.7 才改名）。
-                    beyondBoundsPageCount = 1,
-                ) { page ->
-                    val tab = TAB_ORDER[page]
-                    // 「更多」页要用到试卷库 / 错题本数量。放这里而不是列表项里，
-                    // 免得列表项滚出屏幕被回收后反复重跑。
-                    if (tab == NavTab.MORE) {
-                        LaunchedEffect(Unit) { state.refreshListsAsync() }
-                    }
-                    // 用 LazyColumn 而不是 Column + verticalScroll：
-                    // 原来「打印纸」页一次性组合 36 张带 elevation 阴影的卡，
-                    // 滑动时前后两页同时在场，首帧要摆上百个阴影节点 —— 这就是卡顿的主因。
-                    // 改成按需组合后，屏幕上始终只有可见的那几行。
-                    LazyColumn(
+            Box(Modifier.weight(1f)) {
+                if (state.screen in TAB_SCREENS) {
+                    HorizontalPager(
+                        state = pager,
                         modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(
-                            start = PaperDimens.ScreenPad,
-                            end = PaperDimens.ScreenPad,
-                            top = 2.dp,
-                        ),
-                    ) {
-                        when (tab) {
-                            NavTab.HOME -> homeScreenItems(state, scope)
-                            NavTab.REFERENCE -> referenceScreenItems(state, scope)
-                            NavTab.MISTAKES -> mistakesScreenItems(state)
-                            NavTab.MORE -> moreScreenItems(state, scope) {
-                                importLauncher.launch("*/*")
+                        // 预先组合相邻页：默认只组合当前页，滑到新页时才现场搭整页内容
+                        // （工具页有 36 张卡），首帧就会卡一下；多挂一页换顺滑。
+                        // Compose 1.6 里这个参数叫 beyondBoundsPageCount（1.7 才改名）。
+                        beyondBoundsPageCount = 1,
+                    ) { page ->
+                        val tab = TAB_ORDER[page]
+                        // 用 LazyColumn 而不是 Column + verticalScroll：
+                        // 原来「打印纸」页一次性组合 36 张带 elevation 阴影的卡，
+                        // 滑动时前后两页同时在场，首帧要摆上百个阴影节点 —— 这就是卡顿的主因。
+                        // 改成按需组合后，屏幕上始终只有可见的那几行。
+                        LazyColumn(
+                            modifier = Modifier.fillMaxSize(),
+                            contentPadding = PaddingValues(
+                                start = PaperDimens.ScreenPad,
+                                end = PaperDimens.ScreenPad,
+                                top = 2.dp,
+                                // 让出底部浮层：否则滚到底时最后一行被 dock 压住
+                                bottom = BOTTOM_SAFE,
+                            ),
+                        ) {
+                            when (tab) {
+                                NavTab.HOME -> homeScreenItems(state, scope)
+                                NavTab.REFERENCE -> referenceScreenItems(state, scope)
+                                NavTab.MISTAKES -> mistakesScreenItems(state)
+                                NavTab.MORE -> moreScreenItems(state, scope) {
+                                    importLauncher.launch("*/*")
+                                }
                             }
+                            item { Spacer(Modifier.height(20.dp)) }
                         }
-                        item { Spacer(Modifier.height(20.dp)) }
                     }
-                }
-            } else {
-                val scroll = rememberScrollState()
-                LaunchedEffect(state.screen) { scroll.scrollTo(0) }
-                Column(
-                    Modifier
-                        .fillMaxSize()
-                        .verticalScroll(scroll)
-                        .padding(horizontal = PaperDimens.ScreenPad)
-                ) {
-                    Spacer(Modifier.height(2.dp))
-                    when (state.screen) {
-                        Screen.CREATE -> CreateScreen(state, scope)
-                        Screen.PREVIEW -> PreviewScreen(state, scope, activity)
-                        Screen.HISTORY -> HistoryScreen(state, scope) { importLauncher.launch("*/*") }
-                        Screen.HELP -> HelpScreen(state)
-                        else -> Unit
+                } else {
+                    val scroll = rememberScrollState()
+                    LaunchedEffect(state.screen) { scroll.scrollTo(0) }
+                    Column(
+                        Modifier
+                            .fillMaxSize()
+                            .verticalScroll(scroll)
+                            .padding(horizontal = PaperDimens.ScreenPad)
+                    ) {
+                        Spacer(Modifier.height(2.dp))
+                        when (state.screen) {
+                            Screen.CREATE -> CreateScreen(state, scope)
+                            Screen.PREVIEW -> PreviewScreen(state, scope, activity)
+                            Screen.HISTORY -> HistoryScreen(state, scope) { importLauncher.launch("*/*") }
+                            Screen.HELP -> HelpScreen(state)
+                            else -> Unit
+                        }
+                        Spacer(Modifier.height(BOTTOM_SAFE))
                     }
-                    Spacer(Modifier.height(20.dp))
                 }
             }
         }
 
-        ToastBar(state.toast) { state.clearToast() }
+        // 浮层：提示条与操作条固定在 dock 上方，dock 本身贴底
+        Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth()) {
+            ToastBar(state.toast) { state.clearToast() }
 
-        when (state.screen) {
-            Screen.HOME -> StickyBar {
-                SecondaryButton(
-                    "自定义",
-                    modifier = Modifier.weight(1f),
-                ) { state.screen = Screen.CREATE }
-                PrimaryButton(
-                    "直接出卷",
-                    enabled = !state.busy && state.totalQuestions > 0,
-                    modifier = Modifier.weight(1.25f),
-                ) { scope.launch { state.generate() } }
-            }
-            Screen.CREATE -> StickyBar {
-                PrimaryButton(
-                    "生成试卷并预览",
-                    enabled = !state.busy && state.totalQuestions > 0,
-                    modifier = Modifier.weight(1f),
-                ) { scope.launch { state.generate() } }
-            }
-            Screen.PREVIEW -> StickyBar {
-                PrimaryButton(
-                    "系统打印",
-                    enabled = !state.busy,
-                    modifier = Modifier.weight(1.3f),
-                ) {
-                    if (activity != null) scope.launch { state.print(activity) }
-                    else state.toast = "拿不到 Activity，无法调起打印"
-                }
-                SecondaryButton("保存", modifier = Modifier.weight(1f)) { state.savePdf() }
-                SecondaryButton("分享", modifier = Modifier.weight(1f)) { state.sharePdf() }
-            }
-            Screen.MISTAKES -> {
-                val pending = state.mistakes.count { it.mastery != "MASTERED" }
-                StickyBar {
-                    PrimaryButton(
-                        "生成错题重练卷（$pending 题）",
-                        enabled = !state.busy && pending > 0,
+            when (state.screen) {
+                Screen.HOME -> StickyBar {
+                    SecondaryButton(
+                        "自定义",
                         modifier = Modifier.weight(1f),
-                    ) { scope.launch { state.generateMistakePaper() } }
+                    ) { state.screen = Screen.CREATE }
+                    PrimaryButton(
+                        "直接出卷",
+                        enabled = !state.busy && state.totalQuestions > 0,
+                        modifier = Modifier.weight(1.25f),
+                    ) { scope.launch { state.generate() } }
                 }
+                Screen.CREATE -> StickyBar {
+                    PrimaryButton(
+                        "生成试卷并预览",
+                        enabled = !state.busy && state.totalQuestions > 0,
+                        modifier = Modifier.weight(1f),
+                    ) { scope.launch { state.generate() } }
+                }
+                Screen.PREVIEW -> StickyBar {
+                    PrimaryButton(
+                        "系统打印",
+                        enabled = !state.busy,
+                        modifier = Modifier.weight(1.3f),
+                    ) {
+                        if (activity != null) scope.launch { state.print(activity) }
+                        else state.toast = "拿不到 Activity，无法调起打印"
+                    }
+                    SecondaryButton("保存", modifier = Modifier.weight(1f)) { state.savePdf() }
+                    SecondaryButton("分享", modifier = Modifier.weight(1f)) { state.sharePdf() }
+                }
+                Screen.MISTAKES -> {
+                    val pending = state.mistakes.count { it.mastery != "MASTERED" }
+                    StickyBar {
+                        PrimaryButton(
+                            "生成错题重练卷（$pending 题）",
+                            enabled = !state.busy && pending > 0,
+                            modifier = Modifier.weight(1f),
+                        ) { scope.launch { state.generateMistakePaper() } }
+                    }
+                }
+                else -> Unit
             }
-            else -> Unit
+            Spacer(Modifier.height(DOCK_SPACE))
         }
 
-        FloatingDock(state) { tab -> state.goTab(tab) }
+        FloatingDock(
+            state = state,
+            modifier = Modifier.align(Alignment.BottomCenter),
+        ) { tab -> state.goTab(tab) }
     }
 }
 
@@ -870,8 +917,10 @@ private fun PreviewScreen(
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text(
+                    // 这里以前写死「1 页」，而速查表实际可能排到 2 页，副标题又单独报了真实页数，
+                    // 同一张卡片里两个数字互相打脸。首行只说内容性质，页数交给下面一行。
                     if (isRef) {
-                        "1 页 ${pdf?.orientation?.label ?: "A4"} · 已铺满，可直接打印"
+                        "内置速查表 · 已自动排版"
                     } else {
                         "共 ${gp?.questions?.size ?: 0} 题"
                     },

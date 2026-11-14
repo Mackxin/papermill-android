@@ -60,52 +60,85 @@ object PaperRenderer {
         // 旧版对每个大题各调一次 FlowLayout，导致「换个大题就换一页」：
         // 6 种题型的一年级卷被印成 7 页。现在所有大题的块进同一个流，
         // 标题 / 需要书写过程的题用整宽块占满一行，段与段在同一页里上下相接。
-        val bodyBlocks = ArrayList<Block>()
         val answerBlocks = ArrayList<Block>()
         var bodyColumns = 2
         // 答案最长有多少字：带解析的语法题答案很长，四栏会把一句解析拆成好几行
         var maxAnswerLen = 0
 
-        doc.sections.forEach { section ->
-            val target = if (section.isAnswer) answerBlocks else bodyBlocks
-            target.add(SectionHeaderBlock(section.title))
-            // 答案流里 stem 就是「题号 + 答案（+解析）」，用它估长度即可
-            if (section.isAnswer) {
-                section.questions.forEach { q -> maxAnswerLen = maxOf(maxAnswerLen, q.stem.length) }
+        /** 正文块（[scale] 只作用于表格行高，见下面「单页速查表铺满」） */
+        fun buildBody(scale: Float): List<Block> {
+            val out = ArrayList<Block>()
+            doc.sections.filter { !it.isAnswer }.forEach { section ->
+                out.add(SectionHeaderBlock(section.title))
+                val table = section.table
+                if (table != null) {
+                    // 整张表一个块：跨页由 FlowLayout + TableBlock.split 按剩余高度自己切，
+                    // 表头每个实际页面各画一次（按固定行数预切会在同一页里重复表头）
+                    out.add(
+                        TableBlock(
+                            table.headers, table.weights, table.rows,
+                            showHeader = true, rowScale = scale,
+                        )
+                    )
+                    out.add(FullWidthBlock(NoteBlock("本表可直接打印张贴，题目均由本 App 整理编排。")))
+                } else {
+                    // 长题干 / 英文句子 / 带选项的单选题必须占整行：
+                    // 正文流统一按 bodyColumns 分栏，只判断 answerLines 会让
+                    // 连词成句、选词填空被塞进半栏，英文句子和 A/B/C 选项被折得七零八落。
+                    val forceFullWidth = section.answerLines > 0 || section.columns <= 1
+                    section.questions.forEach { q ->
+                        val qb = QuestionBlock(no = q.no, stem = q.stem, answerLines = section.answerLines)
+                        out.add(if (forceFullWidth) FullWidthBlock(qb) else qb)
+                    }
+                    bodyColumns = maxOf(bodyColumns, section.columns)
+                }
             }
+            return out
+        }
 
-            val table = section.table
-            if (table != null) {
-                // 表格按固定行数切块，FlowLayout 就能自然分页且每块都带表头
-                table.rows.chunked(table.rowsPerBlock.coerceAtLeast(1)).forEach { rows ->
-                    target.add(TableBlock(table.headers, table.weights, rows, showHeader = true))
-                }
-                target.add(FullWidthBlock(NoteBlock("本表可直接打印张贴，题目均由本 App 整理编排。")))
-            } else {
-                // 长题干 / 英文句子 / 带选项的单选题必须占整行：
-                // 正文流统一按 bodyColumns 分栏，只判断 answerLines 会让
-                // 连词成句、选词填空被塞进半栏，英文句子和 A/B/C 选项被折得七零八落。
-                val forceFullWidth = section.answerLines > 0 || section.columns <= 1
-                section.questions.forEach { q ->
-                    val qb = QuestionBlock(no = q.no, stem = q.stem, answerLines = section.answerLines)
-                    target.add(if (forceFullWidth) FullWidthBlock(qb) else qb)
-                }
-                if (!section.isAnswer) bodyColumns = maxOf(bodyColumns, section.columns)
+        doc.sections.filter { it.isAnswer }.forEach { section ->
+            answerBlocks.add(SectionHeaderBlock(section.title))
+            val forceFullWidth = section.answerLines > 0 || section.columns <= 1
+            section.questions.forEach { q ->
+                // 答案流里 stem 就是「题号 + 答案（+解析）」，用它估长度即可
+                maxAnswerLen = maxOf(maxAnswerLen, q.stem.length)
+                val qb = QuestionBlock(no = q.no, stem = q.stem, answerLines = section.answerLines)
+                answerBlocks.add(if (forceFullWidth) FullWidthBlock(qb) else qb)
             }
         }
 
-        val pages = ArrayList<FlowLayout.Page>()
-        if (bodyBlocks.isNotEmpty()) {
-            pages.addAll(
-                FlowLayout(
-                    contentW = g.contentW,
-                    contentHFirst = contentHFirst,
-                    contentHOther = contentHOther,
-                    columns = bodyColumns,
-                    columnGap = COLUMN_GAP,
-                    startsOnFirstPage = true,
-                ).layout(bodyBlocks, tp)
-            )
+        fun layoutBody(blocks: List<Block>): ArrayList<FlowLayout.Page> {
+            val out = ArrayList<FlowLayout.Page>()
+            if (blocks.isNotEmpty()) {
+                out.addAll(
+                    FlowLayout(
+                        contentW = g.contentW,
+                        contentHFirst = contentHFirst,
+                        contentHOther = contentHOther,
+                        columns = bodyColumns,
+                        columnGap = COLUMN_GAP,
+                        startsOnFirstPage = true,
+                    ).layout(blocks, tp)
+                )
+            }
+            return out
+        }
+
+        var pages = layoutBody(buildBody(1f))
+
+        // ---- 单页速查表铺满整页 ----
+        // 九九乘法表、小学语法表这类内容一页装得下，但只占页面 40%~70%，
+        // 打印出来下半张全是白纸。按实际占用高度把行高整体拉高，
+        // 表头与文字大小不变、只是行距变松，视觉上就像一张挂图。
+        val bodySections = doc.sections.filter { !it.isAnswer }
+        if (bodySections.size == 1 && bodySections[0].table != null && pages.size == 1) {
+            val used = pages[0].items.maxOfOrNull { it.y + it.block.measure(tp, it.w) } ?: 0f
+            if (used > 0f && used < contentHFirst * 0.74f) {
+                val scale = (contentHFirst * 0.93f / used).coerceIn(1f, 3.2f)
+                val taller = layoutBody(buildBody(scale))
+                // 拉高后必须还是一页；否则说明本来就在溢出边缘，保持原样重排
+                if (taller.size == 1) pages = taller
+            }
         }
 
         // 答案页单独成流：本来就该另起一页，四栏小字更省纸。

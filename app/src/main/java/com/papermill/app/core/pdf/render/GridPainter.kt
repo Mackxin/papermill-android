@@ -31,8 +31,8 @@ object GridPainter {
 
         val frame = tp.rulePaint(0.7f, 0xFF8A8A8A.toInt())
         val fine = tp.rulePaint(0.3f, 0xFFCFCFCF.toInt())
-        // 田字格 / 米字格的内部辅助线要能被看清，又不能抢过学生的字
-        val inner = tp.rulePaint(0.4f, 0xFFADADAD.toInt())
+        // 田字格 / 米字格的内部辅助线：虚线、稍深一点，实线浅灰在纸上会「消失」
+        val inner = tp.dashPaint()
         val axis = tp.rulePaint(1.1f, 0xFF555555.toInt())
 
         var y0 = top

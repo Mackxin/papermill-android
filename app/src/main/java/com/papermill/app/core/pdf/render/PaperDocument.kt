@@ -16,13 +16,15 @@ data class PaperQuestion(
 
 /**
  * 网格表格（九九乘法表、拼音音节表、公式表用）。
- * 渲染时会按 [rowsPerBlock] 把行拆成多个 TableBlock，交给 FlowLayout 自动分页。
+ *
+ * 整张表作为一个 [com.papermill.app.core.pdf.layout.blocks.TableBlock] 交给
+ * FlowLayout。**不再按固定行数预切**：v0.7.4 起表格能在行边界处按剩余高度
+ * 自行劈开，预切只会让同一页里出现好几个重复表头。
  */
 data class PaperTable(
     val headers: List<String>,
     val weights: List<Float>,
     val rows: List<List<String>>,
-    val rowsPerBlock: Int = 18,
 )
 
 data class PaperSection(

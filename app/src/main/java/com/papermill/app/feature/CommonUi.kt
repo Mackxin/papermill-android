@@ -25,6 +25,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.ChevronLeft
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -85,15 +86,37 @@ fun AppTopBar(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (onBack != null) {
+            // 触摸区 48dp、视觉圆形 38dp：原来点击热区只有一个 38dp 的圆，边缘容易点空。
+            // 另外背景必须画在阴影之后 —— 顺序反了阴影会按矩形重画，圆形按钮会露出方角。
+            val backInteraction = remember { MutableInteractionSource() }
             Box(
                 Modifier
-                    .size(38.dp)
-                    .background(PaperColors.Surface, CircleShape)
-                    .shadow(4.dp, CircleShape)
-                    .clickable { onBack() },
+                    .size(48.dp)
+                    .clickable(
+                        interactionSource = backInteraction,
+                        indication = null,
+                    ) { onBack() },
                 contentAlignment = Alignment.Center,
-            ) { Text("‹", fontSize = 24.sp, color = PaperColors.OnSurface) }
-            Spacer(Modifier.width(12.dp))
+            ) {
+                Box(
+                    Modifier
+                        .size(38.dp)
+                        .shadow(3.dp, CircleShape)
+                        .clip(CircleShape)
+                        .background(PaperColors.Surface),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    // 之前用一个「‹」字符充当箭头，字体里的字形在圆形里天然偏上偏右，
+                    // 换成矢量图标，居中由 Icon 自己保证。
+                    Icon(
+                        Icons.Rounded.ChevronLeft,
+                        contentDescription = "返回",
+                        tint = PaperColors.OnSurface,
+                        modifier = Modifier.size(24.dp),
+                    )
+                }
+            }
+            Spacer(Modifier.width(8.dp))
         }
         Column(Modifier.weight(1f)) {
             Text(
@@ -137,17 +160,46 @@ fun StickyBar(content: @Composable RowScope.() -> Unit) {
  *
  * 用户明确要求「tab 栏不需要图标」——去掉图标后整条更矮更安静，
  * 选中态靠胶囊底色 + 字重变化表达，比图标+文字的双行更利落。
+ *
+ * v0.7.4 起做成**悬浮玻璃条**：整条盖在内容之上（不再占布局位），
+ * 半透明底 + 顶部高光描边 + 大阴影，滚动内容会从它背后穿过去。
+ * Android 没有能模糊「背后内容」的公开 API（Modifier.blur 只模糊自己），
+ * 所以玻璃感靠三件事凑：低透明度、上亮下暗的描边、以及背后真的透出内容。
  */
 @Composable
-fun FloatingDock(state: AppState, onSelect: (NavTab) -> Unit) {
-    val shape = RoundedCornerShape(24.dp)
+fun FloatingDock(
+    state: AppState,
+    modifier: Modifier = Modifier,
+    onSelect: (NavTab) -> Unit,
+) {
+    val shape = RoundedCornerShape(26.dp)
     Row(
-        Modifier
+        modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 8.dp)
-            .shadow(14.dp, shape)
+            .shadow(18.dp, shape)
             .clip(shape)
-            .background(PaperColors.Surface)
+            .background(
+                // 上亮下暗的极浅渐变，比纯平涂更像一块玻璃。
+                // 透明度不能太低：Android 没有「模糊背后内容」的公开 API，
+                // 0.66 那版透过来的卡片文字会和 tab 文字抢视线，压到 0.80 才算能看清。
+                Brush.verticalGradient(
+                    listOf(
+                        PaperColors.Surface.copy(alpha = 0.92f),
+                        PaperColors.Surface.copy(alpha = 0.80f),
+                    )
+                )
+            )
+            .border(
+                width = 1.dp,
+                brush = Brush.verticalGradient(
+                    listOf(
+                        Color.White.copy(alpha = 0.9f),
+                        Color.White.copy(alpha = 0.2f),
+                    )
+                ),
+                shape = shape,
+            )
             .padding(horizontal = 6.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

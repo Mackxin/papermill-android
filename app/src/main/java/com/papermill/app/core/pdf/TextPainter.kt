@@ -1,6 +1,7 @@
 package com.papermill.app.core.pdf
 
 import android.graphics.Color
+import android.graphics.DashPathEffect
 import android.graphics.Paint
 import android.graphics.Typeface
 import android.util.LruCache
@@ -61,6 +62,26 @@ class TextPainter {
         strokeWidth = width
     }
 
+    /**
+     * 虚线画笔：田字格 / 米字格的十字与斜线辅助线用它。
+     *
+     * 实线 0.4pt 浅灰在 PDF 里几乎等于没有（1.5 倍预览时只有 0.6px，
+     * 抗锯齿一糊就全白了），学生纸上的辅助线本来就该是虚线 —— 既不抢笔画，
+     * 又能让人一眼看出这是「田」不是空方格。
+     */
+    fun dashPaint(
+        width: Float = 0.55f,
+        color: Int = 0xFF9C9C9C.toInt(),
+        dash: Float = 2.4f,
+        gap: Float = 2.4f,
+    ): Paint = Paint().apply {
+        isAntiAlias = true
+        this.color = color
+        style = Paint.Style.STROKE
+        strokeWidth = width
+        pathEffect = DashPathEffect(floatArrayOf(dash, gap), 0f)
+    }
+
     fun measure(text: String, paint: Paint): Float {
         val key = "${paint.textSize}|${paint.typeface}|$text"
         measureCache.get(key)?.let { return it }
@@ -82,10 +103,13 @@ class TextPainter {
     /**
      * 按宽度折行，逐字推进。
      *
-     * 两个中文排版必须处理的细节：
+     * 三个排版必须处理的细节：
      *  1. **避头尾**：`，。、；：？！）》」` 不能出现在行首。发现断点会落在禁则字符上时，
      *     多吞一个字（宁可稍微溢出几个 pt，也不要出现"一行开头是个句号"）。
-     *  2. 显式换行符 `\n` 强制断行（题干里偶有多行）。
+     *  2. **英文不劈词**：逐字推进天生会把 `worst` 断成 `w` + `orst`，
+     *     语法表、音标表的例词全是英文，断在词中间比溢出还难看。
+     *     断点两侧都是字母/数字时往前退到词边界；单个词比整行还长才允许硬断。
+     *  3. 显式换行符 `\n` 强制断行（题干里偶有多行）。
      */
     fun wrap(text: String, paint: Paint, maxWidth: Float): List<String> {
         if (text.isEmpty()) return listOf("")
@@ -107,6 +131,13 @@ class TextPainter {
                 }
                 len = (len - 1).coerceAtLeast(1)
 
+                // 英文不劈词：断点前一个字符和断点后一个字符同属一个词 → 往前退
+                while (len > 1 && i + len < para.length &&
+                    isWordChar(para[i + len - 1]) && isWordChar(para[i + len])
+                ) {
+                    len--
+                }
+
                 // 避头：行首不能是这些标点 → 把下一个字符也拉进本行
                 while (i + len < para.length && NO_LINE_START.indexOf(para[i + len]) >= 0) {
                     len++
@@ -119,6 +150,10 @@ class TextPainter {
         }
         return if (out.isEmpty()) listOf("") else out
     }
+
+    /** 组成英文单词的字符：字母、数字、词内撇号（don't）、词内连字符算可断点 */
+    private fun isWordChar(c: Char): Boolean =
+        c in 'a'..'z' || c in 'A'..'Z' || c in '0'..'9' || c == '\''
 
     private companion object {
         /** 不能出现在行首的字符 */

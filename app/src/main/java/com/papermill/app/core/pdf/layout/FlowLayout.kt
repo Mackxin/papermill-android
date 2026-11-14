@@ -70,11 +70,26 @@ class FlowLayout(
             colUsed.fill(0f)
         }
 
-        for (block in blocks) {
+        // 队列而不是 for 循环：拆分出来的「后半截」要插回队首接着排
+        val queue = ArrayDeque<Block>(blocks.size + 4)
+        queue.addAll(blocks)
+
+        while (queue.isNotEmpty()) {
+            val block = queue.removeFirst()
             if (block.fullWidth) {
                 val h = block.measure(tp, contentW)
-                // 标题和它后面至少一道题应尽量同页：只有当前页已有内容才翻
-                if (items.isNotEmpty() && y + h > cap + 0.5f) flushPage()
+                if (y + h > cap + 0.5f) {
+                    // 当前页放不下整块：先问它能不能按剩余高度切一段，避免页尾留白
+                    val parts = splitToFit(block, tp, contentW, cap - y)
+                    if (parts != null) {
+                        items.add(Placed(parts.first, 0f, y, contentW))
+                        queue.addFirst(parts.second)
+                        flushPage()
+                        continue
+                    }
+                    // 切不动（一道题、标题）才按老规则：只有本页已有内容才翻页
+                    if (items.isNotEmpty()) flushPage()
+                }
                 items.add(Placed(block, 0f, y, contentW))
                 y += h
                 segTop = y
@@ -106,6 +121,24 @@ class FlowLayout(
 
         if (items.isNotEmpty()) pages.add(Page(items))
         return pages.ifEmpty { listOf(Page(emptyList())) }
+    }
+
+    /**
+     * 试着把块切一段塞进 [avail] 高度。
+     *
+     * 只有 [SplittableBlock] 能切；切出来的前半截必须真的非空，
+     * 否则返回 null 让调用方翻页 —— 否则 while 循环原地打转。
+     */
+    private fun splitToFit(
+        block: Block,
+        tp: TextPainter,
+        width: Float,
+        avail: Float,
+    ): Pair<Block, Block>? {
+        if (block !is SplittableBlock || avail <= 0f) return null
+        val parts = block.split(tp, width, avail) ?: return null
+        if (parts.first.measure(tp, width) <= 0f) return null
+        return parts
     }
 
     private fun capFor(pageIndex: Int): Float =

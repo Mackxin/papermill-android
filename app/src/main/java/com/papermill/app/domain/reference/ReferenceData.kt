@@ -31,7 +31,6 @@ object ReferenceData {
             headers = headers,
             weights = listOf(0.7f) + List(9) { 1f },
             rows = rows,
-            rowsPerBlock = 9,
         )
     }
 
@@ -62,7 +61,6 @@ object ReferenceData {
             headers = listOf("类别", "1", "2", "3", "4", "5", "6"),
             weights = listOf(1.6f) + List(6) { 1f },
             rows = rows,
-            rowsPerBlock = 18,
         )
     }
 
@@ -87,7 +85,6 @@ object ReferenceData {
             listOf("单价", "总价 = 单价 × 数量"),
             listOf("百分数", "百分数 = 部分 ÷ 整体 × 100%"),
         ),
-        rowsPerBlock = 18,
     )
 
     private fun juniorMath(): PaperTable = PaperTable(
@@ -109,7 +106,6 @@ object ReferenceData {
             listOf("n 边形内角和", "(n - 2) × 180°"),
             listOf("平均数", "x̄ = (x₁+x₂+…+xₙ) / n"),
         ),
-        rowsPerBlock = 18,
     )
 
     private fun physics(): PaperTable = PaperTable(
@@ -132,7 +128,6 @@ object ReferenceData {
             listOf("电功率", "P = UI = I²R", "W"),
             listOf("焦耳定律", "Q = I²Rt", "J"),
         ),
-        rowsPerBlock = 18,
     )
 
     private fun chemistry(): PaperTable = PaperTable(
@@ -152,7 +147,6 @@ object ReferenceData {
             listOf("溶液酸碱度", "pH<7 酸性；pH=7 中性；pH>7 碱性"),
             listOf("相对原子质量", "H 1　C 12　N 14　O 16　Na 23　Mg 24　S 32　Cl 35.5　Ca 40　Cu 64"),
         ),
-        rowsPerBlock = 18,
     )
 
     private fun irregularVerbs(): PaperTable = PaperTable(
@@ -185,7 +179,6 @@ object ReferenceData {
             listOf("tell", "told", "told", "告诉"),
             listOf("write", "wrote", "written", "写"),
         ),
-        rowsPerBlock = 20,
     )
 
     // ---------------------------------------------------------------- v0.7.0
@@ -201,7 +194,6 @@ object ReferenceData {
             headers = listOf("音标", "类别", "例词"),
             weights = listOf(0.8f, 1.1f, 2.6f),
             rows = rows,
-            rowsPerBlock = 24,
         )
     }
 
@@ -214,7 +206,6 @@ object ReferenceData {
             headers = listOf("语法点", "规则与例句"),
             weights = listOf(1.1f, 4f),
             rows = rows,
-            rowsPerBlock = 8,
         )
     }
 
@@ -236,7 +227,6 @@ object ReferenceData {
             headers = listOf("年级", "1", "2", "3", "4", "5"),
             weights = listOf(0.9f) + List(5) { 1.2f },
             rows = rows,
-            rowsPerBlock = 20,
         )
     }
 
@@ -258,7 +248,6 @@ object ReferenceData {
             headers = listOf("年级", "单词", "释义", "单词", "释义"),
             weights = listOf(0.8f, 1.3f, 1f, 1.3f, 1f),
             rows = rows,
-            rowsPerBlock = 22,
         )
     }
 
@@ -273,7 +262,6 @@ object ReferenceData {
             headers = listOf("年级", "核心知识点"),
             weights = listOf(0.9f, 4.4f),
             rows = rows,
-            rowsPerBlock = 18,
         )
     }
 
