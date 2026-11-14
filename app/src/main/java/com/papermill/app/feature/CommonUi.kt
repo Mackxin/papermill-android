@@ -1,8 +1,5 @@
 package com.papermill.app.feature
 
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -10,6 +7,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
@@ -17,6 +15,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -30,7 +29,6 @@ import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -46,10 +44,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.LineBreak
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.papermill.app.core.design.PaperColors
 import com.papermill.app.core.design.PaperDimens
+import kotlin.math.abs
+import kotlin.math.roundToInt
 
 /**
  * 公共组件 v3：现代卡片 + 胶囊 chip + 渐变主按钮 + 悬浮 dock。
@@ -166,6 +167,16 @@ fun StickyBar(content: @Composable RowScope.() -> Unit) {
     )
 }
 
+/** dock 里四个页签的顺序与文字（顺序必须和 Screens.TAB_ORDER 一致） */
+private val DOCK_TABS = listOf(
+    "出卷" to NavTab.HOME,
+    "打印纸" to NavTab.REFERENCE,
+    "错题本" to NavTab.MISTAKES,
+    "更多" to NavTab.MORE,
+)
+
+private val DockItemH = 42.dp
+
 /**
  * 悬浮胶囊 dock：4 个页签，纯文字（不放图标），选中项淡紫胶囊 + 主色字。
  *
@@ -177,16 +188,25 @@ fun StickyBar(content: @Composable RowScope.() -> Unit) {
  * 半透明会透出下面滚动的卡片文字，和 tab 文字抢视线；
  * 而且 Android 没有能模糊「背后内容」的公开 API（Modifier.blur 只模糊自己），
  * 真玻璃效果凑不出来，只能靠低透明度假装，索性默认关掉、想要的人自己开。
+ *
+ * v0.10.1 修「胶囊不跟手」：原来胶囊的存在与否挂在一个**离散**状态上
+ * （`navTab` / `pager.currentPage`，页面越过半页才变），再套一段 160ms 淡入。
+ * 页面已经拖了一半，胶囊还钉在原位，过线那一下才「啪」地跳过去 —— 看着就像没动。
+ * 现在改成由调用方喂**连续页位置**（`currentPage + currentPageOffsetFraction`），
+ * 胶囊按 `slot * position` 平移：手指拖多少，它就走多少；松手后的回弹/自动翻页动画
+ * 也会被同一个公式带着走，不再有第二种节奏。
  */
 @Composable
 fun FloatingDock(
     state: AppState,
     modifier: Modifier = Modifier,
+    /** 连续页位置：0f 第一页、1.5f 在一二页正中间、3f 最后一页。拖动时逐帧变 */
+    position: () -> Float,
     onSelect: (NavTab) -> Unit,
 ) {
     val shape = RoundedCornerShape(26.dp)
     val glass = state.dockGlass
-    Row(
+    BoxWithConstraints(
         modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 8.dp)
@@ -225,29 +245,43 @@ fun FloatingDock(
                 }
             )
             .padding(horizontal = 6.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
     ) {
-        DockItem("出卷", state.navTab == NavTab.HOME) { onSelect(NavTab.HOME) }
-        DockItem("打印纸", state.navTab == NavTab.REFERENCE) { onSelect(NavTab.REFERENCE) }
-        DockItem("错题本", state.navTab == NavTab.MISTAKES) { onSelect(NavTab.MISTAKES) }
-        DockItem("更多", state.navTab == NavTab.MORE) { onSelect(NavTab.MORE) }
+        val slot = maxWidth / DOCK_TABS.size
+
+        // 滑块：位置放在 Modifier.offset 的 lambda 里读 —— 那个 lambda 跑在**布局阶段**，
+        // 拖动时只有这个节点的位置被重算，不会把整条 dock（含 4 段文字）逐帧重组。
+        Box(
+            Modifier
+                .align(Alignment.CenterStart)
+                .offset { IntOffset((slot.toPx() * position()).roundToInt(), 0) }
+                .width(slot)
+                .height(DockItemH)
+                .clip(RoundedCornerShape(18.dp))
+                .background(PaperColors.PrimaryContainer)
+        )
+
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            DOCK_TABS.forEachIndexed { i, (label, tab) ->
+                DockItem(
+                    label = label,
+                    // 三角权重：离哪页最近就亮到几分。拖到两页正中间时两个都是 0.5、
+                    // 胶囊正压在中间，眼睛读到的是「正在过去」而不是「已经过去了」。
+                    emphasis = { (1f - abs(position() - i)).coerceIn(0f, 1f) },
+                ) { onSelect(tab) }
+            }
+        }
     }
 }
 
 @Composable
 private fun RowScope.DockItem(
     label: String,
-    selected: Boolean,
+    emphasis: () -> Float,
     onClick: () -> Unit,
 ) {
-    // 定长 160ms 过渡。默认 spring 在快速连点 / 滑动切页时会有一段拖尾，
-    // 手感上就像「点下去要顿一下才亮起来」。
-    val t by animateFloatAsState(
-        targetValue = if (selected) 1f else 0f,
-        animationSpec = tween(durationMillis = 160, easing = FastOutSlowInEasing),
-        label = "dock-$label",
-    )
-    val bg = lerp(Color.Transparent, PaperColors.PrimaryContainer, t)
+    // 不再自己画底：底色统一由上面那块跟着滑的胶囊负责，
+    // 两层叠着画会在胶囊跨在两格中间时出现双层半透明，看着发脏。
+    val t = emphasis()
     val fg = lerp(PaperColors.OnSurfaceVariant, PaperColors.Primary, t)
     // 字重只在过半后切一次，避免每帧换字体尺寸触发重新排版
     val weight = if (t > 0.5f) FontWeight.Bold else FontWeight.Normal
@@ -258,9 +292,8 @@ private fun RowScope.DockItem(
     Box(
         Modifier
             .weight(1f)
-            .height(42.dp)
+            .height(DockItemH)
             .clip(RoundedCornerShape(18.dp))
-            .background(bg)
             .clickable(
                 interactionSource = interaction,
                 indication = null,

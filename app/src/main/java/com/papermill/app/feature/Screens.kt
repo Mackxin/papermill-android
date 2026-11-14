@@ -340,6 +340,13 @@ fun PaperMillRoot(state: AppState) {
         FloatingDock(
             state = state,
             modifier = Modifier.align(Alignment.BottomCenter),
+            // 连续页位置：拖动时这里是 0.37 这种小数，不是整数页码。
+            // dock 拿它做平移，胶囊才会跟着手指一起走。
+            // 用 lambda 而不是直接求值：读状态的动作被推迟到 dock 内部，
+            // 逐帧变化只会让 dock 自己失效，不会把整个页面（含 pager 内容）重组一遍。
+            position = {
+                pager.currentPage + pager.currentPageOffsetFraction
+            },
         ) { tab -> state.goTab(tab) }
     }
 }
