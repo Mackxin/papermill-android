@@ -57,6 +57,7 @@ import androidx.compose.ui.unit.sp
 import com.papermill.app.core.design.PaperColors
 import com.papermill.app.core.design.PaperDimens
 import com.papermill.app.core.update.UpdateChecker
+import com.papermill.app.domain.content.ContentCatalog
 import com.papermill.app.domain.generate.AnswerMode
 import com.papermill.app.domain.generate.GeneratorRegistry
 import com.papermill.app.domain.generate.GradeProfiles
@@ -332,6 +333,41 @@ private fun HomeScreen(state: AppState, scope: CoroutineScope) {
         }
     }
 
+    // 特色入口：自由组合。紧贴 Hero 下方，点整张卡进面板。
+    // 这是本 App 区别于「点一下就出卷」的题库类 App 的核心 —— 题由你配，不由我们限死。
+    Spacer(Modifier.height(12.dp))
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .shadow(Surface3.cardShadow, Surface3.shape)
+            .clip(Surface3.shape)
+            .background(PaperColors.Surface)
+            .clickable { state.screen = Screen.CREATE }
+            .padding(16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "自由组合出题",
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = PaperColors.OnSurface,
+                )
+                Spacer(Modifier.width(8.dp))
+                StatChip("特色", PaperColors.Accent, PaperColors.AccentContainer)
+            }
+            Spacer(Modifier.height(5.dp))
+            Text(
+                "${GeneratorRegistry.count} 种题型随便挑：智能配比、搜索、一键加题，题量自己定",
+                fontSize = PaperDimens.CaptionSp,
+                color = PaperColors.OnSurfaceVariant,
+                lineHeight = 17.sp,
+            )
+        }
+        Text("›", fontSize = 22.sp, color = PaperColors.Primary)
+    }
+
     Spacer(Modifier.height(12.dp))
     SectionLabel("01", "年级", "小学 1–6 / 初中 7–9")
     Spacer(Modifier.height(8.dp))
@@ -377,40 +413,78 @@ private fun HomeScreen(state: AppState, scope: CoroutineScope) {
         Spacer(Modifier.height(PaperDimens.GapSmall))
     }
 
-    // v0.5.0 本版新增：这两张卡不依赖「当前选的科目」，点一下自动切科目并直接出卷。
-    // 低年级没开英语、初中不开主题识字，按年级隐藏对应卡片。
+    // 专项卷：不依赖当前勾选的科目，点一下自动切科目并直接出卷。
+    // 低年级没开英语，按年级隐藏对应卡片。
     Spacer(Modifier.height(12.dp))
-    SectionLabel("04", "本版新增", "英语趣味练 · 6 大场景主题识字")
+    SectionLabel("04", "专项卷", "英语 · 音标语法 · 课本同步 · 主题识字")
     Spacer(Modifier.height(8.dp))
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(PaperDimens.GapSmall)) {
-        if (state.grade >= 3) {
-            PresetCard(
-                title = "英语趣味练",
-                desc = "单词拼装 + 连词成句 + 选词填空，句子自编",
-                meta = "${PaperTemplates.englishFunCounts.values.sum()} 题 · 直接出卷",
-                onClick = {
-                    scope.launch {
-                        state.generateForSubject(Subject.ENGLISH, PaperTemplates.englishFunCounts)
-                    }
-                },
-                modifier = Modifier.weight(1f),
+
+    val specials = ArrayList<Triple<String, String, String>>(4)
+    if (state.grade >= 3) {
+        specials.add(
+            Triple(
+                "英语趣味练",
+                "单词拼装 + 连词成句 + 选词填空，句子自编",
+                "${PaperTemplates.englishFunCounts.values.sum()} 题 · 直接出卷",
             )
-        }
-        if (state.grade <= 6) {
-            PresetCard(
-                title = "主题识字卷",
-                desc = "超市 / 学校 / 交通…看拼音写词 + 归类",
-                meta = "${PaperTemplates.themeLiteracyCounts.values.sum()} 题 · 直接出卷",
-                onClick = {
-                    scope.launch {
-                        state.generateForSubject(Subject.CHINESE, PaperTemplates.themeLiteracyCounts)
-                    }
-                },
-                modifier = Modifier.weight(1f),
+        )
+        specials.add(
+            Triple(
+                "音标语法卷",
+                "音标辨认 + 看音标写单词 + 语法选择",
+                "${PaperTemplates.ipaGrammarCounts.values.sum()} 题 · 直接出卷",
             )
+        )
+    }
+    specials.add(
+        Triple(
+            "课本同步卷",
+            "课本生字注音 + 核心单词默写，按年级抽",
+            "${PaperTemplates.textbookCounts.values.sum()} 题 · 直接出卷",
+        )
+    )
+    if (state.grade <= 6) {
+        specials.add(
+            Triple(
+                "主题识字卷",
+                "超市 / 学校 / 交通…看拼音写词 + 归类",
+                "${PaperTemplates.themeLiteracyCounts.values.sum()} 题 · 直接出卷",
+            )
+        )
+    }
+
+    specials.chunked(2).forEach { row ->
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(PaperDimens.GapSmall)) {
+            row.forEach { (title, desc, metaText) ->
+                PresetCard(
+                    title = title,
+                    desc = desc,
+                    meta = metaText,
+                    onClick = {
+                        scope.launch {
+                            when (title) {
+                                "英语趣味练" -> state.generateForSubject(
+                                    Subject.ENGLISH, PaperTemplates.englishFunCounts,
+                                )
+                                "音标语法卷" -> state.generateForSubject(
+                                    Subject.ENGLISH, PaperTemplates.ipaGrammarCounts,
+                                )
+                                "课本同步卷" -> state.generateForSubjects(
+                                    listOf(Subject.CHINESE, Subject.ENGLISH),
+                                    PaperTemplates.textbookCounts,
+                                )
+                                else -> state.generateForSubject(
+                                    Subject.CHINESE, PaperTemplates.themeLiteracyCounts,
+                                )
+                            }
+                        }
+                    },
+                    modifier = Modifier.weight(1f),
+                )
+            }
+            if (row.size == 1) Spacer(Modifier.weight(1f))
         }
-        // 3–6 年级两张刚好占满一行；其余年级只有一张，补位保持等宽
-        if (state.grade !in 3..6) Spacer(Modifier.weight(1f))
+        Spacer(Modifier.height(PaperDimens.GapSmall))
     }
 
     Spacer(Modifier.height(10.dp))
@@ -567,7 +641,7 @@ private fun CreateScreen(state: AppState, scope: CoroutineScope) {
         Field3(
             value = state.typeQuery,
             onValueChange = { state.typeQuery = it },
-            placeholder = "搜索题型，比如「口算」「拼音」",
+            placeholder = "搜索题型，比如「音标」「语法」",
             leadingIcon = Icons.Rounded.Search,
         )
         Spacer(Modifier.height(10.dp))
@@ -998,14 +1072,23 @@ private fun ReferenceScreen(state: AppState, scope: CoroutineScope) {
     }
 
     Spacer(Modifier.height(PaperDimens.Gap))
-    SectionLabel("01", "学生必备速查表", "${ReferenceData.sheets.size} 张 · 事实与公式")
-    Spacer(Modifier.height(PaperDimens.GapSmall))
-    SheetGrid(
-        items = ReferenceData.sheets,
-        titleOf = { it.title },
-        descOf = { it.subtitle },
-        metaOf = { "A4 · 立即打印" },
-    ) { sheet -> scope.launch { state.renderReference(sheet) } }
+    SectionLabel("01", "速查表", "${ReferenceData.sheets.size} 张 · 事实与公式")
+    ReferenceData.grouped.forEach { (group, list) ->
+        Spacer(Modifier.height(PaperDimens.GapSmall))
+        Text(
+            group,
+            fontSize = PaperDimens.LabelSp,
+            fontWeight = FontWeight.SemiBold,
+            color = PaperColors.OnSurface,
+            modifier = Modifier.padding(start = 2.dp, bottom = 8.dp),
+        )
+        SheetGrid(
+            items = list,
+            titleOf = { it.title },
+            descOf = { it.subtitle },
+            metaOf = { "A4 · 立即打印" },
+        ) { sheet -> scope.launch { state.renderReference(sheet) } }
+    }
 
     Spacer(Modifier.height(PaperDimens.Gap))
     SectionLabel("02", "练习纸", "${PracticeData.sheets.size} 张 · 格子铺满整页")
@@ -1136,6 +1219,10 @@ private fun masteryLabel(m: String) = when (m) {
 
 @Composable
 private fun MoreScreen(state: AppState, scope: CoroutineScope, onImport: () -> Unit) {
+    // 内置内容：数字全部当场从数据源算，不写死文案 —— 题库扩容后这里自动跟着变
+    ContentSummaryCard(state.bankSize)
+
+    Spacer(Modifier.height(PaperDimens.Gap))
     CardSection(title = "数据") {
         ListRow("试卷库", "${state.savedPapers.size} 张卷子") { state.screen = Screen.HISTORY }
         Divider()
@@ -1183,6 +1270,62 @@ private fun MoreScreen(state: AppState, scope: CoroutineScope, onImport: () -> U
             fontSize = PaperDimens.CaptionSp,
             color = PaperColors.OnSurfaceVariant,
         )
+    }
+}
+
+/**
+ * 「内置内容」总览卡。
+ *
+ * 用户问过「内置了什么要在 App 里有说明」—— 与其写一段会过期的描述，
+ * 不如把每一项的条数都从数据源实时算出来，再加一句人话解释这批内容是什么、来源边界在哪。
+ */
+@Composable
+private fun ContentSummaryCard(bankSize: Int) {
+    val entries = ContentCatalog.entries(bankSize)
+    val (typeCount, sheetCount, wordCount) = ContentCatalog.headline(bankSize)
+
+    CardSection(title = "内置内容", hint = "数字实时统计，随版本自动更新，不是写死的") {
+        Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+            HeadStat(typeCount, "出卷题型", Modifier.weight(1f))
+            HeadStat(sheetCount, "可打印纸张", Modifier.weight(1f))
+            HeadStat(wordCount, "内置字词音标", Modifier.weight(1f))
+        }
+        Spacer(Modifier.height(6.dp))
+        entries.forEachIndexed { i, e ->
+            if (i > 0) Divider()
+            Column(Modifier.fillMaxWidth().padding(vertical = 10.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        e.label,
+                        fontSize = PaperDimens.BodySp,
+                        fontWeight = FontWeight.Medium,
+                        color = PaperColors.OnSurface,
+                        modifier = Modifier.weight(1f),
+                    )
+                    StatChip(e.size)
+                }
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    e.note,
+                    fontSize = PaperDimens.TinySp,
+                    color = PaperColors.OnSurfaceVariant,
+                    lineHeight = 15.sp,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun HeadStat(value: String, label: String, modifier: Modifier = Modifier) {
+    Column(
+        modifier
+            .clip(RoundedCornerShape(14.dp))
+            .background(PaperColors.PrimaryContainer)
+            .padding(horizontal = 10.dp, vertical = 10.dp),
+    ) {
+        Text(value, fontSize = 19.sp, fontWeight = FontWeight.Bold, color = PaperColors.Primary)
+        Text(label, fontSize = 10.5.sp, color = PaperColors.OnSurfaceVariant, maxLines = 1)
     }
 }
 

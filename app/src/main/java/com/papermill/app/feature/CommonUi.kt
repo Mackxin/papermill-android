@@ -22,11 +22,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.AutoAwesome
-import androidx.compose.material.icons.rounded.Bookmarks
 import androidx.compose.material.icons.rounded.Close
-import androidx.compose.material.icons.rounded.MoreHoriz
-import androidx.compose.material.icons.rounded.Print
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -132,67 +128,56 @@ fun StickyBar(content: @Composable RowScope.() -> Unit) {
 }
 
 /**
- * 悬浮胶囊 dock：4 个页签，选中项淡紫胶囊 + 主色图标，切换有颜色过渡。
+ * 悬浮胶囊 dock：4 个页签，纯文字（不放图标），选中项淡紫胶囊 + 主色字。
  *
- * 用悬浮而不是贴边，是因为贴边 tab bar 会把内容区压得很闷；
- * 悬浮后内容可以从 dock 下方「穿过去」，滚动时视觉更轻。
+ * 用户明确要求「tab 栏不需要图标」——去掉图标后整条更矮更安静，
+ * 选中态靠胶囊底色 + 字重变化表达，比图标+文字的双行更利落。
  */
 @Composable
 fun FloatingDock(state: AppState, onSelect: (NavTab) -> Unit) {
-    val shape = RoundedCornerShape(28.dp)
+    val shape = RoundedCornerShape(24.dp)
     Row(
         Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 8.dp)
-            .shadow(16.dp, shape)
+            .shadow(14.dp, shape)
             .clip(shape)
             .background(PaperColors.Surface)
-            .padding(horizontal = 8.dp, vertical = 7.dp),
+            .padding(horizontal = 6.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        DockItem("出卷", Icons.Rounded.AutoAwesome, state.navTab == NavTab.HOME) {
-            onSelect(NavTab.HOME)
-        }
-        DockItem("打印纸", Icons.Rounded.Print, state.navTab == NavTab.REFERENCE) {
-            onSelect(NavTab.REFERENCE)
-        }
-        DockItem("错题本", Icons.Rounded.Bookmarks, state.navTab == NavTab.MISTAKES) {
-            onSelect(NavTab.MISTAKES)
-        }
-        DockItem("更多", Icons.Rounded.MoreHoriz, state.navTab == NavTab.MORE) {
-            onSelect(NavTab.MORE)
-        }
+        DockItem("出卷", state.navTab == NavTab.HOME) { onSelect(NavTab.HOME) }
+        DockItem("打印纸", state.navTab == NavTab.REFERENCE) { onSelect(NavTab.REFERENCE) }
+        DockItem("错题本", state.navTab == NavTab.MISTAKES) { onSelect(NavTab.MISTAKES) }
+        DockItem("更多", state.navTab == NavTab.MORE) { onSelect(NavTab.MORE) }
     }
 }
 
 @Composable
 private fun RowScope.DockItem(
     label: String,
-    icon: ImageVector,
     selected: Boolean,
     onClick: () -> Unit,
 ) {
     val t by animateFloatAsState(if (selected) 1f else 0f, label = "dock-$label")
-    val bg = lerp(Color.White, PaperColors.PrimaryContainer, t)
+    val bg = lerp(Color.Transparent, PaperColors.PrimaryContainer, t)
     val fg = lerp(PaperColors.OnSurfaceVariant, PaperColors.Primary, t)
+    val weight = if (t > 0.5f) FontWeight.Bold else FontWeight.Normal
 
-    Column(
+    Box(
         Modifier
             .weight(1f)
-            .clip(RoundedCornerShape(20.dp))
+            .height(42.dp)
+            .clip(RoundedCornerShape(18.dp))
             .background(bg)
-            .clickable { onClick() }
-            .padding(vertical = 7.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
+            .clickable { onClick() },
+        contentAlignment = Alignment.Center,
     ) {
-        Icon(icon, contentDescription = label, tint = fg, modifier = Modifier.size(22.dp))
-        Spacer(Modifier.height(3.dp))
         Text(
             label,
-            fontSize = 10.5.sp,
+            fontSize = 13.5.sp,
             color = fg,
-            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+            fontWeight = weight,
             maxLines = 1,
         )
     }
@@ -633,7 +618,15 @@ private fun SmallBtn(text: String, onClick: () -> Unit) {
     }
 }
 
-/** 分段控件：视图切换用，比一排 chip 更省地方 */
+/**
+ * 分段控件：视图切换用。
+ *
+ * 之前那版有两个坑，截图里就露馅了（选中块变成直角白块被灰框圈住）：
+ *  1. `Row` 忘了 `fillMaxWidth()`，内部又用 `weight(1f)` —— 无界宽度下 weight 退化，
+ *     子项尺寸算错，选中块的圆角裁切也跟着错位；
+ *  2. `shadow` 叠在 `background` 之后，阴影那一层会按矩形重新绘制，把圆角盖成直角。
+ * 现在：外层定宽 + 内层纯色对比（白 / 透明），不再用阴影，靠色差表达选中。
+ */
 @Composable
 fun Segmented(
     items: List<String>,
@@ -643,20 +636,20 @@ fun Segmented(
 ) {
     Row(
         modifier
-            .clip(RoundedCornerShape(16.dp))
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
             .background(PaperColors.SurfaceAlt)
-            .padding(4.dp),
+            .padding(3.dp),
     ) {
         items.forEachIndexed { i, label ->
             val on = i == selectedIndex
             Box(
                 Modifier
                     .weight(1f)
-                    .clip(RoundedCornerShape(13.dp))
+                    .height(38.dp)
+                    .clip(RoundedCornerShape(11.dp))
                     .background(if (on) PaperColors.Surface else Color.Transparent)
-                    .then(if (on) Modifier.shadow(2.dp, RoundedCornerShape(13.dp)) else Modifier)
-                    .clickable { onSelect(i) }
-                    .padding(vertical = 8.dp),
+                    .clickable { onSelect(i) },
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
@@ -664,6 +657,7 @@ fun Segmented(
                     fontSize = PaperDimens.LabelSp,
                     color = if (on) PaperColors.Primary else PaperColors.OnSurfaceVariant,
                     fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal,
+                    maxLines = 1,
                 )
             }
         }

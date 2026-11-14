@@ -63,10 +63,16 @@ object PaperRenderer {
         val bodyBlocks = ArrayList<Block>()
         val answerBlocks = ArrayList<Block>()
         var bodyColumns = 2
+        // 答案最长有多少字：带解析的语法题答案很长，四栏会把一句解析拆成好几行
+        var maxAnswerLen = 0
 
         doc.sections.forEach { section ->
             val target = if (section.isAnswer) answerBlocks else bodyBlocks
             target.add(SectionHeaderBlock(section.title))
+            // 答案流里 stem 就是「题号 + 答案（+解析）」，用它估长度即可
+            if (section.isAnswer) {
+                section.questions.forEach { q -> maxAnswerLen = maxOf(maxAnswerLen, q.stem.length) }
+            }
 
             val table = section.table
             if (table != null) {
@@ -102,7 +108,8 @@ object PaperRenderer {
             )
         }
 
-        // 答案页单独成流：本来就该另起一页，四栏小字更省纸
+        // 答案页单独成流：本来就该另起一页，四栏小字更省纸。
+        // 但如果答案里带解析（语法题那种），四栏会把一句话拆得七零八落，降到两栏。
         var firstAnswerPage = -1
         if (answerBlocks.isNotEmpty()) {
             firstAnswerPage = pages.size
@@ -111,7 +118,7 @@ object PaperRenderer {
                     contentW = g.contentW,
                     contentHFirst = contentHFirst,
                     contentHOther = contentHOther,
-                    columns = 4,
+                    columns = if (maxAnswerLen > 20) 2 else 4,
                     columnGap = COLUMN_GAP,
                     startsOnFirstPage = false,
                 ).layout(answerBlocks, tp)

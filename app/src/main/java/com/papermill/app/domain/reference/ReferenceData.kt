@@ -1,12 +1,17 @@
 package com.papermill.app.domain.reference
 
 import com.papermill.app.core.pdf.render.PaperTable
+import com.papermill.app.domain.content.Grammar
+import com.papermill.app.domain.content.Phonics
+import com.papermill.app.domain.content.Textbook
 
 data class ReferenceSheet(
     val id: String,
     val title: String,
     val subtitle: String,
     val table: PaperTable,
+    /** 界面按这个分组展示，避免 16 张表糊成一片 */
+    val group: String = "通用",
 )
 
 /**
@@ -183,15 +188,122 @@ object ReferenceData {
         rowsPerBlock = 20,
     )
 
+    // ---------------------------------------------------------------- v0.7.0
+
+    /** 48 个国际音标：符号是通用记音符号，例词是基础高频词 */
+    private fun phoneticTable(): PaperTable {
+        val rows = Phonics.kindOrder.flatMap { kind ->
+            Phonics.all.filter { it.kind == kind }.map { ph ->
+                listOf(ph.ipa, kind.label, ph.examples.joinToString(" / "))
+            }
+        }
+        return PaperTable(
+            headers = listOf("音标", "类别", "例词"),
+            weights = listOf(0.8f, 1.1f, 2.6f),
+            rows = rows,
+            rowsPerBlock = 24,
+        )
+    }
+
+    /** 语法速查表：一条规则一行，右侧带一个自编例句 */
+    private fun grammarTable(minGrade: Int, maxGrade: Int): PaperTable {
+        val rows = Grammar.pointsFor(minGrade, maxGrade).map {
+            listOf(it.name, "${it.rule}\n例：${it.example}")
+        }
+        return PaperTable(
+            headers = listOf("语法点", "规则与例句"),
+            weights = listOf(1.1f, 4f),
+            rows = rows,
+            rowsPerBlock = 8,
+        )
+    }
+
+    /** 课本生字表：一行放 5 组「字 拼音」，每个年级 4 行 */
+    private fun hanziTable(minGrade: Int, maxGrade: Int): PaperTable {
+        val rows = ArrayList<List<String>>()
+        for (g in minGrade..maxGrade) {
+            val items = Textbook.hanzi.filter { it.grade == g }
+            if (items.isEmpty()) continue
+            items.chunked(5).forEach { part ->
+                rows.add(
+                    listOf("${g} 年级") +
+                        part.map { "${it.hanzi}　${it.pinyin}" } +
+                        List(5 - part.size) { "" }
+                )
+            }
+        }
+        return PaperTable(
+            headers = listOf("年级", "1", "2", "3", "4", "5"),
+            weights = listOf(0.9f) + List(5) { 1.2f },
+            rows = rows,
+            rowsPerBlock = 20,
+        )
+    }
+
+    /** 课本核心词表：一行放 2 组「单词 / 释义」 */
+    private fun wordsTable(minGrade: Int, maxGrade: Int): PaperTable {
+        val rows = ArrayList<List<String>>()
+        for (g in minGrade..maxGrade) {
+            val items = Textbook.words.filter { it.grade == g }
+            if (items.isEmpty()) continue
+            items.chunked(2).forEach { part ->
+                rows.add(
+                    listOf("${g} 年级") +
+                        part.flatMap { listOf(it.en, it.zh) } +
+                        List((2 - part.size) * 2) { "" }
+                )
+            }
+        }
+        return PaperTable(
+            headers = listOf("年级", "单词", "释义", "单词", "释义"),
+            weights = listOf(0.8f, 1.3f, 1f, 1.3f, 1f),
+            rows = rows,
+            rowsPerBlock = 22,
+        )
+    }
+
+    /** 数学知识点：一个年级一行，知识点用顿号连起来 */
+    private fun mathPointTable(minGrade: Int, maxGrade: Int): PaperTable {
+        val rows = (minGrade..maxGrade).mapNotNull { g ->
+            val items = Textbook.mathPoints.filter { it.grade == g }
+            if (items.isEmpty()) null
+            else listOf("$g 年级", items.joinToString("、") { it.point })
+        }
+        return PaperTable(
+            headers = listOf("年级", "核心知识点"),
+            weights = listOf(0.9f, 4.4f),
+            rows = rows,
+            rowsPerBlock = 18,
+        )
+    }
+
     val sheets: List<ReferenceSheet> = listOf(
-        ReferenceSheet("mul99", "九九乘法表", "45 条乘法口诀 · 建议打印张贴", multiplyTable()),
-        ReferenceSheet("pinyin", "汉语拼音音节表", "声母 23 · 韵母 24 · 整体认读 16", pinyinTable()),
-        ReferenceSheet("math_primary", "小学数学公式表", "图形 / 运算 / 数量关系", primaryMath()),
-        ReferenceSheet("math_junior", "初中数学公式表", "代数 / 几何 / 函数", juniorMath()),
-        ReferenceSheet("physics", "初中物理公式表", "力学 / 热学 / 电学", physics()),
-        ReferenceSheet("chemistry", "初中化学必备表", "化合价 / 方程式 / 活动性顺序", chemistry()),
-        ReferenceSheet("verbs", "英语不规则动词表", "原形 / 过去式 / 过去分词", irregularVerbs()),
+        // —— 英语专项
+        ReferenceSheet("phonetic", "英语国际音标表", "48 音素 · 20 元音 + 28 辅音", phoneticTable(), "英语专项"),
+        ReferenceSheet("grammar_primary", "英语语法速查表·小学", "3–6 年级 15 个语法点", grammarTable(3, 6), "英语专项"),
+        ReferenceSheet("grammar_junior", "英语语法速查表·初中", "7–9 年级 7 个语法点", grammarTable(7, 9), "英语专项"),
+        ReferenceSheet("verbs", "英语不规则动词表", "原形 / 过去式 / 过去分词", irregularVerbs(), "英语专项"),
+        // —— 语文基础
+        ReferenceSheet("pinyin", "汉语拼音音节表", "声母 23 · 韵母 24 · 整体认读 16", pinyinTable(), "语文基础"),
+        // —— 数学与理科
+        ReferenceSheet("mul99", "九九乘法表", "45 条乘法口诀 · 建议打印张贴", multiplyTable(), "数学与理科"),
+        ReferenceSheet("math_primary", "小学数学公式表", "图形 / 运算 / 数量关系", primaryMath(), "数学与理科"),
+        ReferenceSheet("math_junior", "初中数学公式表", "代数 / 几何 / 函数", juniorMath(), "数学与理科"),
+        ReferenceSheet("physics", "初中物理公式表", "力学 / 热学 / 电学", physics(), "数学与理科"),
+        ReferenceSheet("chemistry", "初中化学必备表", "化合价 / 方程式 / 活动性顺序", chemistry(), "数学与理科"),
+        // —— 课本同步
+        ReferenceSheet("tb_hanzi_primary", "课本生字表·小学", "1–6 年级 120 字 · 带拼音", hanziTable(1, 6), "课本同步"),
+        ReferenceSheet("tb_hanzi_junior", "课本生字表·初中", "7–9 年级 60 字 · 带拼音", hanziTable(7, 9), "课本同步"),
+        ReferenceSheet("tb_words_primary", "课本核心词表·小学", "3–6 年级 80 词", wordsTable(3, 6), "课本同步"),
+        ReferenceSheet("tb_words_junior", "课本核心词表·初中", "7–9 年级 60 词", wordsTable(7, 9), "课本同步"),
+        ReferenceSheet("tb_math_primary", "小学数学知识点", "1–6 年级 48 条", mathPointTable(1, 6), "课本同步"),
+        ReferenceSheet("tb_math_junior", "初中数学知识点", "7–9 年级 24 条", mathPointTable(7, 9), "课本同步"),
     )
+
+    /** 按分组切好，顺序就是上面列表里第一次出现的顺序 */
+    val grouped: List<Pair<String, List<ReferenceSheet>>> by lazy {
+        sheets.groupBy { it.group }.toList()
+    }
 
     fun byId(id: String): ReferenceSheet? = sheets.firstOrNull { it.id == id }
 }

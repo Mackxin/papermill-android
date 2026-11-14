@@ -83,6 +83,18 @@ enum class QuestionType(
     // 带 A/B/C 三个选项的长题干必须占整行：半栏会把选项折得七零八落
     THEME_SORT("主题·找不同类", 1),
     THEME_GROUP("主题·归类填空", 1),
+
+    // v0.7.0 英语音标：48 个国际音标（通用记音符号），例词全为基础高频词
+    // 四个选项都是音标符号，半栏会把「A. /ɒ/」折成两行，必须整行
+    PHONETIC_PICK("音标辨认", 1),
+    PHONETIC_WRITE("看音标写单词", 2),
+
+    // v0.7.0 英语语法：22 个语法点、43 道自编语法题，选项打乱后出选择题
+    GRAMMAR("语法选择", 1),
+
+    // v0.7.0 课本同步：按年级分段的生字表 / 核心词表，抽测用
+    TEXTBOOK_HANZI("课本生字注音", 4),
+    TEXTBOOK_WORD("课本单词默写", 4),
 }
 
 enum class AnswerMode(val label: String) {

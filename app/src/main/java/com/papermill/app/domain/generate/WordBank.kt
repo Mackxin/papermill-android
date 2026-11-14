@@ -120,4 +120,8 @@ object WordBank {
         val offset = if (firstNew > 0) firstNew % pool.size else 0
         return pool.drop(offset) + pool.take(offset)
     }
+
+    /** 关于页实时统计用 */
+    val chineseCount: Int get() = chinese.size
+    val englishCount: Int get() = english.size
 }

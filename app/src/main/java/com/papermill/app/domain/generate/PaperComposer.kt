@@ -150,6 +150,19 @@ object PaperTemplates {
         QuestionType.THEME_GROUP to 6,
     )
 
+    /** v0.7.0 音标与语法专项：48 音素 + 43 道自编语法题 */
+    val ipaGrammarCounts: Map<QuestionType, Int> = mapOf(
+        QuestionType.PHONETIC_PICK to 8,
+        QuestionType.PHONETIC_WRITE to 6,
+        QuestionType.GRAMMAR to 10,
+    )
+
+    /** v0.7.0 课本同步专项：生字注音 + 单词默写，抽的是按年级分段的清单 */
+    val textbookCounts: Map<QuestionType, Int> = mapOf(
+        QuestionType.TEXTBOOK_HANZI to 14,
+        QuestionType.TEXTBOOK_WORD to 14,
+    )
+
     fun forSelection(grade: Int, subject: Subject): List<Preset> = forSelection(grade, listOf(subject))
 
     fun forSelection(grade: Int, subjects: List<Subject>): List<Preset> {
@@ -178,6 +191,9 @@ object PaperTemplates {
             // v0.5.0：英语 3 题型 / 主题识字 3 题型，词表句式全部自编
             Preset("english_fun", "英语趣味练", "单词拼装 + 连词成句 + 选词填空", englishFunCounts),
             Preset("theme_literacy", "主题识字卷", "超市 / 学校 / 交通…6 大生活场景", themeLiteracyCounts),
+            // v0.7.0：内置音标 / 语法 / 课本同步清单
+            Preset("ipa_grammar", "音标语法卷", "音标辨认 + 看音标写单词 + 语法选择", ipaGrammarCounts),
+            Preset("textbook", "课本同步卷", "课本生字注音 + 课本单词默写", textbookCounts),
             Preset("words", "字词默写", "看拼音写词语 + 补全", mapOf(
                 QuestionType.PINYIN to 16, QuestionType.DICTATION to 12, QuestionType.HANZI to 8,
                 QuestionType.ENGLISH_WORD to 24,

@@ -91,7 +91,13 @@ object GeneratorRegistry {
         WordScrambleGenerator, SentenceOrderGenerator, ClozeGenerator,
         // v0.5.0 主题识字（自编词库 + 校对过的拼音）
         ThemePinyinGenerator, ThemeSortGenerator, ThemeGroupGenerator,
+        // v0.7.0 音标 / 语法 / 课本同步（内置内容，见 domain/content）
+        PhoneticPickGenerator, PhoneticWriteGenerator, GrammarGenerator,
+        TextbookHanziGenerator, TextbookWordGenerator,
     )
+
+    /** 关于页实时统计题型总数 */
+    val count: Int get() = all.size
 
     fun availableFor(grade: Int, subject: Subject): List<QuestionType> =
         availableFor(grade, listOf(subject))

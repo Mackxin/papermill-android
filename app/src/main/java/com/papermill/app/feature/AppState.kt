@@ -137,8 +137,6 @@ class AppState(private val rawContext: Context) {
     val selectedTypes: List<QuestionType>
         get() = availableTypes.filter { (counts[it] ?: 0) > 0 }
 
-    val unselectedTypes: List<QuestionType>
-        get() = availableTypes.filter { (counts[it] ?: 0) == 0 }
 
     val navTab: NavTab
         get() = when (screen) {
@@ -210,6 +208,22 @@ class AppState(private val rawContext: Context) {
         }
         subjects = listOf(target)
         subject = target
+        useTemplate(newCounts)
+        generate()
+    }
+
+    /**
+     * 跨科专项卷：勾多个科目，只保留当前年级真有生成器的题型。
+     * 「课本同步卷」要同时用到语文生字和英语单词，单科目版本会漏一半。
+     */
+    suspend fun generateForSubjects(targets: List<Subject>, newCounts: Map<QuestionType, Int>) {
+        val usable = targets.filter { it.availableFor(grade) }
+        if (usable.isEmpty()) {
+            toast = "当前年级还没有这些科目，请先换年级"
+            return
+        }
+        subjects = usable
+        subject = usable.first()
         useTemplate(newCounts)
         generate()
     }
