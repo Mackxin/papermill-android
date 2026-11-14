@@ -869,7 +869,7 @@ private fun PreviewScreen(
             StepperRow(
                 label = "自定义加题数量",
                 value = state.extraAddCount,
-                hint = "1–30 题 · 会先试排，放不下自动减量",
+                hint = "1–30 题，会先试排再减量",
                 onMinus = { state.changeExtraAdd(-1) },
                 onPlus = { state.changeExtraAdd(1) },
                 onMinusMore = { state.changeExtraAdd(-5) },

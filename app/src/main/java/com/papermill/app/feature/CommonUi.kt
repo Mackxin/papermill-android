@@ -719,6 +719,8 @@ fun PresetCard(
             fontSize = PaperDimens.CaptionSp,
             color = PaperColors.OnSurfaceVariant,
             lineHeight = 16.sp,
+            // 描述统一占两行：一行与两行的卡片高度才一致，同一行里「N 题 · 出卷」才对得齐
+            minLines = 2,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
         )
