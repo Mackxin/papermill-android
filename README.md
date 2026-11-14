@@ -103,7 +103,7 @@
 
 ## 题目来源与版权边界
 
-- **不抓取、不内置任何市面题库 / 教辅 / 教材原题。** 题目 100% 由 App 内算法生成，或按知识点自编。
+- **除课标题库外，不抓取、不内置任何市面题库 / 教辅 / 教材原题。** App 自身题目由算法生成，或按知识点自编。
 - 外部练习网站只借鉴「有哪些题型」这一层规则（填括号、凑十、连加连减、元角分换算、字母顺序等属于题型模式与数学事实），不复制其原题、PDF、图片或版面。
 - 速查表只收录不受著作权保护的基础事实与公式，自行整理编排。
 - 练习纸的「横条 / 方格 / 英文四线三格」版式思路参考 [namishu/printables](https://github.com/namishu/printables)（MIT）。本项目**未使用其代码、样例 PDF 或内置字体**，全部用 Android Canvas 自绘重新实现；完整 MIT 声明见 [`app/src/main/assets/licenses/NAMISHU_PRINTABLES_LICENSE.txt`](app/src/main/assets/licenses/NAMISHU_PRINTABLES_LICENSE.txt)。田字格、米字格、坐标纸等为通行基础版式，自行编排。

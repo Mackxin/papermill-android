@@ -1451,8 +1451,9 @@ private fun LazyListScope.moreScreenItems(state: AppState, scope: CoroutineScope
     item {
         CardSection(title = "关于") {
             Text(
-                "题目全部由本 App 程序生成，或按知识点自编（内置 ${state.bankSize} 道选择 / 判断题）。" +
-                    "不抓取也不收录任何教辅、题库或教材原文；外部练习网站只借鉴题型规则，" +
+                "除课标题库外，题目全部由本 App 程序生成，或按知识点自编" +
+                    "（内置 ${state.bankSize} 道选择 / 判断题）。App 自身内容不抓取、不收录任何教辅、" +
+                    "题库或教材原文；外部练习网站只借鉴题型规则，" +
                     "不打包其原始 PDF / 图片 / 原题。速查表只收基础事实与公式，" +
                     "练习纸版式参考 namishu/printables（MIT，声明随包放在 assets/licenses）。",
                 fontSize = PaperDimens.BodySp,
@@ -1462,10 +1463,11 @@ private fun LazyListScope.moreScreenItems(state: AppState, scope: CoroutineScope
             Spacer(Modifier.height(10.dp))
             // CC BY-NC 4.0 要求署名，这一段不能删；商业化前要先删 assets/taxonomy
             Text(
-                "「课标知识点」题型的题目来自开源项目 cn-math-taxonomy" +
+                "「知识点填空」「知识点选择」的题目来自开源题库 cn-math-taxonomy" +
                     "（xiaoyang111222/cn-math-taxonomy），许可 CC BY-NC 4.0：" +
-                    "允许署名使用、不允许商业使用。本 App 已把数据裁剪为 1–9 年级五科，" +
-                    "并剔除依赖配图的题；完整许可文本见 assets/licenses/CN_MATH_TAXONOMY_LICENSE.txt。",
+                    "允许署名使用、不允许商业使用。这是 App 里唯一一批第三方题库内容" +
+                    "（含部分课文配套题），已裁剪为 1–9 年级五科，并剔除依赖配图的题。" +
+                    "完整许可文本见 assets/licenses/CN_MATH_TAXONOMY_LICENSE.txt。",
                 fontSize = PaperDimens.CaptionSp,
                 color = PaperColors.OnSurfaceVariant,
                 lineHeight = 17.sp,
