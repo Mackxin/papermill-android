@@ -1,5 +1,6 @@
 package com.papermill.app.feature
 
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -10,7 +11,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -18,24 +18,54 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.OutlinedButton
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.Bookmarks
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.MoreHoriz
+import androidx.compose.material.icons.rounded.Print
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.papermill.app.core.design.PaperColors
 import com.papermill.app.core.design.PaperDimens
 
+/**
+ * 公共组件 v3：现代卡片 + 胶囊 chip + 渐变主按钮 + 悬浮 dock。
+ *
+ * 和 v2 的区别不是「换个颜色」，是交互语言换了：
+ *  - 底部不再是「贴着屏幕边、一条横线 + 四个文字」的老式 tab bar，
+ *    改成悬浮胶囊 dock，选中项有淡紫胶囊和主色图标，和内容区有呼吸感；
+ *  - 所有卡片去掉 1dp 描边，改大圆角 + 柔和投影，这是 2024 之后移动端的主流；
+ *  - chip 一律胶囊形，选中是「淡紫底 + 主色字」而不是整块高饱和实心；
+ *  - 主按钮带渐变和投影，全屏只有它一个强视觉，手指自然落上去。
+ */
+object Surface3 {
+    val shape = RoundedCornerShape(PaperDimens.CardRadius)
+    val cardShadow = 6.dp
+}
+
 // ------------------------------------------------------------------ 框架
 
-/** 顶部只放「当前在哪」和一个可选返回键，版本号等次要信息收进「更多」页 */
+/** 顶部：大标题 + 副标题 + 圆形返回键，不放任何次要信息 */
 @Composable
 fun AppTopBar(
     title: String,
@@ -45,103 +75,132 @@ fun AppTopBar(
     Row(
         Modifier
             .fillMaxWidth()
-            .background(PaperColors.Background)
-            .padding(horizontal = PaperDimens.ScreenPad, vertical = 12.dp),
+            .padding(
+                start = PaperDimens.ScreenPad,
+                end = PaperDimens.ScreenPad,
+                top = 10.dp,
+                bottom = 12.dp,
+            ),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (onBack != null) {
             Box(
                 Modifier
-                    .size(32.dp)
-                    .background(PaperColors.Surface, RoundedCornerShape(9.dp))
-                    .border(1.dp, PaperColors.Outline, RoundedCornerShape(9.dp))
+                    .size(38.dp)
+                    .background(PaperColors.Surface, CircleShape)
+                    .shadow(4.dp, CircleShape)
                     .clickable { onBack() },
                 contentAlignment = Alignment.Center,
-            ) { Text("‹", fontSize = 20.sp, color = PaperColors.Primary) }
-            Spacer(Modifier.width(10.dp))
+            ) { Text("‹", fontSize = 24.sp, color = PaperColors.OnSurface) }
+            Spacer(Modifier.width(12.dp))
         }
         Column(Modifier.weight(1f)) {
             Text(
                 title,
                 fontSize = PaperDimens.TitleSp,
-                fontWeight = FontWeight.SemiBold,
+                fontWeight = FontWeight.Bold,
                 color = PaperColors.OnSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
             if (subtitle.isNotEmpty()) {
-                Text(subtitle, fontSize = PaperDimens.CaptionSp, color = PaperColors.OnSurfaceVariant)
+                Text(
+                    subtitle,
+                    fontSize = PaperDimens.CaptionSp,
+                    color = PaperColors.OnSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
         }
     }
 }
 
-/** 底部固定主操作条：不管滚到哪一屏，「生成 / 打印」都在拇指够得到的位置 */
+/** 底部主操作条：白底 + 上投影，和悬浮 dock 叠在一起也不打架 */
 @Composable
 fun StickyBar(content: @Composable RowScope.() -> Unit) {
-    Column(Modifier.fillMaxWidth()) {
-        Box(Modifier.fillMaxWidth().height(1.dp).background(PaperColors.Outline))
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .heightIn(min = PaperDimens.ActionBarH)
-                .background(PaperColors.Surface)
-                .padding(horizontal = PaperDimens.ScreenPad, vertical = 9.dp),
-            horizontalArrangement = Arrangement.spacedBy(PaperDimens.GapSmall),
-            verticalAlignment = Alignment.CenterVertically,
-            content = content,
-        )
-    }
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = PaperDimens.ActionBarH)
+            .background(PaperColors.Background)
+            .padding(horizontal = PaperDimens.ScreenPad, vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        content = content,
+    )
 }
 
-/** 4 个固定页签，替代上一版横向滚动的 5 个页签 */
+/**
+ * 悬浮胶囊 dock：4 个页签，选中项淡紫胶囊 + 主色图标，切换有颜色过渡。
+ *
+ * 用悬浮而不是贴边，是因为贴边 tab bar 会把内容区压得很闷；
+ * 悬浮后内容可以从 dock 下方「穿过去」，滚动时视觉更轻。
+ */
 @Composable
-fun BottomNav(state: AppState) {
-    Column(Modifier.fillMaxWidth()) {
-        Box(Modifier.fillMaxWidth().height(1.dp).background(PaperColors.Outline))
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .height(PaperDimens.NavH)
-                .background(PaperColors.Surface),
-        ) {
-            NavItem("出卷", state.navTab == NavTab.HOME) { state.goTab(NavTab.HOME) }
-            NavItem("打印纸", state.navTab == NavTab.REFERENCE) { state.goTab(NavTab.REFERENCE) }
-            NavItem("错题本", state.navTab == NavTab.MISTAKES) { state.goTab(NavTab.MISTAKES) }
-            NavItem("更多", state.navTab == NavTab.MORE) { state.goTab(NavTab.MORE) }
+fun FloatingDock(state: AppState, onSelect: (NavTab) -> Unit) {
+    val shape = RoundedCornerShape(28.dp)
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .shadow(16.dp, shape)
+            .clip(shape)
+            .background(PaperColors.Surface)
+            .padding(horizontal = 8.dp, vertical = 7.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        DockItem("出卷", Icons.Rounded.AutoAwesome, state.navTab == NavTab.HOME) {
+            onSelect(NavTab.HOME)
+        }
+        DockItem("打印纸", Icons.Rounded.Print, state.navTab == NavTab.REFERENCE) {
+            onSelect(NavTab.REFERENCE)
+        }
+        DockItem("错题本", Icons.Rounded.Bookmarks, state.navTab == NavTab.MISTAKES) {
+            onSelect(NavTab.MISTAKES)
+        }
+        DockItem("更多", Icons.Rounded.MoreHoriz, state.navTab == NavTab.MORE) {
+            onSelect(NavTab.MORE)
         }
     }
 }
 
 @Composable
-private fun RowScope.NavItem(label: String, selected: Boolean, onClick: () -> Unit) {
+private fun RowScope.DockItem(
+    label: String,
+    icon: ImageVector,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    val t by animateFloatAsState(if (selected) 1f else 0f, label = "dock-$label")
+    val bg = lerp(Color.White, PaperColors.PrimaryContainer, t)
+    val fg = lerp(PaperColors.OnSurfaceVariant, PaperColors.Primary, t)
+
     Column(
         Modifier
             .weight(1f)
-            .fillMaxHeight()
-            .clickable { onClick() },
+            .clip(RoundedCornerShape(20.dp))
+            .background(bg)
+            .clickable { onClick() }
+            .padding(vertical = 7.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        Box(
-            Modifier
-                .width(22.dp)
-                .height(3.dp)
-                .background(
-                    if (selected) PaperColors.Primary else Color.Transparent,
-                    RoundedCornerShape(2.dp),
-                )
-        )
-        Spacer(Modifier.height(7.dp))
+        Icon(icon, contentDescription = label, tint = fg, modifier = Modifier.size(22.dp))
+        Spacer(Modifier.height(3.dp))
         Text(
             label,
-            fontSize = PaperDimens.LabelSp,
-            color = if (selected) PaperColors.Primary else PaperColors.OnSurfaceVariant,
-            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+            fontSize = 10.5.sp,
+            color = fg,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+            maxLines = 1,
         )
     }
 }
 
 // ------------------------------------------------------------------ 基础件
 
+/** 白卡片：大圆角 + 柔和投影，不再描边 */
 @Composable
 fun CardSection(
     title: String = "",
@@ -152,15 +211,16 @@ fun CardSection(
     Column(
         modifier
             .fillMaxWidth()
-            .background(PaperColors.Surface, RoundedCornerShape(PaperDimens.CardRadius))
-            .border(1.dp, PaperColors.Outline, RoundedCornerShape(PaperDimens.CardRadius))
+            .shadow(Surface3.cardShadow, Surface3.shape)
+            .clip(Surface3.shape)
+            .background(PaperColors.Surface)
             .padding(PaperDimens.CardPad),
     ) {
         if (title.isNotEmpty()) {
             Text(
                 title,
                 fontSize = PaperDimens.SectionSp,
-                fontWeight = FontWeight.SemiBold,
+                fontWeight = FontWeight.Bold,
                 color = PaperColors.OnSurface,
             )
         }
@@ -169,43 +229,52 @@ fun CardSection(
                 hint,
                 fontSize = PaperDimens.CaptionSp,
                 color = PaperColors.OnSurfaceVariant,
-                modifier = Modifier.padding(top = 2.dp),
+                modifier = Modifier.padding(top = 3.dp),
             )
         }
-        if (title.isNotEmpty() || hint.isNotEmpty()) Spacer(Modifier.height(10.dp))
+        if (title.isNotEmpty() || hint.isNotEmpty()) Spacer(Modifier.height(12.dp))
         content()
     }
 }
 
-/** 分区标题：序号圆角块 + 标题 + 右侧说明，替代「① 选择年级」这种纯文字 */
+/** 分区标题：渐变短竖条 + 标题 + 右侧说明（序号参数保留兼容，不再显示数字） */
 @Composable
 fun SectionLabel(no: String, text: String, right: String = "") {
     Row(
-        Modifier.fillMaxWidth().padding(vertical = 2.dp),
+        Modifier
+            .fillMaxWidth()
+            .padding(vertical = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
             Modifier
-                .size(22.dp)
-                .background(PaperColors.PrimaryContainer, RoundedCornerShape(7.dp)),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(no, fontSize = 10.sp, color = PaperColors.Primary, fontWeight = FontWeight.Bold)
-        }
-        Spacer(Modifier.width(8.dp))
+                .width(4.dp)
+                .height(16.dp)
+                .clip(RoundedCornerShape(2.dp))
+                .background(Brush.verticalGradient(listOf(PaperColors.GradientStart, PaperColors.GradientEnd)))
+        )
+        Spacer(Modifier.width(9.dp))
         Text(
             text,
             fontSize = PaperDimens.SectionSp,
-            fontWeight = FontWeight.SemiBold,
+            fontWeight = FontWeight.Bold,
             color = PaperColors.OnSurface,
         )
         Spacer(Modifier.weight(1f))
         if (right.isNotEmpty()) {
-            Text(right, fontSize = PaperDimens.CaptionSp, color = PaperColors.OnSurfaceVariant)
+            Text(
+                right,
+                fontSize = PaperDimens.CaptionSp,
+                color = PaperColors.OnSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(start = 8.dp),
+            )
         }
     }
 }
 
+/** 胶囊 chip：选中淡紫底 + 主色字，未选中浅灰底 */
 @Composable
 fun ChoiceChip(
     text: String,
@@ -215,28 +284,124 @@ fun ChoiceChip(
 ) {
     val bg = when {
         !enabled -> PaperColors.SurfaceAlt
-        selected -> PaperColors.Primary
-        else -> PaperColors.Surface
+        selected -> PaperColors.PrimaryContainer
+        else -> PaperColors.SurfaceAlt
     }
     val fg = when {
         !enabled -> PaperColors.Muted
-        selected -> Color.White
-        else -> PaperColors.OnSurface
+        selected -> PaperColors.Primary
+        else -> PaperColors.OnSurfaceVariant
     }
     Box(
         modifier = Modifier
-            .heightIn(min = 36.dp)
-            .background(bg, RoundedCornerShape(PaperDimens.ChipRadius))
-            .border(
-                1.dp,
-                if (selected && enabled) PaperColors.Primary else PaperColors.Outline,
-                RoundedCornerShape(PaperDimens.ChipRadius),
+            .heightIn(min = 38.dp)
+            .clip(RoundedCornerShape(50))
+            .background(bg)
+            .then(
+                if (selected && enabled) {
+                    Modifier.border(1.2.dp, PaperColors.Primary.copy(alpha = 0.45f), RoundedCornerShape(50))
+                } else Modifier
             )
             .clickable(enabled = enabled) { onClick() }
-            .padding(horizontal = 13.dp, vertical = 8.dp),
+            .padding(horizontal = 15.dp, vertical = 9.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Text(text, fontSize = PaperDimens.LabelSp, color = fg)
+        Text(
+            text,
+            fontSize = PaperDimens.LabelSp,
+            color = fg,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+            maxLines = 1,
+        )
+    }
+}
+
+/**
+ * 输入框 v3：圆角填充底 + 无下划线。
+ *
+ * 不用 Material3 的 TextField，是因为它默认带一条 indicator 横线，
+ * 放在「白卡 + 大圆角」的体系里像上个世代的控件；这里用 BasicTextField
+ * 自己拼 decorationBox，视觉完全跟 chip 一致。
+ */
+@Composable
+fun Field3(
+    value: String,
+    onValueChange: (String) -> Unit,
+    placeholder: String = "",
+    label: String = "",
+    leadingIcon: ImageVector? = null,
+    singleLine: Boolean = true,
+) {
+    val shape = RoundedCornerShape(14.dp)
+    Column(Modifier.fillMaxWidth()) {
+        if (label.isNotEmpty()) {
+            Text(
+                label,
+                fontSize = PaperDimens.TinySp,
+                color = PaperColors.OnSurfaceVariant,
+                modifier = Modifier.padding(bottom = 6.dp),
+            )
+        }
+        BasicTextField(
+            value = value,
+            onValueChange = onValueChange,
+            singleLine = singleLine,
+            textStyle = TextStyle(
+                fontSize = PaperDimens.BodySp,
+                color = PaperColors.OnSurface,
+            ),
+            cursorBrush = SolidColor(PaperColors.Primary),
+            modifier = Modifier.fillMaxWidth(),
+            decorationBox = { inner ->
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(shape)
+                        .background(PaperColors.SurfaceAlt)
+                        .padding(start = 12.dp, end = 8.dp, top = 12.dp, bottom = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (leadingIcon != null) {
+                        Icon(
+                            leadingIcon,
+                            contentDescription = null,
+                            tint = PaperColors.Muted,
+                            modifier = Modifier.size(17.dp),
+                        )
+                        Spacer(Modifier.width(9.dp))
+                    }
+                    Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+                        if (value.isEmpty() && placeholder.isNotEmpty()) {
+                            Text(
+                                placeholder,
+                                fontSize = PaperDimens.BodySp,
+                                color = PaperColors.Muted,
+                                maxLines = 1,
+                            )
+                        }
+                        inner()
+                    }
+                    if (value.isNotEmpty()) {
+                        Spacer(Modifier.width(6.dp))
+                        Box(
+                            Modifier
+                                .size(22.dp)
+                                .clip(CircleShape)
+                                .background(PaperColors.Outline)
+                                .clickable { onValueChange("") },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                Icons.Rounded.Close,
+                                contentDescription = "清除",
+                                tint = PaperColors.OnSurfaceVariant,
+                                modifier = Modifier.size(13.dp),
+                            )
+                        }
+                    }
+                }
+            },
+        )
     }
 }
 
@@ -250,7 +415,9 @@ fun <T> SingleRowChips(
     onClick: (T) -> Unit,
 ) {
     Row(
-        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+        Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState()),
         horizontalArrangement = Arrangement.spacedBy(PaperDimens.GapSmall),
     ) {
         items.forEach { item ->
@@ -264,7 +431,6 @@ fun <T> SingleRowChips(
     }
 }
 
-/** 紧凑 chip：9 个年级分两行就能全部显示，不用横滑也不会裁半个字 */
 @Composable
 fun CompactChip(
     text: String,
@@ -274,29 +440,36 @@ fun CompactChip(
 ) {
     val bg = when {
         !enabled -> PaperColors.SurfaceAlt
-        selected -> PaperColors.Primary
-        else -> PaperColors.Surface
+        selected -> PaperColors.PrimaryContainer
+        else -> PaperColors.SurfaceAlt
     }
     val fg = when {
         !enabled -> PaperColors.Muted
-        selected -> Color.White
-        else -> PaperColors.OnSurface
+        selected -> PaperColors.Primary
+        else -> PaperColors.OnSurfaceVariant
     }
     Box(
         modifier = Modifier
-            .height(34.dp)
+            .height(38.dp)
             .fillMaxWidth()
-            .background(bg, RoundedCornerShape(9.dp))
-            .border(
-                1.dp,
-                if (selected && enabled) PaperColors.Primary else PaperColors.Outline,
-                RoundedCornerShape(9.dp),
+            .clip(RoundedCornerShape(12.dp))
+            .background(bg)
+            .then(
+                if (selected && enabled) {
+                    Modifier.border(1.2.dp, PaperColors.Primary.copy(alpha = 0.45f), RoundedCornerShape(12.dp))
+                } else Modifier
             )
             .clickable(enabled = enabled) { onClick() }
-            .padding(horizontal = 5.dp, vertical = 7.dp),
+            .padding(horizontal = 4.dp, vertical = 8.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Text(text, fontSize = PaperDimens.CaptionSp, color = fg, maxLines = 1)
+        Text(
+            text,
+            fontSize = PaperDimens.CaptionSp,
+            color = fg,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+            maxLines = 1,
+        )
     }
 }
 
@@ -309,9 +482,9 @@ fun <T> CompactChipGrid(
     enabled: (T) -> Boolean = { true },
     onClick: (T) -> Unit,
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         items.chunked(perRow).forEach { row ->
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 row.forEach { item ->
                     Box(Modifier.weight(1f)) {
                         CompactChip(
@@ -366,45 +539,96 @@ fun StepperRow(
     onPlus: () -> Unit,
     onMinusMore: () -> Unit = {},
     onPlusMore: () -> Unit = {},
+    /** 非空时右侧多一个「移除这种题型」的红色叉 */
+    onRemove: (() -> Unit)? = null,
 ) {
     Row(
-        Modifier.fillMaxWidth().padding(vertical = 6.dp),
+        Modifier
+            .fillMaxWidth()
+            .padding(vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
-            Text(label, fontSize = PaperDimens.BodySp, color = PaperColors.OnSurface)
+            Text(
+                label,
+                fontSize = PaperDimens.BodySp,
+                fontWeight = FontWeight.Medium,
+                color = PaperColors.OnSurface,
+            )
             if (hint.isNotEmpty()) {
                 Text(hint, fontSize = PaperDimens.TinySp, color = PaperColors.OnSurfaceVariant)
             }
         }
-        SmallBtn("－5", 7) { onMinusMore() }
-        SmallBtn("－", 9) { onMinus() }
+        StepChip("−5") { onMinusMore() }
+        Spacer(Modifier.width(5.dp))
+        SmallBtn("−") { onMinus() }
         Text(
             "$value",
             fontSize = PaperDimens.BodySp,
-            fontWeight = FontWeight.SemiBold,
-            color = PaperColors.OnSurface,
+            fontWeight = FontWeight.Bold,
+            color = PaperColors.Primary,
             modifier = Modifier.padding(horizontal = 8.dp),
         )
-        SmallBtn("＋", 9) { onPlus() }
-        SmallBtn("＋5", 7) { onPlusMore() }
+        SmallBtn("＋") { onPlus() }
+        Spacer(Modifier.width(5.dp))
+        StepChip("+5") { onPlusMore() }
+        if (onRemove != null) {
+            Spacer(Modifier.width(7.dp))
+            Box(
+                Modifier
+                    .size(26.dp)
+                    .clip(CircleShape)
+                    .background(PaperColors.ErrorContainer)
+                    .clickable { onRemove() },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.Rounded.Close,
+                    contentDescription = "移除",
+                    tint = PaperColors.Error,
+                    modifier = Modifier.size(14.dp),
+                )
+            }
+        }
     }
 }
 
+/** 大步进（±5）：低调胶囊，视觉上让位给 ±1 的主色圆钮 */
 @Composable
-private fun SmallBtn(text: String, padH: Int = 12, onClick: () -> Unit) {
+private fun StepChip(text: String, onClick: () -> Unit) {
     Box(
         Modifier
-            .background(PaperColors.PrimaryContainer, RoundedCornerShape(9.dp))
+            .height(24.dp)
+            .clip(RoundedCornerShape(50))
+            .background(PaperColors.SurfaceAlt)
             .clickable { onClick() }
-            .padding(horizontal = padH.dp, vertical = 6.dp),
+            .padding(horizontal = 8.dp),
         contentAlignment = Alignment.Center,
     ) {
         Text(
             text,
-            fontSize = PaperDimens.LabelSp,
+            fontSize = 11.sp,
+            color = PaperColors.OnSurfaceVariant,
+            fontWeight = FontWeight.SemiBold,
+        )
+    }
+}
+
+@Composable
+private fun SmallBtn(text: String, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .size(32.dp)
+            .clip(CircleShape)
+            .background(PaperColors.PrimaryContainer)
+            .clickable { onClick() },
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text,
+            fontSize = 12.sp,
             color = PaperColors.Primary,
-            fontWeight = FontWeight.Medium,
+            fontWeight = FontWeight.Bold,
         )
     }
 }
@@ -419,25 +643,20 @@ fun Segmented(
 ) {
     Row(
         modifier
-            .background(PaperColors.SurfaceAlt, RoundedCornerShape(10.dp))
-            .border(1.dp, PaperColors.Outline, RoundedCornerShape(10.dp))
-            .padding(3.dp),
+            .clip(RoundedCornerShape(16.dp))
+            .background(PaperColors.SurfaceAlt)
+            .padding(4.dp),
     ) {
         items.forEachIndexed { i, label ->
             val on = i == selectedIndex
             Box(
                 Modifier
                     .weight(1f)
-                    .background(
-                        if (on) PaperColors.Surface else Color.Transparent,
-                        RoundedCornerShape(8.dp),
-                    )
-                    .then(
-                        if (on) Modifier.border(1.dp, PaperColors.Outline, RoundedCornerShape(8.dp))
-                        else Modifier
-                    )
+                    .clip(RoundedCornerShape(13.dp))
+                    .background(if (on) PaperColors.Surface else Color.Transparent)
+                    .then(if (on) Modifier.shadow(2.dp, RoundedCornerShape(13.dp)) else Modifier)
                     .clickable { onSelect(i) }
-                    .padding(vertical = 7.dp),
+                    .padding(vertical = 8.dp),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
@@ -452,17 +671,22 @@ fun Segmented(
 }
 
 @Composable
-fun StatChip(text: String, color: Color = PaperColors.Primary, bg: Color = PaperColors.PrimaryContainer) {
+fun StatChip(
+    text: String,
+    color: Color = PaperColors.Primary,
+    bg: Color = PaperColors.PrimaryContainer,
+) {
     Box(
         Modifier
-            .background(bg, RoundedCornerShape(7.dp))
-            .padding(horizontal = 9.dp, vertical = 5.dp),
+            .clip(RoundedCornerShape(9.dp))
+            .background(bg)
+            .padding(horizontal = 10.dp, vertical = 5.dp),
     ) {
-        Text(text, fontSize = PaperDimens.TinySp, color = color, fontWeight = FontWeight.Medium)
+        Text(text, fontSize = PaperDimens.TinySp, color = color, fontWeight = FontWeight.SemiBold)
     }
 }
 
-/** 首页快捷预设：2 列大卡片，点一下直接出卷 */
+/** 首页快捷预设：白卡 + 顶部渐变细条 + 投影 */
 @Composable
 fun PresetCard(
     title: String,
@@ -473,21 +697,38 @@ fun PresetCard(
 ) {
     Column(
         modifier
-            .background(PaperColors.Surface, RoundedCornerShape(PaperDimens.CardRadius))
-            .border(1.dp, PaperColors.Outline, RoundedCornerShape(PaperDimens.CardRadius))
+            .shadow(5.dp, Surface3.shape)
+            .clip(Surface3.shape)
+            .background(PaperColors.Surface)
             .clickable { onClick() }
-            .padding(10.dp),
+            .padding(14.dp),
     ) {
-        Text(title, fontSize = PaperDimens.BodySp, fontWeight = FontWeight.SemiBold, color = PaperColors.OnSurface)
+        Box(
+            Modifier
+                .width(26.dp)
+                .height(4.dp)
+                .clip(RoundedCornerShape(2.dp))
+                .background(Brush.horizontalGradient(listOf(PaperColors.GradientStart, PaperColors.GradientEnd)))
+        )
+        Spacer(Modifier.height(9.dp))
+        Text(
+            title,
+            fontSize = PaperDimens.BodySp,
+            fontWeight = FontWeight.Bold,
+            color = PaperColors.OnSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
         Spacer(Modifier.height(4.dp))
         Text(
             desc,
             fontSize = PaperDimens.CaptionSp,
             color = PaperColors.OnSurfaceVariant,
-            lineHeight = 15.sp,
+            lineHeight = 16.sp,
             maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
         )
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(10.dp))
         StatChip(meta)
     }
 }
@@ -503,12 +744,18 @@ fun ListRow(
     Row(
         Modifier
             .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
             .clickable { onClick() }
-            .padding(vertical = 13.dp),
+            .padding(vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
-            Text(title, fontSize = PaperDimens.BodySp, color = PaperColors.OnSurface)
+            Text(
+                title,
+                fontSize = PaperDimens.BodySp,
+                fontWeight = FontWeight.Medium,
+                color = PaperColors.OnSurface,
+            )
             if (subtitle.isNotEmpty()) {
                 Text(
                     subtitle,
@@ -533,13 +780,16 @@ fun MiniAction(
         text,
         fontSize = PaperDimens.CaptionSp,
         color = if (enabled) color else PaperColors.Muted,
+        fontWeight = FontWeight.SemiBold,
         modifier = Modifier
-            .background(PaperColors.PrimaryContainer, RoundedCornerShape(8.dp))
+            .clip(RoundedCornerShape(50))
+            .background(if (enabled) PaperColors.PrimaryContainer else PaperColors.SurfaceAlt)
             .clickable(enabled = enabled) { onClick() }
-            .padding(horizontal = 9.dp, vertical = 6.dp),
+            .padding(horizontal = 12.dp, vertical = 7.dp),
     )
 }
 
+/** 主按钮：渐变 + 投影，整屏唯一强动作 */
 @Composable
 fun PrimaryButton(
     text: String,
@@ -547,14 +797,29 @@ fun PrimaryButton(
     modifier: Modifier = Modifier.fillMaxWidth(),
     onClick: () -> Unit,
 ) {
-    Button(
-        onClick = onClick,
-        enabled = enabled,
-        shape = RoundedCornerShape(12.dp),
-        colors = ButtonDefaults.buttonColors(containerColor = PaperColors.Primary),
-        modifier = modifier.height(46.dp),
+    val shape = RoundedCornerShape(16.dp)
+    Box(
+        modifier
+            .height(50.dp)
+            .then(if (enabled) Modifier.shadow(8.dp, shape) else Modifier)
+            .clip(shape)
+            .background(
+                if (enabled) {
+                    Brush.horizontalGradient(listOf(PaperColors.GradientStart, PaperColors.GradientEnd))
+                } else {
+                    Brush.horizontalGradient(listOf(PaperColors.Muted, PaperColors.Muted))
+                }
+            )
+            .clickable(enabled = enabled) { onClick() },
+        contentAlignment = Alignment.Center,
     ) {
-        Text(text, fontSize = PaperDimens.BodySp, fontWeight = FontWeight.SemiBold)
+        Text(
+            text,
+            fontSize = PaperDimens.BodySp,
+            fontWeight = FontWeight.Bold,
+            color = Color.White,
+            maxLines = 1,
+        )
     }
 }
 
@@ -565,32 +830,44 @@ fun SecondaryButton(
     modifier: Modifier = Modifier.fillMaxWidth(),
     onClick: () -> Unit,
 ) {
-    OutlinedButton(
-        onClick = onClick,
-        enabled = enabled,
-        shape = RoundedCornerShape(12.dp),
-        modifier = modifier.height(46.dp),
+    val shape = RoundedCornerShape(16.dp)
+    Box(
+        modifier
+            .height(50.dp)
+            .clip(shape)
+            .background(PaperColors.SurfaceAlt)
+            .clickable(enabled = enabled) { onClick() },
+        contentAlignment = Alignment.Center,
     ) {
-        Text(text, fontSize = PaperDimens.BodySp, color = PaperColors.Primary)
+        Text(
+            text,
+            fontSize = PaperDimens.BodySp,
+            fontWeight = FontWeight.SemiBold,
+            color = if (enabled) PaperColors.Primary else PaperColors.Muted,
+            maxLines = 1,
+        )
     }
 }
 
-/** 固定显示在操作条上方，不再埋在滚动内容的末尾 */
+/** 提示条：圆角浮起，不再是全宽米黄条 */
 @Composable
 fun ToastBar(text: String, onDismiss: () -> Unit = {}) {
     if (text.isEmpty()) return
     Row(
         Modifier
             .fillMaxWidth()
+            .padding(horizontal = PaperDimens.ScreenPad, vertical = 4.dp)
+            .shadow(6.dp, RoundedCornerShape(16.dp))
+            .clip(RoundedCornerShape(16.dp))
             .background(PaperColors.AccentContainer)
-            .padding(horizontal = PaperDimens.ScreenPad, vertical = 10.dp),
+            .padding(horizontal = 14.dp, vertical = 11.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
             text,
             fontSize = PaperDimens.CaptionSp,
             color = PaperColors.OnSurface,
-            lineHeight = 16.sp,
+            lineHeight = 17.sp,
             modifier = Modifier.weight(1f),
         )
         Spacer(Modifier.width(8.dp))
@@ -598,7 +875,10 @@ fun ToastBar(text: String, onDismiss: () -> Unit = {}) {
             "×",
             fontSize = 18.sp,
             color = PaperColors.OnSurfaceVariant,
-            modifier = Modifier.clickable { onDismiss() },
+            modifier = Modifier
+                .clip(CircleShape)
+                .clickable { onDismiss() }
+                .padding(horizontal = 4.dp),
         )
     }
 }

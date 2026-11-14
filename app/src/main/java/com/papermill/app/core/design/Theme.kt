@@ -8,53 +8,69 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 /**
- * 纸感设计系统 v2。
+ * 设计系统 v3「清爽现代」。
  *
- * 上一版的问题不是「不好看」，是**层级不清**：所有信息都是白卡片＋灰小字，
- * 蓝色 chip 到处都是，用户分不清哪个是主操作、哪个只是配置。
- * 这一版把职责写死：
- *   - 蓝 = 唯一的主操作 / 选中态
- *   - 暖赭 = 需要注意的提示（比如会浪费纸）
- *   - 灰 = 纯辅助信息，永远不做可点元素
- *   - 白卡片 = 内容分组；浅米色块 = 卡片内的次级区域
+ * v2 是「纸感文雅」：米白底 + 深蓝 + 细边框 + 小字，信息层级没错，但整体偏旧、
+ * 偏工具感 —— 用户原话「有点老土」。v3 换成更年轻的现代卡片语言：
+ *
+ *  - 底色用冷调浅雾灰（#F5F6FB），卡片纯白 + 22dp 大圆角 + 柔和投影，不再描边；
+ *  - 主色是亮蓝紫，主按钮用 6C7BFF→9A5CF6 渐变，是整屏唯一的「强动作」；
+ *  - 薄荷绿只用于「排满了 / 成功」，珊瑚橙只用于「会浪费纸」这类提醒；
+ *  - 字号整体上调一档（正文 14sp），行距更松，扫读更舒服；
+ *  - chip 改成胶囊（未选中浅灰、选中淡紫 + 主色字），不再整块实心蓝。
+ *
+ * 颜色字段名沿用 v2，避免一次性改遍所有页面；新增 GradientStart / GradientEnd / Mint。
  */
 object PaperColors {
-    val Primary = Color(0xFF2F6B9F)
-    val PrimaryDark = Color(0xFF24557F)
-    val PrimaryContainer = Color(0xFFE9F1F8)
-    val Accent = Color(0xFFC87A2C)
-    val AccentContainer = Color(0xFFFBF0E4)
-    val Success = Color(0xFF2E7D5B)
-    val Background = Color(0xFFF6F4EF)
+    val Primary = Color(0xFF5B5BF0)
+    val PrimaryDark = Color(0xFF3E3ECB)
+    val PrimaryContainer = Color(0xFFEDEDFF)
+
+    /** 渐变主色：主按钮、选中 dock 项、强调数字 */
+    val GradientStart = Color(0xFF6C7BFF)
+    val GradientEnd = Color(0xFF9A5CF6)
+
+    val Accent = Color(0xFFFF7A45)
+    val AccentContainer = Color(0xFFFFF0E8)
+
+    /** 薄荷绿：排满一页 / 成功状态 */
+    val Mint = Color(0xFF10C6A3)
+    val MintContainer = Color(0xFFE3FBF5)
+    val Success = Mint
+
+    val Background = Color(0xFFF5F6FB)
     val Surface = Color(0xFFFFFFFF)
-    val SurfaceAlt = Color(0xFFFAF8F3)
-    val Outline = Color(0xFFE5E0D6)
-    val OutlineStrong = Color(0xFFD6D0C4)
-    val OnSurface = Color(0xFF1C2126)
-    val OnSurfaceVariant = Color(0xFF767B82)
-    val Muted = Color(0xFFADB0B0)
-    val Error = Color(0xFFC0392B)
-    val ErrorContainer = Color(0xFFFBECEA)
+    val SurfaceAlt = Color(0xFFF2F3F9)
+
+    val Outline = Color(0xFFEBEDF5)
+    val OutlineStrong = Color(0xFFDDE0EC)
+
+    val OnSurface = Color(0xFF14161C)
+    val OnSurfaceVariant = Color(0xFF6E7385)
+    val Muted = Color(0xFFA8ADBE)
+
+    val Error = Color(0xFFE5484D)
+    val ErrorContainer = Color(0xFFFFECEE)
 }
 
 /** 统一尺寸与字号，避免每个页面各写一套 dp/sp 导致对齐漂移 */
 object PaperDimens {
-    val ScreenPad = 18.dp
-    val CardPad = 14.dp
-    val CardRadius = 14.dp
-    val ChipRadius = 10.dp
-    val Gap = 12.dp
-    val GapSmall = 8.dp
-    val ActionBarH = 56.dp
-    val NavH = 62.dp
+    val ScreenPad = 20.dp
+    val CardPad = 16.dp
+    val CardRadius = 22.dp
+    val ChipRadius = 14.dp
+    val Gap = 14.dp
+    val GapSmall = 10.dp
+    val ActionBarH = 60.dp
+    val NavH = 64.dp
 
-    val TitleSp = 22.sp
-    val HeroSp = 20.sp
-    val SectionSp = 15.sp
-    val BodySp = 13.sp
-    val LabelSp = 12.sp
-    val CaptionSp = 11.sp
-    val TinySp = 10.sp
+    val TitleSp = 27.sp
+    val HeroSp = 21.sp
+    val SectionSp = 16.sp
+    val BodySp = 14.sp
+    val LabelSp = 13.sp
+    val CaptionSp = 12.sp
+    val TinySp = 11.sp
 }
 
 private val PaperMillScheme = lightColorScheme(
@@ -62,14 +78,15 @@ private val PaperMillScheme = lightColorScheme(
     onPrimary = Color.White,
     primaryContainer = PaperColors.PrimaryContainer,
     onPrimaryContainer = PaperColors.PrimaryDark,
-    secondary = PaperColors.Accent,
+    secondary = PaperColors.Mint,
     onSecondary = Color.White,
-    secondaryContainer = PaperColors.AccentContainer,
+    secondaryContainer = PaperColors.MintContainer,
+    tertiary = PaperColors.Accent,
     background = PaperColors.Background,
     onBackground = PaperColors.OnSurface,
     surface = PaperColors.Surface,
     onSurface = PaperColors.OnSurface,
-    surfaceVariant = PaperColors.PrimaryContainer,
+    surfaceVariant = PaperColors.SurfaceAlt,
     onSurfaceVariant = PaperColors.OnSurfaceVariant,
     outline = PaperColors.Outline,
     outlineVariant = PaperColors.OutlineStrong,

@@ -101,6 +101,8 @@ class AppState(private val rawContext: Context) {
     // 参数页默认只露题量；卷面细节收进折叠区，避免一屏塞 6 组开关
     var showAdvanced by mutableStateOf(false)
     var showAllTypes by mutableStateOf(false)
+    /** v0.6.0 组合面板的题型搜索词 */
+    var typeQuery by mutableStateOf("")
     /** 预览页「自定义加题」一次加几道，用户可调 */
     var extraAddCount by mutableStateOf(5)
 
@@ -110,6 +112,12 @@ class AppState(private val rawContext: Context) {
 
     var busy by mutableStateOf(false)
     var toast by mutableStateOf("")
+
+    /** 进预览页之前在哪：返回键要回到「上一页」，不是一律回首页 */
+    var previewOrigin by mutableStateOf(Screen.HOME)
+
+    /** 返回键二段式退出：第一次只提示，2 秒内再按才真的退到桌面 */
+    var exitArmed by mutableStateOf(false)
 
     var savedPapers by mutableStateOf(emptyList<SavedPaper>())
     var mistakes by mutableStateOf(emptyList<MistakeItem>())
@@ -140,6 +148,37 @@ class AppState(private val rawContext: Context) {
             Screen.PREVIEW -> if (isReference) NavTab.REFERENCE else NavTab.HOME
             else -> NavTab.HOME
         }
+
+    /**
+     * App 内返回：逐层退回，**最后才在首页退出 App**。
+     *
+     * 旧版全靠系统默认行为，预览页按一下返回就直接回桌面，卷子、滚动位置全丢。
+     * 现在顺序是：预览 → 来时的页面 → 首页 → （2 秒内再按）退出。
+     *
+     * @return true = 已在本 App 内处理；false = 已在首页根节点，交给调用方退出
+     */
+    fun back(): Boolean {
+        toast = ""
+        return when (screen) {
+            Screen.PREVIEW -> {
+                screen = previewOrigin
+                true
+            }
+            Screen.CREATE -> {
+                screen = Screen.HOME
+                true
+            }
+            Screen.HISTORY, Screen.HELP -> {
+                screen = Screen.MORE
+                true
+            }
+            Screen.REFERENCE, Screen.MISTAKES, Screen.MORE -> {
+                screen = Screen.HOME
+                true
+            }
+            Screen.HOME -> false
+        }
+    }
 
     fun goTab(tab: NavTab) {
         toast = ""
@@ -241,6 +280,53 @@ class AppState(private val rawContext: Context) {
         val next = ((map[type] ?: 0) + delta).coerceIn(0, 100)
         if (next == 0) map.remove(type) else map[type] = next
         counts = map
+    }
+
+    /** v0.6.0 组合面板：单独移除一种题型 */
+    fun removeType(type: QuestionType) {
+        if (counts[type] == null) return
+        counts = LinkedHashMap(counts).apply { remove(type) }
+        previewSeed = System.currentTimeMillis()
+    }
+
+    fun clearTypes() {
+        counts = emptyMap()
+        titleOverride = null
+        previewSeed = System.currentTimeMillis()
+        toast = "已清空题型，重新挑几样吧"
+    }
+
+    /**
+     * v0.6.0 智能配比：把当前年级 / 科目下**所有能出的题型**各取一点，
+     * 组成大约一页纸的组合。用户不用自己算「每种几题才够一页」。
+     *
+     * 规则：每科最多取 2 种题型，客观题 8 题、需书写过程的题 3 题，
+     * 总题量封顶 32 —— 再多就必然翻到第二页，反而浪费纸。
+     */
+    fun smartCompose() {
+        val types = availableTypes
+        if (types.isEmpty()) {
+            toast = "这个年级还没有可用题型"
+            return
+        }
+        val map = LinkedHashMap<QuestionType, Int>()
+        var budget = 32
+        types.groupBy { GeneratorRegistry.subjectOf(it) }
+            .forEach { (_, list) ->
+                list.take(2).forEach { t ->
+                    if (budget <= 0) return@forEach
+                    val want = if (t.answerLines > 0) 3 else 8
+                    val n = minOf(want, budget)
+                    if (n > 0) {
+                        map[t] = n
+                        budget -= n
+                    }
+                }
+            }
+        counts = map
+        titleOverride = null
+        previewSeed = System.currentTimeMillis()
+        toast = "已按 ${map.size} 种题型智能配比，共 ${map.values.sum()} 题"
     }
 
     val totalQuestions: Int get() = counts.values.sum()
@@ -463,6 +549,7 @@ class AppState(private val rawContext: Context) {
                 append("　最后一页正文用了 $lastContentFillPercent%")
                 if (lastContentFillPercent < 84) append("　可在预览页点「补满这一页」继续加题")
             }
+            previewOrigin = if (screen == Screen.CREATE) Screen.CREATE else Screen.HOME
             screen = Screen.PREVIEW
         } catch (t: Throwable) {
             toast = "生成失败：${t.message ?: t.javaClass.simpleName}"
@@ -505,6 +592,7 @@ class AppState(private val rawContext: Context) {
             }
             applyBuilt(built)
             toast = "已重新打开：${saved.title}"
+            previewOrigin = Screen.HISTORY
             screen = Screen.PREVIEW
         } catch (t: Throwable) {
             toast = "打开失败：${t.message}"
@@ -558,6 +646,7 @@ class AppState(private val rawContext: Context) {
             LocalStore.markPracticed(ctx, pool.map { it.id })
             applyBuilt(built)
             toast = "已生成错题重练卷：${built.paper.questions.size} 题"
+            previewOrigin = Screen.MISTAKES
             screen = Screen.PREVIEW
         } catch (t: Throwable) {
             toast = "生成失败：${t.message}"
@@ -832,6 +921,7 @@ class AppState(private val rawContext: Context) {
             showQuestionList = false
             isReference = true
             toast = "《${sheet.title}》共 ${result.first.pageCount} 页，可直接打印"
+            previewOrigin = Screen.REFERENCE
             screen = Screen.PREVIEW
         } catch (t: Throwable) {
             toast = "生成速查表失败：${t.message}"
@@ -856,6 +946,7 @@ class AppState(private val rawContext: Context) {
             showQuestionList = false
             isReference = true
             toast = "《${sheet.title}》1 页 ${sheet.orientation.shortLabel}，已铺满整页，可直接打印"
+            previewOrigin = Screen.REFERENCE
             screen = Screen.PREVIEW
         } catch (t: Throwable) {
             toast = "生成练习纸失败：${t.message}"

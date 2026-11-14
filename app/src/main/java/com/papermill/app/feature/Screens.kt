@@ -1,35 +1,55 @@
+// HorizontalPager 在 Compose 1.6 仍标记为 ExperimentalFoundationApi；
+// 这里只在页签切换和预览翻页两处使用，行为稳定，文件级 opt-in 即可。
+@file:OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+
 package com.papermill.app.feature
 
 import android.app.Activity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextField
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -38,6 +58,7 @@ import com.papermill.app.core.design.PaperColors
 import com.papermill.app.core.design.PaperDimens
 import com.papermill.app.core.update.UpdateChecker
 import com.papermill.app.domain.generate.AnswerMode
+import com.papermill.app.domain.generate.GeneratorRegistry
 import com.papermill.app.domain.generate.GradeProfiles
 import com.papermill.app.domain.generate.PageOrientation
 import com.papermill.app.domain.generate.PaperTemplates
@@ -55,6 +76,10 @@ import kotlinx.coroutines.launch
  * 结构是「顶栏 → 可滚动内容 → 固定操作条 → 固定底部导航」，
  * 用户随便滚到哪，出卷 / 打印永远在拇指够得到的位置。
  */
+/** 底部 4 个页签对应的页面；其余 Screen 是压在页签之上、带返回键的子页面 */
+private val TAB_SCREENS = setOf(Screen.HOME, Screen.REFERENCE, Screen.MISTAKES, Screen.MORE)
+private val TAB_ORDER = listOf(NavTab.HOME, NavTab.REFERENCE, NavTab.MISTAKES, NavTab.MORE)
+
 @Composable
 fun PaperMillRoot(state: AppState) {
     val context = LocalContext.current
@@ -63,8 +88,24 @@ fun PaperMillRoot(state: AppState) {
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) state.importBackup(uri)
     }
-    val scroll = rememberScrollState()
-    LaunchedEffect(state.screen) { scroll.scrollTo(0) }
+
+    // 返回键：先 App 内逐层退（预览 → 来时的页面 → 首页），最后在首页再按一次才退出。
+    // 旧版没接管返回键，在预览页按一下就直接回桌面，卷子和浏览位置全丢。
+    BackHandler {
+        if (!state.back()) {
+            if (state.exitArmed) {
+                activity?.finish()
+            } else {
+                state.exitArmed = true
+                state.toast = "再按一次返回即退出"
+                scope.launch {
+                    delay(2000)
+                    state.exitArmed = false
+                }
+            }
+        }
+    }
+
     // 提示条自动收起：切页后不再挂着上一条「已生成 N 题」的旧消息
     LaunchedEffect(state.toast) {
         if (state.toast.isNotEmpty()) {
@@ -73,36 +114,72 @@ fun PaperMillRoot(state: AppState) {
         }
     }
 
-    val (title, subtitle) = screenTitle(state)
-    val onBack: (() -> Unit)? = when (state.screen) {
-        Screen.CREATE -> {{ state.screen = Screen.HOME }}
-        Screen.PREVIEW -> {{ state.screen = if (state.isReference) Screen.REFERENCE else Screen.CREATE }}
-        Screen.HISTORY, Screen.HELP -> {{ state.screen = Screen.MORE }}
-        else -> null
+    // 四个页签做成可左右滑动的 pager，滑动落页后同步 state
+    val pager = rememberPagerState(
+        initialPage = TAB_ORDER.indexOf(state.navTab).coerceAtLeast(0),
+    ) { TAB_ORDER.size }
+
+    LaunchedEffect(pager.currentPage, pager.isScrollInProgress) {
+        if (!pager.isScrollInProgress && state.screen in TAB_SCREENS) {
+            val target = TAB_ORDER[pager.currentPage]
+            if (state.navTab != target) state.goTab(target)
+        }
     }
+    // 代码里跳页（点 dock / 从子页面回来）时把 pager 滑过去，而不是硬切
+    LaunchedEffect(state.navTab, state.screen) {
+        if (state.screen in TAB_SCREENS) {
+            val idx = TAB_ORDER.indexOf(state.navTab)
+            if (idx >= 0 && pager.currentPage != idx) pager.animateScrollToPage(idx)
+        }
+    }
+
+    val (title, subtitle) = screenTitle(state)
+    // 页签页不显示返回箭头（现代 App 惯例），子页面才显示
+    val onBack: (() -> Unit)? = if (state.screen in TAB_SCREENS) null else ({ state.back() })
 
     Column(Modifier.fillMaxSize().background(PaperColors.Background)) {
         AppTopBar(title = title, subtitle = subtitle, onBack = onBack)
 
         Box(Modifier.weight(1f)) {
-            Column(
-                Modifier
-                    .fillMaxSize()
-                    .verticalScroll(scroll)
-                    .padding(horizontal = PaperDimens.ScreenPad)
-            ) {
-                Spacer(Modifier.height(4.dp))
-                when (state.screen) {
-                    Screen.HOME -> HomeScreen(state, scope)
-                    Screen.CREATE -> CreateScreen(state, scope)
-                    Screen.PREVIEW -> PreviewScreen(state, scope, activity)
-                    Screen.REFERENCE -> ReferenceScreen(state, scope)
-                    Screen.MISTAKES -> MistakesScreen(state)
-                    Screen.MORE -> MoreScreen(state, scope) { importLauncher.launch("*/*") }
-                    Screen.HISTORY -> HistoryScreen(state, scope) { importLauncher.launch("*/*") }
-                    Screen.HELP -> HelpScreen(state)
+            if (state.screen in TAB_SCREENS) {
+                HorizontalPager(state = pager, modifier = Modifier.fillMaxSize()) { page ->
+                    val tab = TAB_ORDER[page]
+                    val scroll = rememberScrollState()
+                    Column(
+                        Modifier
+                            .fillMaxSize()
+                            .verticalScroll(scroll)
+                            .padding(horizontal = PaperDimens.ScreenPad)
+                    ) {
+                        Spacer(Modifier.height(2.dp))
+                        when (tab) {
+                            NavTab.HOME -> HomeScreen(state, scope)
+                            NavTab.REFERENCE -> ReferenceScreen(state, scope)
+                            NavTab.MISTAKES -> MistakesScreen(state)
+                            NavTab.MORE -> MoreScreen(state, scope) { importLauncher.launch("*/*") }
+                        }
+                        Spacer(Modifier.height(20.dp))
+                    }
                 }
-                Spacer(Modifier.height(20.dp))
+            } else {
+                val scroll = rememberScrollState()
+                LaunchedEffect(state.screen) { scroll.scrollTo(0) }
+                Column(
+                    Modifier
+                        .fillMaxSize()
+                        .verticalScroll(scroll)
+                        .padding(horizontal = PaperDimens.ScreenPad)
+                ) {
+                    Spacer(Modifier.height(2.dp))
+                    when (state.screen) {
+                        Screen.CREATE -> CreateScreen(state, scope)
+                        Screen.PREVIEW -> PreviewScreen(state, scope, activity)
+                        Screen.HISTORY -> HistoryScreen(state, scope) { importLauncher.launch("*/*") }
+                        Screen.HELP -> HelpScreen(state)
+                        else -> Unit
+                    }
+                    Spacer(Modifier.height(20.dp))
+                }
             }
         }
 
@@ -111,13 +188,13 @@ fun PaperMillRoot(state: AppState) {
         when (state.screen) {
             Screen.HOME -> StickyBar {
                 SecondaryButton(
-                    "自定义题量",
+                    "自定义",
                     modifier = Modifier.weight(1f),
                 ) { state.screen = Screen.CREATE }
                 PrimaryButton(
                     "直接出卷",
                     enabled = !state.busy && state.totalQuestions > 0,
-                    modifier = Modifier.weight(1.2f),
+                    modifier = Modifier.weight(1.25f),
                 ) { scope.launch { state.generate() } }
             }
             Screen.CREATE -> StickyBar {
@@ -152,13 +229,13 @@ fun PaperMillRoot(state: AppState) {
             else -> Unit
         }
 
-        BottomNav(state)
+        FloatingDock(state) { tab -> state.goTab(tab) }
     }
 }
 
 private fun screenTitle(state: AppState): Pair<String, String> = when (state.screen) {
-    Screen.HOME -> "卷子" to "自己配卷，一键打印"
-    Screen.CREATE -> "自定义题量" to "${GradeProfiles.gradeLabel(state.grade)} · ${state.totalQuestions} 题 · 预计 ${state.estimatedPages} 页 ${state.orientation.label}"
+    Screen.HOME -> "卷子" to "选年级科目，30 秒出一张能打印的卷子"
+    Screen.CREATE -> "自由组合" to "${GradeProfiles.gradeLabel(state.grade)} · ${state.totalQuestions} 题 · 预计 ${state.estimatedPages} 页 ${state.orientation.label}"
     Screen.PREVIEW -> if (state.isReference) {
         "打印预览" to "1 页 A4 · 与打印结果完全一致"
     } else {
@@ -170,6 +247,20 @@ private fun screenTitle(state: AppState): Pair<String, String> = when (state.scr
     Screen.MORE -> "更多" to "数据 / 打印 / 更新 / 关于"
     Screen.HISTORY -> "试卷库" to "只存题目快照，随时重开"
     Screen.HELP -> "打印帮助" to "在家打印与远程打印两种方式"
+}
+
+/** Hero 卡里的三个数据小块：题量 / 页数 / 是否自动补满 */
+@Composable
+private fun HeroStat(value: String, label: String) {
+    Column(
+        Modifier
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color.White.copy(alpha = 0.16f))
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+    ) {
+        Text(value, fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Color.White)
+        Text(label, fontSize = 10.sp, color = Color.White.copy(alpha = 0.82f))
+    }
 }
 
 @Composable
@@ -187,36 +278,57 @@ private fun HomeScreen(state: AppState, scope: CoroutineScope) {
     val presets = PaperTemplates.forSelection(state.grade, state.subjects).take(8)
     val subjectLabel = state.subjects.joinToString(" + ") { it.label }
 
-    CardSection {
-        Text(
-            "${GradeProfiles.gradeLabel(state.grade)} · $subjectLabel",
-            fontSize = PaperDimens.HeroSp,
-            fontWeight = FontWeight.SemiBold,
-            color = PaperColors.OnSurface,
-        )
-        Spacer(Modifier.height(6.dp))
-        Text(
-            "共 ${state.totalQuestions} 题 · 预计 ${state.estimatedPages} 页 A4 · ${state.answerMode.label}",
-            fontSize = PaperDimens.CaptionSp,
-            color = PaperColors.OnSurfaceVariant,
-        )
-        Spacer(Modifier.height(12.dp))
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .background(PaperColors.AccentContainer, RoundedCornerShape(10.dp))
-                .clickable { scope.launch { state.generateDaily() } }
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                "每日一练 · 今天这一套，明天自动换新",
-                fontSize = PaperDimens.LabelSp,
-                fontWeight = FontWeight.SemiBold,
-                color = PaperColors.OnSurface,
-                modifier = Modifier.weight(1f),
+    // Hero：一屏说清「给谁出卷、多少题、几张纸」，渐变是整页的视觉锚点
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .shadow(14.dp, RoundedCornerShape(26.dp))
+            .clip(RoundedCornerShape(26.dp))
+            .background(
+                Brush.linearGradient(
+                    listOf(PaperColors.GradientStart, PaperColors.GradientEnd)
+                )
             )
-            Text("›", fontSize = 18.sp, color = PaperColors.Accent)
+            .padding(20.dp),
+    ) {
+        Column {
+            Text(
+                "${GradeProfiles.gradeLabel(state.grade)} · $subjectLabel",
+                fontSize = 24.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color.White,
+            )
+            Spacer(Modifier.height(5.dp))
+            Text(
+                "共 ${state.totalQuestions} 题 · 预计 ${state.estimatedPages} 页 A4 · ${state.answerMode.label}",
+                fontSize = PaperDimens.CaptionSp,
+                color = Color.White.copy(alpha = 0.82f),
+            )
+            Spacer(Modifier.height(16.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                HeroStat("${state.totalQuestions}", "道题")
+                HeroStat("${state.estimatedPages}", "页 A4")
+                HeroStat(if (state.autoFillPage) "开" else "关", "自动补满")
+            }
+            Spacer(Modifier.height(16.dp))
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(Color.White.copy(alpha = 0.16f))
+                    .clickable { scope.launch { state.generateDaily() } }
+                    .padding(horizontal = 14.dp, vertical = 11.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    "每日一练 · 今天这套，明天自动换新",
+                    fontSize = PaperDimens.LabelSp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Color.White,
+                    modifier = Modifier.weight(1f),
+                )
+                Text("›", fontSize = 20.sp, color = Color.White)
+            }
         }
     }
 
@@ -401,11 +513,28 @@ private fun CreateScreen(state: AppState, scope: CoroutineScope) {
     }
 
     Spacer(Modifier.height(16.dp))
-    SectionLabel("01", "题量", "共 ${state.totalQuestions} 题")
+    SectionLabel("01", "自由组合", "共 ${state.totalQuestions} 题 · 预计 ${state.estimatedPages} 页")
     Spacer(Modifier.height(8.dp))
     CardSection {
+        // 三个一键动作：不想自己算配比就点「智能配比」，凑一页刚刚好
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            MiniAction("智能配比", enabled = !state.busy) { state.smartCompose() }
+            MiniAction("换一套", enabled = !state.busy) { state.shufflePreviewSeed() }
+            MiniAction(
+                "清空",
+                color = PaperColors.Error,
+                enabled = state.counts.isNotEmpty(),
+            ) { state.clearTypes() }
+        }
+        Spacer(Modifier.height(12.dp))
+
         if (state.selectedTypes.isEmpty()) {
-            Text("还没选题型，点下方「添加题型」。", fontSize = PaperDimens.BodySp, color = PaperColors.OnSurfaceVariant)
+            Text(
+                "还没选题型。点「智能配比」自动凑一页，或者在下面搜索、逐个加入。",
+                fontSize = PaperDimens.CaptionSp,
+                color = PaperColors.OnSurfaceVariant,
+                lineHeight = 17.sp,
+            )
         }
         state.selectedTypes.forEach { type ->
             StepperRow(
@@ -416,38 +545,86 @@ private fun CreateScreen(state: AppState, scope: CoroutineScope) {
                 onPlus = { state.setCount(type, 1) },
                 onMinusMore = { state.setCount(type, -5) },
                 onPlusMore = { state.setCount(type, 5) },
+                onRemove = { state.removeType(type) },
             )
         }
-        Divider()
+    }
+
+    // v0.6.0 题型库：搜索 + 按科目筛选，点「＋10」就能加进组合
+    Spacer(Modifier.height(14.dp))
+    SectionLabel("02", "题型库", "共 ${state.availableTypes.size} 种")
+    Spacer(Modifier.height(8.dp))
+    var filterSubject by remember { mutableStateOf<Subject?>(null) }
+    val subjectOptions = state.availableTypes
+        .mapNotNull { GeneratorRegistry.subjectOf(it) }
+        .distinct()
+    val pool = state.availableTypes.filter { type ->
+        (filterSubject == null || GeneratorRegistry.subjectOf(type) == filterSubject) &&
+            (state.typeQuery.isBlank() || type.label.contains(state.typeQuery.trim()))
+    }
+
+    CardSection {
+        Field3(
+            value = state.typeQuery,
+            onValueChange = { state.typeQuery = it },
+            placeholder = "搜索题型，比如「口算」「拼音」",
+            leadingIcon = Icons.Rounded.Search,
+        )
+        Spacer(Modifier.height(10.dp))
         Row(
             Modifier
                 .fillMaxWidth()
-                .clickable { state.showAllTypes = !state.showAllTypes }
-                .padding(vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            ChoiceChip("全部", filterSubject == null) { filterSubject = null }
+            subjectOptions.forEach { s ->
+                ChoiceChip(s.label, filterSubject == s) {
+                    filterSubject = if (filterSubject == s) null else s
+                }
+            }
+        }
+        Spacer(Modifier.height(10.dp))
+
+        if (pool.isEmpty()) {
             Text(
-                "+ 添加题型（${state.unselectedTypes.size} 种可选）",
-                fontSize = PaperDimens.BodySp,
-                color = PaperColors.Primary,
-                modifier = Modifier.weight(1f),
-            )
-            Text(
-                if (state.showAllTypes) "收起" else "展开",
+                "没有匹配的题型，换个关键词试试。",
                 fontSize = PaperDimens.CaptionSp,
                 color = PaperColors.OnSurfaceVariant,
             )
         }
-        if (state.showAllTypes) {
-            state.unselectedTypes.forEach { type ->
-                Row(
-                    Modifier.fillMaxWidth().padding(vertical = 5.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(type.label, fontSize = PaperDimens.BodySp, modifier = Modifier.weight(1f))
-                    MiniAction("加 10 题") { state.addType(type) }
+        pool.forEach { type ->
+            val count = state.counts[type] ?: 0
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(PaperColors.SurfaceAlt)
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        type.label,
+                        fontSize = PaperDimens.BodySp,
+                        fontWeight = FontWeight.Medium,
+                        color = PaperColors.OnSurface,
+                    )
+                    Text(
+                        if (count > 0) {
+                            "已加入 $count 题 · 再加 10 题"
+                        } else if (type.answerLines > 0) {
+                            "需书写过程 · 加入后自动单栏"
+                        } else {
+                            "客观题 · 按栏数排版"
+                        },
+                        fontSize = PaperDimens.TinySp,
+                        color = PaperColors.OnSurfaceVariant,
+                    )
                 }
+                MiniAction("＋10") { state.setCount(type, 10) }
             }
+            Spacer(Modifier.height(8.dp))
         }
     }
 
@@ -457,7 +634,7 @@ private fun CreateScreen(state: AppState, scope: CoroutineScope) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(Modifier.weight(1f)) {
-            SectionLabel("02", "卷面设置", if (state.showAdvanced) "收起" else "展开")
+            SectionLabel("03", "卷面设置", if (state.showAdvanced) "收起" else "展开")
         }
     }
     if (state.showAdvanced) {
@@ -512,15 +689,12 @@ private fun CreateScreen(state: AppState, scope: CoroutineScope) {
             }
             Divider()
             Spacer(Modifier.height(10.dp))
-            TextField(
+            Field3(
                 value = state.titleOverride ?: "",
                 onValueChange = { state.titleOverride = it },
-                placeholder = { Text("留空则自动生成标题", fontSize = PaperDimens.BodySp) },
-                label = { Text("卷子标题（可选）", fontSize = PaperDimens.CaptionSp) },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-            )
-        }
+                placeholder = "留空则自动生成",
+                label = "卷子标题（可选）",
+            )        }
     } else {
         // 折叠态也把当前卷面配置说清楚，不展开就能确认
         Spacer(Modifier.height(6.dp))
@@ -647,41 +821,85 @@ private fun PreviewScreen(
     Spacer(Modifier.height(PaperDimens.Gap))
 
     if (!state.showQuestionList) {
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(PaperDimens.GapSmall),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            MiniAction("‹ 上一页", enabled = state.previewPage > 0) { state.nextPreviewPage(-1) }
-            Spacer(Modifier.weight(1f))
-            Text(
-                "第 ${state.previewPage + 1} / ${state.previews.size} 页",
-                fontSize = PaperDimens.LabelSp,
-                color = PaperColors.OnSurface,
-            )
-            Spacer(Modifier.weight(1f))
-            MiniAction(
-                "下一页 ›",
-                enabled = state.previewPage < state.previews.size - 1,
-            ) { state.nextPreviewPage(1) }
-        }
-        Spacer(Modifier.height(10.dp))
-
-        val bmp = state.previews.getOrNull(state.previewPage)
-        if (bmp != null) {
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .background(Color.White, RoundedCornerShape(6.dp))
-                    .border(1.dp, PaperColors.Outline, RoundedCornerShape(6.dp)),
-            ) {
-                Image(
-                    bitmap = bmp,
-                    contentDescription = "第 ${state.previewPage + 1} 页",
-                    contentScale = ContentScale.FillWidth,
-                    modifier = Modifier.fillMaxWidth(),
-                )
+        if (state.previews.isNotEmpty()) {
+            val pageCount = state.previews.size
+            val previewPager = rememberPagerState(
+                initialPage = state.previewPage.coerceIn(0, pageCount - 1),
+            ) { pageCount }
+            // 手指滑到哪页，页码就跟着走；点下方圆点也能跳
+            LaunchedEffect(previewPager.currentPage, previewPager.isScrollInProgress) {
+                if (!previewPager.isScrollInProgress) state.previewPage = previewPager.currentPage
             }
+            LaunchedEffect(state.previewPage) {
+                if (previewPager.currentPage != state.previewPage) {
+                    previewPager.animateScrollToPage(state.previewPage)
+                }
+            }
+
+            BoxWithConstraints(Modifier.fillMaxWidth()) {
+                val ratio = if (state.orientation == PageOrientation.LANDSCAPE) 0.74f else 1.42f
+                // 按宽度算出来的高度约 527dp，一屏放不下，整页会被底栏切掉、圆点也被顶出去。
+                // 这里再按屏高封顶到 52%，配合 ContentScale.Fit，整页 + 圆点 + 页码刚好一屏可见。
+                val screenH = LocalConfiguration.current.screenHeightDp.dp
+                val pageH = minOf(maxWidth * ratio, screenH * 0.52f)
+                HorizontalPager(
+                    state = previewPager,
+                    pageSpacing = 12.dp,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(pageH),
+                ) { page ->
+                    val bmp = state.previews.getOrNull(page)
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .fillMaxHeight()
+                            .shadow(6.dp, RoundedCornerShape(18.dp))
+                            .clip(RoundedCornerShape(18.dp))
+                            .background(Color.White)
+                            .padding(4.dp),
+                    ) {
+                        if (bmp != null) {
+                            Image(
+                                bitmap = bmp,
+                                contentDescription = "第 ${page + 1} 页",
+                                contentScale = ContentScale.Fit,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .fillMaxHeight(),
+                            )
+                        }
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(12.dp))
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                state.previews.indices.forEach { i ->
+                    val on = i == state.previewPage
+                    Box(
+                        Modifier
+                            .padding(horizontal = 3.dp)
+                            .width(if (on) 20.dp else 7.dp)
+                            .height(7.dp)
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(if (on) PaperColors.Primary else PaperColors.OutlineStrong)
+                            .clickable { state.previewPage = i }
+                    )
+                }
+            }
+            Spacer(Modifier.height(7.dp))
+            Text(
+                "第 ${state.previewPage + 1} / ${state.previews.size} 页 · 左右滑动翻页",
+                fontSize = PaperDimens.CaptionSp,
+                color = PaperColors.OnSurfaceVariant,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth(),
+            )
         } else {
             CardSection { Text("还没有生成内容", fontSize = PaperDimens.BodySp) }
         }
