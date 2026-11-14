@@ -45,6 +45,39 @@ object PrintLauncher {
             pm.print(jobName, adapter, attributes)
         }
     }
+
+    /**
+     * 打印用户自己选的 PDF 文件。
+     *
+     * 走 [FilePrintAdapter]（流式拷贝），所以三四十 MB 的教材也能打，不会 OOM。
+     * 纸张方向按首页的宽高比选：横版内容用竖版纸打印，驱动会再缩一次，字小到看不清。
+     */
+    suspend fun printFile(
+        activity: Activity,
+        jobName: String,
+        file: java.io.File,
+        pageCount: Int,
+        landscape: Boolean,
+    ) {
+        val pm = activity.getSystemService(Context.PRINT_SERVICE) as? PrintManager
+            ?: error("当前系统没有打印服务")
+
+        val media = if (landscape) {
+            PrintAttributes.MediaSize.ISO_A4.asLandscape()
+        } else {
+            PrintAttributes.MediaSize.ISO_A4
+        }
+        val attributes = PrintAttributes.Builder()
+            .setMediaSize(media)
+            // 用户自己的文件可能自带留白，这里不能再叠边距，否则内容被压小
+            .setMinMargins(PrintAttributes.Margins.NO_MARGINS)
+            .build()
+
+        val adapter = FilePrintAdapter(jobName, file, pageCount)
+        withContext(Dispatchers.Main) {
+            pm.print(jobName, adapter, attributes)
+        }
+    }
 }
 
 /**

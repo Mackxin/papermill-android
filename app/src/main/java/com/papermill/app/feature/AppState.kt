@@ -2,12 +2,17 @@ package com.papermill.app.feature
 
 import android.app.Activity
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.pdf.PdfRenderer
+import android.os.ParcelFileDescriptor
 import android.content.Intent
 import android.net.Uri
+import android.provider.OpenableColumns
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import com.papermill.app.BuildConfig
 import com.papermill.app.core.export.PdfExporter
 import com.papermill.app.core.export.PdfSharer
@@ -24,7 +29,9 @@ import com.papermill.app.core.store.LocalStore
 import com.papermill.app.core.store.MistakeItem
 import com.papermill.app.core.store.SavedPaper
 import com.papermill.app.core.update.UpdateChecker
+import com.papermill.app.domain.content.CurricUnit
 import com.papermill.app.domain.content.CurriculumBank
+import com.papermill.app.domain.content.TextbookCatalog
 import com.papermill.app.domain.generate.AnswerMode
 import com.papermill.app.domain.generate.BankQuestionSource
 import com.papermill.app.domain.generate.GenContext
@@ -50,7 +57,17 @@ import java.util.Locale
 import java.util.Random
 import kotlin.math.ceil
 
-enum class Screen { HOME, CREATE, PREVIEW, MISTAKES, HISTORY, HELP, REFERENCE, MORE }
+/** 用户自己选的本地 PDF（只读地活在 cacheDir 里，不打包、不上传） */
+data class LocalPdf(
+    val file: File,
+    val name: String,
+    val pages: Int,
+    val preview: ImageBitmap?,
+    /** 首页宽 > 高：打印框按横版 A4 匹配，否则会被驱动再转一次 */
+    val landscape: Boolean,
+)
+
+enum class Screen { HOME, CREATE, PREVIEW, MISTAKES, HISTORY, HELP, REFERENCE, MORE, TEXTBOOK, LOCAL_PDF }
 
 /** 底部 4 个固定页签；PREVIEW / CREATE 归到「出卷」，HISTORY / HELP 归到「更多」 */
 enum class NavTab { HOME, REFERENCE, MISTAKES, MORE }
@@ -136,6 +153,25 @@ class AppState(private val rawContext: Context) {
     var dockGlass by mutableStateOf(false)
         private set
 
+    /**
+     * 按单元出卷时的知识点白名单（空 = 不限制）。
+     *
+     * 从「课本」页点某个单元的「出卷」进来时会填上，
+     * 用户一旦改年级 / 改科目 / 从首页重新出卷就必须清掉 ——
+     * 否则会出现「换了科目，出来的还是上个单元那几道题」这种鬼故事。
+     */
+    var unitTopicIds by mutableStateOf<Set<String>>(emptySet())
+        private set
+    var unitTitle by mutableStateOf("")
+        private set
+
+    fun clearUnitFilter() {
+        if (unitTopicIds.isEmpty() && unitTitle.isEmpty()) return
+        unitTopicIds = emptySet()
+        unitTitle = ""
+        titleOverride = null
+    }
+
     fun updateDockGlass(on: Boolean) {
         if (dockGlass == on) return
         dockGlass = on
@@ -182,7 +218,8 @@ class AppState(private val rawContext: Context) {
                 screen = Screen.HOME
                 true
             }
-            Screen.HISTORY, Screen.HELP -> {
+            // 课本 / 本地 PDF 都是从「更多」进来的子页面，退回去还是「更多」
+            Screen.HISTORY, Screen.HELP, Screen.TEXTBOOK, Screen.LOCAL_PDF -> {
                 screen = Screen.MORE
                 true
             }
@@ -260,6 +297,7 @@ class AppState(private val rawContext: Context) {
         // 课标题库必须先 init：题型可用性判断要读 index.json 的题量统计，
         // 没初始化时 countOf 一律返回 0，那两个题型会静默消失
         CurriculumBank.init(ctx)
+        TextbookCatalog.init(ctx)
         dockGlass = LocalStore.loadSettings(ctx).dockGlass
         counts = PaperComposer.defaultSpec(grade, subjects).counts
         refreshLists()
@@ -284,7 +322,66 @@ class AppState(private val rawContext: Context) {
 
     // ---------------------------------------------------------------- 选择
 
+    /**
+     * 从「课本」页点某个单元直接出卷：只考这一个单元的知识点。
+     *
+     * 题量按**单元里实际有多少题**封顶（选择题最多 20、填空最多 16），
+     * 不硬凑：一个小单元只有 6 道题，就出 6 道 —— 凑到 20 道只能靠别的单元甚至别的年级来填，
+     * 那就不叫「这一单元的练习卷」了。
+     */
+    suspend fun generateUnitPaper(unit: CurricUnit) {
+        val ids = unit.topicIds.toSet()
+        if (ids.isEmpty()) {
+            toast = "这个单元还没有配套题"
+            return
+        }
+        val blank = CurriculumBank.countIn(ids, choice = false)
+        val choice = CurriculumBank.countIn(ids, choice = true)
+        if (blank == 0 && choice == 0) {
+            toast = "「${unit.name}」还没有配套题，可换个单元或按年级出卷"
+            return
+        }
+
+        val newCounts = LinkedHashMap<QuestionType, Int>()
+        if (blank > 0) newCounts[QuestionType.CURRIC_BLANK] = minOf(blank, 16)
+        if (choice > 0) newCounts[QuestionType.CURRIC_CHOICE] = minOf(choice, 20)
+
+        grade = unit.grade
+        subject = unit.subject
+        subjects = listOf(unit.subject)
+        clearUnitFilter()
+        unitTopicIds = ids
+        unitTitle = unit.name
+        counts = newCounts
+        titleOverride = null
+        previewSeed = System.currentTimeMillis()
+        generate()
+        // 从课本页出的卷子，返回时应该回到课本页而不是首页 —— 家长通常要连着出好几个单元
+        previewOrigin = Screen.TEXTBOOK
+    }
+
+    /**
+     * 单元题不够时一键「改成按整册出卷」。
+     *
+     * 保留课标题库的题型（家长要的仍是知识点练习，不是口算），只是把单元这个圈去掉，
+     * 题量拉回 20 道让自动补满去裁剪页数。语文没有填空题，会自然只剩选择题。
+     */
+    suspend fun widenToGrade() {
+        val wanted = counts.keys.filter {
+            it == QuestionType.CURRIC_BLANK || it == QuestionType.CURRIC_CHOICE
+        }.ifEmpty { listOf(QuestionType.CURRIC_CHOICE) }
+        clearUnitFilter()
+        val usable = wanted.filter { t ->
+            val choice = t == QuestionType.CURRIC_CHOICE
+            subjects.any { CurriculumBank.countOf(it, choice) > 0 }
+        }.ifEmpty { listOf(QuestionType.CURRIC_CHOICE) }
+        counts = usable.associateWith { 20 }
+        previewSeed = System.currentTimeMillis()
+        generate()
+    }
+
     fun selectGrade(g: Int) {
+        clearUnitFilter()
         grade = g
         val kept = subjects.filter { it.availableFor(g) }.ifEmpty { listOf(Subject.MATH) }
         subjects = kept
@@ -297,6 +394,7 @@ class AppState(private val rawContext: Context) {
     /** 多学科交叉：点一下加进来，再点一下取消（至少留一科） */
     fun toggleSubject(s: Subject) {
         if (!s.availableFor(grade)) return
+        clearUnitFilter()
         val list = subjects.toMutableList()
         if (s in list) {
             if (list.size == 1) return
@@ -312,6 +410,7 @@ class AppState(private val rawContext: Context) {
     }
 
     fun applyTemplate(newCounts: Map<QuestionType, Int>) {
+        clearUnitFilter()
         counts = LinkedHashMap(newCounts)
         titleOverride = null
         previewSeed = System.currentTimeMillis()
@@ -458,10 +557,13 @@ class AppState(private val rawContext: Context) {
 
     private fun currentSpec(seed: Long, useCounts: Map<QuestionType, Int> = counts): PaperSpec {
         val total = useCounts.values.sum()
-        val autoTitle = if (subjects.size > 1) {
-            "${GradeProfiles.stageLabel(grade)} · ${GradeProfiles.gradeLabel(grade)} · 综合练习"
-        } else {
-            "${GradeProfiles.stageLabel(grade)} · ${GradeProfiles.gradeLabel(grade)} · ${subject.label}练习"
+        val autoTitle = when {
+            // 按单元出卷：标题直接写单元名，家长一眼知道这张卷考的是哪一课
+            unitTitle.isNotEmpty() -> "${GradeProfiles.gradeLabel(grade)} · $unitTitle"
+            subjects.size > 1 ->
+                "${GradeProfiles.stageLabel(grade)} · ${GradeProfiles.gradeLabel(grade)} · 综合练习"
+            else ->
+                "${GradeProfiles.stageLabel(grade)} · ${GradeProfiles.gradeLabel(grade)} · ${subject.label}练习"
         }
         return PaperSpec(
             grade = grade,
@@ -477,6 +579,7 @@ class AppState(private val rawContext: Context) {
             fontSize = 11f,
             seed = seed,
             orientation = orientation,
+            topicIds = unitTopicIds,
         )
     }
 
@@ -619,12 +722,16 @@ class AppState(private val rawContext: Context) {
                 if (extraAdded > 0) append("（自动补了 $extraAdded 题，未增加页数）")
                 // 去重 / 历史卷避让少给两三题是常态，别动不动报「题量不足」吓人
                 val shortage = totalQuestions - actual
-                // 页面已经排满就不再拿「少几题」打扰用户；只有明显缺题或真的没排满才提示
-                if (shortage > maxOf(4, totalQuestions / 5) || lastContentFillPercent < 70) {
-                    append("　⚠ 可用题量不足 $shortage 题，可减少题量或增选其它题型")
+                when {
+                    // 按单元出卷：这一单元的题本来就有限，印满不了是正常的，别报成错误
+                    unitTopicIds.isNotEmpty() -> append("　这一单元的题已全部印上")
+                    shortage > maxOf(4, totalQuestions / 5) ->
+                        append("　⚠ 可用题量不足 $shortage 题，可减少题量或增选其它题型")
                 }
                 append("　最后一页正文用了 $lastContentFillPercent%")
-                if (lastContentFillPercent < 84) append("　可在预览页点「补满这一页」继续加题")
+                if (unitTopicIds.isEmpty() && lastContentFillPercent < 84) {
+                    append("　可在预览页点「补满这一页」继续加题")
+                }
             }
             previewOrigin = if (screen == Screen.CREATE) Screen.CREATE else Screen.HOME
             screen = Screen.PREVIEW
@@ -1172,6 +1279,87 @@ class AppState(private val rawContext: Context) {
                 Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             )
         }.onFailure { toast = "打开失败：${it.message}" }
+    }
+
+    // ---------------------------------------------------------------- 本地 PDF
+
+    /**
+     * 演示：用户自己选的 PDF（老师发的卷子、自己下的教材）。
+     *
+     * 为什么不放进 assets：那属于**用户自己的副本**，App 只是个打印工具。
+     * 我们只把它复制进 cacheDir 临时用，不落数据目录、不上传、不打进包，
+     * 也就不存在任何再分发问题。
+     */
+    var localPdf by mutableStateOf<LocalPdf?>(null)
+        private set
+
+    suspend fun openLocalPdf(uri: Uri) {
+        busy = true
+        try {
+            val loaded = withContext(Dispatchers.IO) { loadLocalPdf(uri) }
+            localPdf = loaded
+            screen = Screen.LOCAL_PDF
+            toast = "已读取 ${loaded.pages} 页，点「系统打印」选奔图 M1"
+        } catch (t: Throwable) {
+            toast = "读取失败：${t.message ?: t.javaClass.simpleName}"
+        }
+        busy = false
+    }
+
+    private fun loadLocalPdf(uri: Uri): LocalPdf {
+        val name = queryDisplayName(uri)
+        val target = File(ctx.cacheDir, "local_print.pdf")
+        ctx.contentResolver.openInputStream(uri)?.use { input ->
+            target.outputStream().use { out -> input.copyTo(out) }
+        } ?: error("读不到这个文件，换个位置试试")
+
+        val pfd = ParcelFileDescriptor.open(target, ParcelFileDescriptor.MODE_READ_ONLY)
+        val renderer = PdfRenderer(pfd)
+        val pages = renderer.pageCount
+        var preview: ImageBitmap? = null
+        var landscape = false
+        if (pages > 0) {
+            val page = renderer.openPage(0)
+            landscape = page.width > page.height
+            // 缩略图按最长边 900px 收一下：A4 原尺寸位图要 15MB，一进页面就掉帧
+            val scale = 900f / maxOf(page.width, page.height).coerceAtLeast(1)
+            val w = (page.width * minOf(1f, scale)).toInt().coerceAtLeast(1)
+            val h = (page.height * minOf(1f, scale)).toInt().coerceAtLeast(1)
+            val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+            bmp.eraseColor(android.graphics.Color.WHITE)
+            page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+            page.close()
+            preview = bmp.asImageBitmap()
+        }
+        renderer.close()
+        pfd.close()
+        return LocalPdf(target, name, pages, preview, landscape)
+    }
+
+    private fun queryDisplayName(uri: Uri): String {
+        val fallback = "本地文档.pdf"
+        return runCatching {
+            ctx.contentResolver.query(uri, null, null, null, null)?.use { c ->
+                val idx = c.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                if (idx >= 0 && c.moveToFirst()) c.getString(idx) else null
+            }
+        }.getOrNull() ?: fallback
+    }
+
+    suspend fun printLocalPdf(activity: Activity) {
+        val doc = localPdf ?: return
+        if (doc.pages <= 0) {
+            toast = "这个 PDF 没有可打印的页"
+            return
+        }
+        busy = true
+        try {
+            PrintLauncher.printFile(activity, doc.name, doc.file, doc.pages, doc.landscape)
+            toast = "已调起系统打印：在打印机列表里选奔图 M1"
+        } catch (t: Throwable) {
+            toast = "打印失败：${t.message ?: t.javaClass.simpleName}"
+        }
+        busy = false
     }
 
     fun openPrintSettings() = PrintServiceProbe.openSettings(ctx)

@@ -10,6 +10,68 @@ import android.print.PrintDocumentInfo
 import java.io.FileOutputStream
 
 /**
+ * 打印**用户自己选的** PDF 文件（教材、老师发的卷子）。
+ *
+ * 与 [PdfPrintAdapter] 的区别只有一个但很要紧：**流式拷贝，不整包读进内存**。
+ * 那些文件动辄三四十 MB，先 readBytes 再写出去，低端机直接 OOM；
+ * 这里 onWrite 时读一块写一块，内存占用只有一个 64KB 缓冲区。
+ */
+class FilePrintAdapter(
+    private val jobName: String,
+    private val file: java.io.File,
+    private val pageCount: Int,
+) : PrintDocumentAdapter() {
+
+    override fun onLayout(
+        oldAttributes: PrintAttributes?,
+        newAttributes: PrintAttributes?,
+        cancellationSignal: CancellationSignal?,
+        callback: LayoutResultCallback?,
+        extras: Bundle?,
+    ) {
+        if (cancellationSignal?.isCanceled == true) {
+            callback?.onLayoutCancelled()
+            return
+        }
+        val info = PrintDocumentInfo.Builder("$jobName.pdf")
+            .setContentType(PrintDocumentInfo.CONTENT_TYPE_DOCUMENT)
+            .setPageCount(pageCount)
+            .build()
+        callback?.onLayoutFinished(info, oldAttributes != newAttributes)
+    }
+
+    override fun onWrite(
+        pages: Array<out PageRange>?,
+        destination: ParcelFileDescriptor?,
+        cancellationSignal: CancellationSignal?,
+        callback: WriteResultCallback?,
+    ) {
+        try {
+            val fd = destination ?: error("打印目标为空")
+            if (!file.exists()) error("文件已被清理，请重新选择")
+            val os = FileOutputStream(fd.fileDescriptor)
+            file.inputStream().use { input ->
+                val buf = ByteArray(64 * 1024)
+                while (true) {
+                    if (cancellationSignal?.isCanceled == true) {
+                        callback?.onWriteCancelled()
+                        return
+                    }
+                    val n = input.read(buf)
+                    if (n <= 0) break
+                    os.write(buf, 0, n)
+                }
+            }
+            os.flush()
+            // 同样不 close：fd 属于系统，关掉会印出空白页
+            callback?.onWriteFinished(arrayOf(PageRange.ALL_PAGES))
+        } catch (t: Throwable) {
+            callback?.onWriteFailed(t.message ?: "写入打印数据失败")
+        }
+    }
+}
+
+/**
  * 把已经生成好的 PDF 字节交给系统打印框架。
  *
  * ============================================================

@@ -97,6 +97,13 @@ object ContentCatalog {
                 "出题时选项会洗牌并同步换算答案。注意：许可是非商业，本 App 一旦商业化必须删掉这批题。",
         ),
         CatalogEntry(
+            "课本单元",
+            "${CurriculumBank.totalUnits()} 个单元 · ${TextbookCatalog.size} 册教材",
+            "按教材章节把知识点归成单元，可在「课本」页按单元直接出卷（孩子学到哪一课就练哪一课）。" +
+                "教材原文只放链接：原仓库没有开源许可、教材版权属出版社，" +
+                "App 不打包也不转发任何一页 PDF，点了用浏览器去原站看。",
+        ),
+        CatalogEntry(
             "速查表",
             "${ReferenceData.sheets.size} 张",
             "乘法表、拼音表、音标表、语法表、公式表、动词表、课本同步表，全部 Canvas 自绘排版。",

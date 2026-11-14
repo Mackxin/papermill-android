@@ -49,6 +49,7 @@ private fun drawCurric(ctx: GenContext, choice: Boolean): List<GeneratedQuestion
         grade = ctx.grade,
         difficulty = ctx.difficulty,
         choice = choice,
+        topicIds = ctx.topicIds,
     )
     if (pool.isEmpty()) return emptyList()
 

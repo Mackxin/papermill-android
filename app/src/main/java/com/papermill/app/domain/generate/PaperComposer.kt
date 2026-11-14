@@ -35,6 +35,7 @@ object PaperComposer {
                 rng = rng,
                 blocked = blocked,
                 subjects = spec.effectiveSubjects().toSet(),
+                topicIds = spec.topicIds,
             )
             val questions = generator.generate(ctx)
                 .mapIndexed { i, q -> q.copy(no = nextNo + i) }

@@ -11,6 +11,8 @@ data class GenContext(
     val blocked: MutableSet<Long>,
     /** 本次出卷勾选的科目（交叉学科时用；空 = 不限制） */
     val subjects: Set<Subject> = emptySet(),
+    /** 按单元出卷时限定在这些知识点里（空 = 不限制） */
+    val topicIds: Set<String> = emptySet(),
 )
 
 interface QuestionGenerator {

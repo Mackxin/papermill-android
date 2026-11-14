@@ -57,13 +57,17 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.LineBreak
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.papermill.app.core.design.PaperColors
 import com.papermill.app.core.design.PaperDimens
 import com.papermill.app.core.update.UpdateChecker
 import com.papermill.app.domain.content.ContentCatalog
+import com.papermill.app.domain.content.CurriculumBank
+import com.papermill.app.domain.content.TextbookCatalog
 import com.papermill.app.domain.generate.AnswerMode
 import com.papermill.app.domain.generate.GeneratorRegistry
 import com.papermill.app.domain.generate.GradeProfiles
@@ -105,6 +109,10 @@ fun PaperMillRoot(state: AppState) {
     val scope = rememberCoroutineScope()
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) state.importBackup(uri)
+    }
+    // 本地 PDF：用 OpenDocument 而不是 GetContent，拿到的 Uri 才能稳定读到流
+    val pdfLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) scope.launch { state.openLocalPdf(uri) }
     }
 
     // 返回键：先 App 内逐层退（预览 → 来时的页面 → 首页），最后在首页再按一次才退出。
@@ -230,9 +238,11 @@ fun PaperMillRoot(state: AppState) {
                                 NavTab.HOME -> homeScreenItems(state, scope)
                                 NavTab.REFERENCE -> referenceScreenItems(state, scope)
                                 NavTab.MISTAKES -> mistakesScreenItems(state)
-                                NavTab.MORE -> moreScreenItems(state, scope) {
-                                    importLauncher.launch("*/*")
-                                }
+                                NavTab.MORE -> moreScreenItems(
+                                    state, scope,
+                                    onImport = { importLauncher.launch("*/*") },
+                                    onPickPdf = { pdfLauncher.launch(arrayOf("application/pdf")) },
+                                )
                             }
                             item { Spacer(Modifier.height(20.dp)) }
                         }
@@ -252,6 +262,10 @@ fun PaperMillRoot(state: AppState) {
                             Screen.PREVIEW -> PreviewScreen(state, scope, activity)
                             Screen.HISTORY -> HistoryScreen(state, scope) { importLauncher.launch("*/*") }
                             Screen.HELP -> HelpScreen(state)
+                            Screen.TEXTBOOK -> TextbookScreen(state, scope)
+                            Screen.LOCAL_PDF -> LocalPdfScreen(state) {
+                                pdfLauncher.launch(arrayOf("application/pdf"))
+                            }
                             else -> Unit
                         }
                         Spacer(Modifier.height(BOTTOM_SAFE))
@@ -295,6 +309,19 @@ fun PaperMillRoot(state: AppState) {
                     SecondaryButton("保存", modifier = Modifier.weight(1f)) { state.savePdf() }
                     SecondaryButton("分享", modifier = Modifier.weight(1f)) { state.sharePdf() }
                 }
+                Screen.LOCAL_PDF -> StickyBar {
+                    PrimaryButton(
+                        "系统打印",
+                        enabled = !state.busy && (state.localPdf?.pages ?: 0) > 0,
+                        modifier = Modifier.weight(1.2f),
+                    ) {
+                        if (activity != null) scope.launch { state.printLocalPdf(activity) }
+                        else state.toast = "拿不到 Activity，无法调起打印"
+                    }
+                    SecondaryButton("换一个文件", modifier = Modifier.weight(1f)) {
+                        pdfLauncher.launch(arrayOf("application/pdf"))
+                    }
+                }
                 Screen.MISTAKES -> {
                     val pending = state.mistakes.count { it.mastery != "MASTERED" }
                     StickyBar {
@@ -330,8 +357,10 @@ private fun screenTitle(state: AppState): Pair<String, String> = when (state.scr
         "${ReferenceData.sheets.size} 张速查表 · ${PracticeData.sheets.size} 张练习纸 · ${PracticeData.themeSheets.size} 张主题识字纸"
     Screen.MISTAKES -> "错题本" to "数据只存在这台手机"
     Screen.MORE -> "更多" to "数据 / 打印 / 更新 / 关于"
+    Screen.TEXTBOOK -> "课本" to "按单元出卷 · 教材原文在线阅读"
     Screen.HISTORY -> "试卷库" to "只存题目快照，随时重开"
     Screen.HELP -> "打印帮助" to "在家打印与远程打印两种方式"
+    Screen.LOCAL_PDF -> "打印本地 PDF" to (state.localPdf?.let { "${it.pages} 页 · ${it.name}" } ?: "选一个 PDF")
 }
 
 /**
@@ -985,7 +1014,12 @@ private fun PreviewScreen(
         if (!isRef && state.finalSuggestExtra > 0) {
             Spacer(Modifier.height(9.dp))
             Text(
-                "最后一页还有空白，建议再加约 ${state.finalSuggestExtra} 题 —— 直接在下面点「补满这一页」即可。",
+                // 按单元出的卷子题就是那么多，再「建议加题」等于骗人，这句得换掉
+                if (state.unitTopicIds.isNotEmpty()) {
+                    "这一单元的题已经全部印上了，所以最后一页没排满 —— 想多练就点下面的「改成按整册出卷」。"
+                } else {
+                    "最后一页还有空白，建议再加约 ${state.finalSuggestExtra} 题 —— 直接在下面点「补满这一页」即可。"
+                },
                 fontSize = PaperDimens.CaptionSp,
                 color = PaperColors.Accent,
                 lineHeight = 16.sp,
@@ -999,29 +1033,45 @@ private fun PreviewScreen(
             title = "这一页还有空白？",
             hint = "末页正文 $pct% · 加题后立刻重排，放不下会自动减量，绝不白多印一张纸",
         ) {
-            Row(horizontalArrangement = Arrangement.spacedBy(PaperDimens.GapSmall)) {
-                PrimaryButton(
-                    "补满这一页",
-                    enabled = !state.busy && pct < 92,
-                    modifier = Modifier.weight(1f),
-                ) { scope.launch { state.fillLastPage() } }
-                SecondaryButton(
-                    "加 ${state.extraAddCount} 题",
-                    enabled = !state.busy,
-                    modifier = Modifier.weight(1f),
-                ) { scope.launch { state.addQuestions(state.extraAddCount) } }
+            // 按单元出的卷子：这一单元的题就在这么多，点「加题」也变不出新题来。
+            // 与其让家长点空按钮，不如直接给一个真能加题的出口。
+            if (state.unitTopicIds.isNotEmpty()) {
+                Text(
+                    "这一单元的题已经全部印上了。想再多练几道，就按整个学期出卷。",
+                    fontSize = PaperDimens.CaptionSp,
+                    color = PaperColors.OnSurfaceVariant,
+                    lineHeight = 17.sp,
+                )
+                Spacer(Modifier.height(8.dp))
+                SecondaryButton("改成按整册出卷", enabled = !state.busy) {
+                    scope.launch { state.widenToGrade() }
+                }
+                Spacer(Modifier.height(10.dp))
+            } else {
+                Row(horizontalArrangement = Arrangement.spacedBy(PaperDimens.GapSmall)) {
+                    PrimaryButton(
+                        "补满这一页",
+                        enabled = !state.busy && pct < 92,
+                        modifier = Modifier.weight(1f),
+                    ) { scope.launch { state.fillLastPage() } }
+                    SecondaryButton(
+                        "加 ${state.extraAddCount} 题",
+                        enabled = !state.busy,
+                        modifier = Modifier.weight(1f),
+                    ) { scope.launch { state.addQuestions(state.extraAddCount) } }
+                }
+                Spacer(Modifier.height(6.dp))
+                StepperRow(
+                    label = "自定义加题数量",
+                    value = state.extraAddCount,
+                    hint = "1–30 题，会先试排再减量",
+                    onMinus = { state.changeExtraAdd(-1) },
+                    onPlus = { state.changeExtraAdd(1) },
+                    onMinusMore = { state.changeExtraAdd(-5) },
+                    onPlusMore = { state.changeExtraAdd(5) },
+                )
+                Divider()
             }
-            Spacer(Modifier.height(6.dp))
-            StepperRow(
-                label = "自定义加题数量",
-                value = state.extraAddCount,
-                hint = "1–30 题，会先试排再减量",
-                onMinus = { state.changeExtraAdd(-1) },
-                onPlus = { state.changeExtraAdd(1) },
-                onMinusMore = { state.changeExtraAdd(-5) },
-                onPlusMore = { state.changeExtraAdd(5) },
-            )
-            Divider()
             SettingRow("纸张方向（立即重排）") {
                 PageOrientation.values().forEach { o ->
                     ChoiceChip(o.shortLabel, state.orientation == o) {
@@ -1393,7 +1443,12 @@ private fun masteryLabel(m: String) = when (m) {
 
 // ------------------------------------------------------------------ 更多
 
-private fun LazyListScope.moreScreenItems(state: AppState, scope: CoroutineScope, onImport: () -> Unit) {
+private fun LazyListScope.moreScreenItems(
+    state: AppState,
+    scope: CoroutineScope,
+    onImport: () -> Unit,
+    onPickPdf: () -> Unit,
+) {
     // 内置内容：数字全部当场从数据源算，不写死文案 —— 题库扩容后这里自动跟着变
     item { ContentSummaryCard(state.bankSize) }
 
@@ -1426,6 +1481,10 @@ private fun LazyListScope.moreScreenItems(state: AppState, scope: CoroutineScope
     item { Spacer(Modifier.height(PaperDimens.Gap)) }
     item {
         CardSection(title = "打印与更新") {
+            ListRow("课本", "按单元出卷 · 教材原文在线阅读") { state.screen = Screen.TEXTBOOK }
+            Divider()
+            ListRow("打印手机里的 PDF", "老师发的卷子 / 自己下的材料，直接打") { onPickPdf() }
+            Divider()
             ListRow("打印帮助", "在家 / 远程两种方式") { state.screen = Screen.HELP }
             Divider()
             ListRow(
@@ -1540,9 +1599,295 @@ private fun HeadStat(value: String, label: String, modifier: Modifier = Modifier
 
 // ------------------------------------------------------------------ 试卷库
 
+// ------------------------------------------------------------------ 课本
+
+/**
+ * 课本页：两个视图。
+ *
+ * 「按单元」用课标题库里每个知识点的章节字段聚合出教材单元，
+ * 点某个单元的「出卷」就只考这一单元 —— 孩子学到哪一课就练哪一课。
+ * 「教材原文」只是链接清单：那个仓库没有 LICENSE、教材著作权属出版社，
+ * App 不持有也不转发任何一页 PDF，点了用浏览器去原站看。
+ */
 @Composable
-private fun HistoryScreen(state: AppState, scope: CoroutineScope, onImport: () -> Unit) {
+private fun TextbookScreen(state: AppState, scope: CoroutineScope) {
+    var mode by remember { mutableStateOf(0) }
+    var g by remember { mutableStateOf(state.grade) }
+    var sub by remember { mutableStateOf(state.subject) }
+
+    // 换年级后当前科目可能这一年不开课（物理八年级才有），自动落到开课的科目
+    LaunchedEffect(g) {
+        if (!sub.availableFor(g)) {
+            sub = Subject.entries.firstOrNull { it.availableFor(g) } ?: Subject.MATH
+        }
+    }
+
+    val units = remember(g, sub) { CurriculumBank.units(sub, g) }
+    val counts = remember(sub) { CurriculumBank.countsByTopic(sub) }
+    val books = remember(g, sub) { TextbookCatalog.books(g, sub) }
+
     CardSection {
+        Text(
+            "单元目录直接取自课标题库的章节划分，所以「单元 → 知识点 → 题目」始终对得上："
+                + "点某个单元的「出卷」，出来的卷子只考这一单元。",
+            fontSize = PaperDimens.BodySp,
+            color = PaperColors.OnSurfaceVariant,
+            lineHeight = 18.sp,
+        )
+        Spacer(Modifier.height(12.dp))
+        Segmented(listOf("按单元出卷", "教材原文"), mode, onSelect = { mode = it })
+    }
+
+    Spacer(Modifier.height(PaperDimens.Gap))
+    SectionLabel("01", "年级与科目", "${g} 年级 · ${sub.label}")
+    Spacer(Modifier.height(PaperDimens.GapSmall))
+    CompactChipGrid(
+        items = (1..9).toList(),
+        perRow = 5,
+        label = { GradeProfiles.gradeLabel(it) },
+        selected = { it == g },
+        onClick = { g = it },
+    )
+    Spacer(Modifier.height(PaperDimens.GapSmall))
+    CompactChipGrid(
+        items = Subject.entries.toList(),
+        perRow = 5,
+        label = { it.label },
+        selected = { it == sub },
+        enabled = { it.availableFor(g) },
+        onClick = { sub = it },
+    )
+
+    Spacer(Modifier.height(PaperDimens.Gap))
+    if (mode == 0) {
+        UnitList(state, scope, g, sub, units, counts)
+    } else {
+        BookList(state, g, sub, books)
+    }
+}
+
+@Composable
+private fun UnitList(
+    state: AppState,
+    scope: CoroutineScope,
+    grade: Int,
+    subject: Subject,
+    units: List<com.papermill.app.domain.content.CurricUnit>,
+    counts: Map<String, Pair<Int, Int>>,
+) {
+    if (units.isEmpty()) {
+        SectionLabel("02", "单元目录", "暂无")
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "${GradeProfiles.gradeLabel(grade)}${subject.label}还没有配套的单元划分数据，"
+                + "可换其它科目或年级看看。",
+            fontSize = PaperDimens.CaptionSp,
+            color = PaperColors.OnSurfaceVariant,
+            lineHeight = 17.sp,
+        )
+        return
+    }
+
+    listOf("上" to "上册", "下" to "下册").forEach { (key, label) ->
+        val group = units.filter { it.semester == key }
+        if (group.isEmpty()) return@forEach
+        SectionLabel("02", label, "${group.size} 个单元")
+        Spacer(Modifier.height(8.dp))
+        group.forEach { unit ->
+            var blank = 0
+            var choice = 0
+            unit.topics.forEach { t ->
+                val c = counts[t.id]
+                if (c != null) {
+                    blank += c.first
+                    choice += c.second
+                }
+            }
+            UnitCard(unit, blank, choice) {
+                scope.launch { state.generateUnitPaper(unit) }
+            }
+            Spacer(Modifier.height(PaperDimens.GapSmall))
+        }
+    }
+
+    Spacer(Modifier.height(6.dp))
+    Text(
+        "题量按单元里实际有多少题封顶（选择最多 20、填空最多 16），凑不够就少印几道，"
+            + "不会拿别的单元的题来充数。",
+        fontSize = PaperDimens.TinySp,
+        color = PaperColors.OnSurfaceVariant,
+        lineHeight = 15.sp,
+    )
+}
+
+@Composable
+private fun UnitCard(
+    unit: com.papermill.app.domain.content.CurricUnit,
+    blank: Int,
+    choice: Int,
+    onPaper: () -> Unit,
+) {
+    val total = blank + choice
+    CardSection {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                unit.name,
+                fontSize = PaperDimens.BodySp,
+                fontWeight = FontWeight.Bold,
+                color = PaperColors.OnSurface,
+                modifier = Modifier.weight(1f),
+                maxLines = 2,
+            )
+            Spacer(Modifier.width(10.dp))
+            MiniAction(if (total > 0) "出卷" else "暂无题", enabled = total > 0, onClick = onPaper)
+        }
+        Spacer(Modifier.height(6.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            StatChip("${unit.topics.size} 个知识点")
+            Spacer(Modifier.width(6.dp))
+            StatChip("$total 道题")
+        }
+        Spacer(Modifier.height(6.dp))
+        Text(
+            unit.topics.joinToString(" · ") { it.name },
+            fontSize = PaperDimens.TinySp,
+            color = PaperColors.OnSurfaceVariant,
+            lineHeight = 15.sp,
+            maxLines = 2,
+            style = TextStyle(lineBreak = LineBreak.Paragraph),
+        )
+    }
+}
+
+@Composable
+private fun BookList(
+    state: AppState,
+    grade: Int,
+    subject: Subject,
+    books: List<com.papermill.app.domain.content.TextbookEntry>,
+) {
+    SectionLabel("02", "教材原文", "${TextbookCatalog.size} 册 · 只放链接")
+    Spacer(Modifier.height(8.dp))
+    CardSection {
+        Text(
+            "TapXWorld/ChinaTextbook 收录了人教 / 统编版的全部教材扫描件。"
+                + "那个仓库没有开源许可、教材版权属于各出版社，所以本 App 只存链接："
+                + "点开用浏览器去原仓库看或下载，App 不分发也不缓存任何一页教材。",
+            fontSize = PaperDimens.CaptionSp,
+            color = PaperColors.OnSurfaceVariant,
+            lineHeight = 17.sp,
+        )
+    }
+    Spacer(Modifier.height(PaperDimens.GapSmall))
+
+    if (books.isEmpty()) {
+        CardSection {
+            Text(
+                "${GradeProfiles.gradeLabel(grade)}${subject.label}没有收录教材（"
+                    + "英语从三年级起、物理从八年级起、化学只有九年级）。",
+                fontSize = PaperDimens.CaptionSp,
+                color = PaperColors.OnSurfaceVariant,
+                lineHeight = 17.sp,
+            )
+        }
+        return
+    }
+
+    CardSection {
+        books.forEachIndexed { i, b ->
+            if (i > 0) Divider()
+            ListRow(
+                title = b.title,
+                subtitle = "${b.termLabel} · ${b.sizeMb} MB · ${b.publisher}"
+                    + if (b.parts > 1) " · 分 ${b.parts} 段需合并" else "",
+                trailing = "打开 ›",
+            ) { state.openUrl(b.url) }
+        }
+    }
+    Spacer(Modifier.height(6.dp))
+    Text(
+        "教材是整本扫描件，不是练习纸。要练某一课，用左边「按单元出卷」。",
+        fontSize = PaperDimens.TinySp,
+        color = PaperColors.OnSurfaceVariant,
+        lineHeight = 15.sp,
+    )
+}
+
+// ------------------------------------------------------------------ 本地 PDF
+
+/**
+ * 打印用户自己选的 PDF。
+ *
+ * 这个页面存在的意义就是「版权干净地满足打印需求」：
+ * 老师发的卷子、家长群里的 PDF、自己下的教材 —— 都是用户自己的副本，
+ * App 只负责把它交给系统打印框架，不复制、不内置、不外传。
+ */
+@Composable
+private fun LocalPdfScreen(state: AppState, onPick: () -> Unit) {
+    val doc = state.localPdf
+    if (doc == null) {
+        CardSection(title = "选一个 PDF") {
+            Text(
+                "从手机里挑一个 PDF 直接打印：老师发的卷子、家长群的文件、自己下载的材料。",
+                fontSize = PaperDimens.BodySp,
+                color = PaperColors.OnSurfaceVariant,
+                lineHeight = 18.sp,
+            )
+            Spacer(Modifier.height(12.dp))
+            PrimaryButton("选择 PDF", onClick = onPick)
+        }
+        return
+    }
+
+    CardSection {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    doc.name,
+                    fontSize = PaperDimens.BodySp,
+                    fontWeight = FontWeight.Bold,
+                    color = PaperColors.OnSurface,
+                    maxLines = 2,
+                )
+                Spacer(Modifier.height(4.dp))
+                Row {
+                    StatChip("${doc.pages} 页")
+                    Spacer(Modifier.width(6.dp))
+                    StatChip(if (doc.landscape) "横版" else "竖版")
+                }
+            }
+        }
+    }
+
+    Spacer(Modifier.height(PaperDimens.Gap))
+    if (doc.preview != null) {
+        CardSection(hint = "首页预览 · 尺寸按屏幕缩小，打印按原尺寸") {
+            Image(
+                bitmap = doc.preview,
+                contentDescription = "PDF 首页预览",
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .border(1.dp, PaperColors.SurfaceAlt, RoundedCornerShape(10.dp)),
+                contentScale = ContentScale.FillWidth,
+            )
+        }
+    }
+
+    Spacer(Modifier.height(PaperDimens.Gap))
+    CardSection(title = "说明") {
+        Text(
+            "这个文件只在手机的临时目录里过一手，App 不上传、不内置、不外传；" +
+                "退出后随时可被系统清理。要换成别的文件，点底部「换一个文件」。",
+            fontSize = PaperDimens.CaptionSp,
+            color = PaperColors.OnSurfaceVariant,
+            lineHeight = 17.sp,
+        )
+    }
+}
+
+@Composable
+private fun HistoryScreen(state: AppState, scope: CoroutineScope, onImport: () -> Unit) {    CardSection {
         Row(horizontalArrangement = Arrangement.spacedBy(PaperDimens.GapSmall)) {
             SecondaryButton("分享备份", modifier = Modifier.weight(1f)) { state.shareBackup() }
             SecondaryButton("从备份恢复", modifier = Modifier.weight(1f)) { onImport() }

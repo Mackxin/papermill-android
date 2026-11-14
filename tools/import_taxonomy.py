@@ -84,6 +84,16 @@ def load(src_dir):
     return read("topics.json"), read("questions.json")
 
 
+# 单元名清洗：与 App 端 CurriculumBank.unitName 保持一致，两边不要各改一边。
+# 只用来统计「课本」页一共有多少个单元（index.json 里的 units），
+# 真正的分单元逻辑在 Kotlin 侧，这里算错也只是数字不准。
+def unit_name(chapter):
+    c = re.sub(r"^[一二三四五六七八九]年级[上下]册\s*", "", chapter or "")
+    c = re.sub(r"^[七八九][上下]\s*", "", c)
+    c = re.sub(r"\s*\d+(\.\d+)+\s*$", "", c)
+    return c.strip()
+
+
 def short_topic(t):
     out = {
         "i": t["id"],
@@ -200,6 +210,11 @@ def main():
                 "questions": len(v["questions"]),
                 "blank": sum(1 for q in v["questions"] if q["t"] == 1),
                 "choice": sum(1 for q in v["questions"] if q["t"] == 2),
+                # 单元数 = 章节字段去重后的条数（课本页「按单元出卷」的总量）
+                "units": len({
+                    (t.get("g"), t.get("s"), unit_name(t.get("c")))
+                    for t in v["topics"] if t.get("c")
+                }),
             }
             for k, v in buckets.items()
         },

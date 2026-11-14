@@ -165,6 +165,11 @@ data class PaperSpec(
     val subjects: List<Subject> = emptyList(),
     /** 纸张方向：横版时 PDF 页面是 842×595pt，系统打印框也按横版 A4 匹配 */
     val orientation: PageOrientation = PageOrientation.PORTRAIT,
+    /**
+     * 按单元出卷：非空时课标题库只从这些知识点里抽题。
+     * 空集合 = 不限制（正常按年级出卷）。
+     */
+    val topicIds: Set<String> = emptySet(),
 )
 
 data class GeneratedPaper(
