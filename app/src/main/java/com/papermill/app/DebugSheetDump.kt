@@ -158,6 +158,27 @@ object DebugSheetDump {
                     4, Subject.MATH,
                     mapOf(QuestionType.ORAL to 24, QuestionType.CURRIC_CHOICE to 8),
                 ),
+                // v0.16.0 看图题：图是矢量现画的，只有真的排进 A4 才知道
+                // 「图会不会把题干挤到下一页」「图和下一题会不会叠」
+                "figure-g1" to PaperComposer.specWith(
+                    1, Subject.MATH,
+                    mapOf(QuestionType.FIGURE_COUNT to 4, QuestionType.FIGURE_EXPR to 4),
+                ),
+                "clock-g2" to PaperComposer.specWith(
+                    2, Subject.MATH, mapOf(QuestionType.CLOCK_READ to 8),
+                ),
+                "chart-g3" to PaperComposer.specWith(
+                    3, Subject.MATH, mapOf(QuestionType.BAR_CHART to 5),
+                ),
+                // 看图题和普通题混排：一行图 + 一行算式，看分段有没有把页尾弄空
+                "mix-figure-g1" to PaperComposer.specWith(
+                    1, Subject.MATH,
+                    mapOf(
+                        QuestionType.ORAL to 12,
+                        QuestionType.FIGURE_COUNT to 2,
+                        QuestionType.CLOCK_READ to 3,
+                    ),
+                ),
             )
 
             val report = StringBuilder("名称\t页数\t各页页尾空白(pt)\n")

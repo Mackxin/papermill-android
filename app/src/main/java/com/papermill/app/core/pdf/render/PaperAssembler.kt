@@ -21,7 +21,10 @@ object PaperAssembler {
             sections.add(
                 PaperSection(
                     title = s.title,
-                    questions = s.questions.map { PaperQuestion(no = it.no, stem = it.stem) },
+                    // 配图跟着题目走：看图题不画图就只剩一句「看图列式」，等于没出
+                    questions = s.questions.map {
+                        PaperQuestion(no = it.no, stem = it.stem, figure = it.figure)
+                    },
                     columns = s.columns,
                     answerLines = s.answerLines,
                     instruction = s.instruction,

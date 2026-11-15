@@ -129,6 +129,14 @@ enum class QuestionType(
     SCIENCE_CHOICE("科学选择", 1),
     SCIENCE_JUDGE("科学判断", 2),
     SCIENCE_BLANK("科学填空", 1),
+
+    // v0.16.0 看图题：题干 + 矢量配图。四类都声明 1 栏 —— 图要占满一行才看得清，
+    // 挤进半栏会缩成指甲盖大小。图全部 Canvas 自绘（圆 / 弧 / 路径），
+    // 不打包任何图片资源，PDF 体积几乎不变。
+    FIGURE_COUNT("看图数一数", 1, 0, "先数一数每种图形各有几个，把数填在括号里。"),
+    FIGURE_EXPR("看图列式", 1, 0, "看图数一数一共有几个，把加法算式写在括号里。"),
+    CLOCK_READ("认识钟面", 1, 0, "看钟面，写出钟面上的时刻。"),
+    BAR_CHART("条形统计图", 1, 0, "看统计图回答问题，把答案填在括号里。"),
     ;
 
     /**
@@ -146,9 +154,18 @@ enum class QuestionType(
 
             WORD_PROBLEM, PHYSICS_CALC, CHEMISTRY_CALC -> QuestionFamily.APPLY
 
+            // 统计图是「读图取信息再答题」，归应用最贴切（它考的是看图表说话，不是算）
+            BAR_CHART -> QuestionFamily.APPLY
+
+            // 看图列式的落点是写算式，归计算
+            FIGURE_EXPR -> QuestionFamily.CALC
+
             SENTENCE_ORDER, CLOZE -> QuestionFamily.READING
 
             SCIENCE_JUDGE -> QuestionFamily.JUDGE
+
+            // 看图数一数、认钟面都是「看图填一个数」，归填空
+            FIGURE_COUNT, CLOCK_READ -> QuestionFamily.BLANK
 
             KNOWLEDGE, THEME_SORT, PHONETIC_PICK, GRAMMAR, IDIOM_MEANING, POEM_MATCH,
             CURRIC_CHOICE, SCIENCE_CHOICE,
@@ -236,6 +253,60 @@ enum class PageOrientation(val label: String, val shortLabel: String) {
     LANDSCAPE("A4 横版", "横版"),
 }
 
+/**
+ * 配图的种类。绘制细节在 `core/pdf/figure/FigurePainter`，这里只留「是什么图」。
+ */
+enum class FigureKind {
+    /** 按组排列的图形（每组一行），用来数数 / 分类计数 */
+    COUNTING,
+
+    /** 十格阵：上排 5 格、下排 5 格，涂黑若干格 —— 一年级「凑十」的标准教具 */
+    TEN_FRAME,
+
+    /** 钟面：时针 + 分针 */
+    CLOCK,
+
+    /** 条形统计图：分类 + 数值 */
+    BAR_CHART,
+
+    /** 两组物品中间加分隔（看图列式）：一眼看出「左边几个、右边几个」 */
+    TWO_GROUPS,
+}
+
+/**
+ * 一道看图题的配图**数据**。
+ *
+ * ============================================================
+ * 为什么图形数据放在 domain、绘制放在 pdf 层
+ * ============================================================
+ * 本项目 domain 层有一条硬约定：纯 Kotlin，不碰 Android 也不碰 PDF
+ * （见 Models.kt 顶部注释），这样出题逻辑将来能写 JVM 单测。
+ * 但「画一条弧」必须用 `android.graphics`。
+ *
+ * 所以拆成两半：这里只描述「几个圆、几组、时针指到几」，
+ * 真正落笔的 `FigurePainter` 在 pdf 层读这份数据去画。
+ * 生成器负责算数和写题干，绘制器负责长什么样 —— 两边互不知道对方的实现。
+ */
+data class FigureSpec(
+    val kind: FigureKind,
+    /**
+     * 各组数量。含义按 [kind] 变：
+     *  - COUNTING：每组一行，第 i 项是第 i 行有几个
+     *  - TWO_GROUPS：只用前两项（左边、右边）
+     *  - TEN_FRAME：只用第一项（涂黑几格，0..10）
+     *  - CLOCK：第一项 = 时，第二项 = 分
+     */
+    val groups: List<Int> = emptyList(),
+    /** 每行用第几种图形（0 圆 1 三角 2 方块 3 五角星），长度不足时循环取 */
+    val shapes: List<Int> = emptyList(),
+    /** 统计图的分类名（4 项以内排得开） */
+    val labels: List<String> = emptyList(),
+    /** 统计图每类的数值 */
+    val values: List<Int> = emptyList(),
+    /** 统计图的纵轴单位，印在图右上角 */
+    val unit: String = "",
+)
+
 data class GeneratedQuestion(
     val no: Int,
     val type: QuestionType,
@@ -243,6 +314,8 @@ data class GeneratedQuestion(
     val answer: String,
     /** 知识点标签，错题本按它归类（都是通用知识点名，不用教材原文） */
     val topic: String = "",
+    /** 看图题的配图；null = 纯文字题（绝大多数题型都是） */
+    val figure: FigureSpec? = null,
 )
 
 data class GeneratedSection(

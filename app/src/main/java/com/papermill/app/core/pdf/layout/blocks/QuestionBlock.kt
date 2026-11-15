@@ -2,7 +2,9 @@ package com.papermill.app.core.pdf.layout.blocks
 
 import com.papermill.app.core.pdf.CanvasBackend
 import com.papermill.app.core.pdf.TextPainter
+import com.papermill.app.core.pdf.figure.FigurePainter
 import com.papermill.app.core.pdf.layout.Block
+import com.papermill.app.domain.generate.FigureSpec
 
 /**
  * 一道题。
@@ -13,6 +15,10 @@ import com.papermill.app.core.pdf.layout.Block
  *
  * 口算这类一行一题的题，答案位直接用全角括号「（　　）」写在题干里 ——
  * 比在行末画一条固定长度的横线更贴近真实练习卷，也省掉一行里的排版协调。
+ *
+ * v0.16.0 起支持 [figure]：题干下方插一张矢量配图（钟面 / 统计图 / 图形组）。
+ * 图跟在题号槽位右侧对齐，和题干左边缘齐平 —— 图顶到最左边会让「3.」像是
+ * 悬在图左上角，读起来像被裁掉了题号。
  */
 class QuestionBlock(
     private val no: Int,
@@ -24,6 +30,8 @@ class QuestionBlock(
      * 把整页撑满（见 PaperRenderer 的答案页自适应），否则答案只占半张纸。
      */
     private val itemGap: Float = ITEM_GAP,
+    /** 看图题的配图；null = 纯文字题。答案页传 null（答案不需要图） */
+    private val figure: FigureSpec? = null,
 ) : Block {
 
     private var lastWidth: Float = -1f
@@ -70,7 +78,12 @@ class QuestionBlock(
         // 答题横线的间距要够手写：原来一行挨一行（约 16pt ≈ 5.6mm），
         // 四位数竖式根本写不进去，所以按 1.55 倍行高铺
         val extra = if (answerLines > 0) answerLines * lineH * ANSWER_LINE_FACTOR else 0f
-        return textH + extra + itemGap
+        // 配图可用宽度要扣掉题号槽位，measure 和 paint 两边必须用同一个值，
+        // 否则量出 80pt 高、画出来 92pt，直接压到下一道题上
+        val figH = figure?.let {
+            FigurePainter.height(it, tp, (width - numberWidth(tp)).coerceAtLeast(60f))
+        } ?: 0f
+        return textH + figH + (if (figure != null) FIGURE_GAP else 0f) + extra + itemGap
     }
 
     override fun paint(b: CanvasBackend, tp: TextPainter, x: Float, y: Float, width: Float) {
@@ -85,6 +98,13 @@ class QuestionBlock(
         lines.forEach { line ->
             b.drawText(line, x + numberWidth(tp), cursor + tp.baselineOffset(p, lineH), p)
             cursor += lineH
+        }
+
+        val fig = figure
+        if (fig != null) {
+            val fw = (width - numberWidth(tp)).coerceAtLeast(60f)
+            FigurePainter.paint(b, tp, fig, x + numberWidth(tp), cursor + FIGURE_GAP, fw)
+            cursor += FigurePainter.height(fig, tp, fw) + FIGURE_GAP
         }
 
         if (answerLines > 0) {
@@ -106,5 +126,8 @@ class QuestionBlock(
 
         /** 答题横线间距 = 行高 × 这个倍数（留够手写高度） */
         const val ANSWER_LINE_FACTOR = 1.55f
+
+        /** 题干与配图之间、图与下一题之间的空隙 */
+        const val FIGURE_GAP = 5f
     }
 }

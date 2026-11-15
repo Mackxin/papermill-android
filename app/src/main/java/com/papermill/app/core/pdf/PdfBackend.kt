@@ -2,6 +2,7 @@ package com.papermill.app.core.pdf
 
 import android.graphics.Canvas
 import android.graphics.Paint
+import android.graphics.Path
 
 /** 画到 PdfDocument 的 Canvas 上。 */
 class PdfBackend(private val canvas: Canvas) : CanvasBackend {
@@ -16,5 +17,30 @@ class PdfBackend(private val canvas: Canvas) : CanvasBackend {
 
     override fun drawRect(left: Float, top: Float, right: Float, bottom: Float, paint: Paint) {
         canvas.drawRect(left, top, right, bottom, paint)
+    }
+
+    override fun drawCircle(cx: Float, cy: Float, radius: Float, paint: Paint) {
+        canvas.drawCircle(cx, cy, radius, paint)
+    }
+
+    override fun drawOval(left: Float, top: Float, right: Float, bottom: Float, paint: Paint) {
+        canvas.drawOval(left, top, right, bottom, paint)
+    }
+
+    override fun drawArc(
+        left: Float,
+        top: Float,
+        right: Float,
+        bottom: Float,
+        startAngle: Float,
+        sweepAngle: Float,
+        useCenter: Boolean,
+        paint: Paint,
+    ) {
+        canvas.drawArc(left, top, right, bottom, startAngle, sweepAngle, useCenter, paint)
+    }
+
+    override fun drawPath(path: Path, paint: Paint) {
+        canvas.drawPath(path, paint)
     }
 }

@@ -1,5 +1,6 @@
 package com.papermill.app.core.pdf.render
 
+import com.papermill.app.domain.generate.FigureSpec
 import com.papermill.app.domain.generate.PageOrientation
 
 /**
@@ -12,6 +13,8 @@ import com.papermill.app.domain.generate.PageOrientation
 data class PaperQuestion(
     val no: Int,
     val stem: String,
+    /** 看图题的配图（只描述「几个圆、时针指到几」，怎么画在 pdf 层） */
+    val figure: FigureSpec? = null,
 )
 
 /**

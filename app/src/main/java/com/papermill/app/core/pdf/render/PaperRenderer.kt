@@ -168,8 +168,12 @@ object PaperRenderer {
                             stem = q.stem,
                             answerLines = section.answerLines,
                             itemGap = itemGap,
+                            // 看图题带图；答案页那一路不传（答案不需要再印一遍图）
+                            figure = q.figure,
                         )
-                        out.add(if (forceFullWidth) FullWidthBlock(qb) else qb)
+                        // 图必须整宽：塞进半栏会缩成指甲盖，而且图和题干抢宽度后
+                        // 「看图列式」四个字和图形挤在同一行，学生根本对不上
+                        out.add(if (forceFullWidth || q.figure != null) FullWidthBlock(qb) else qb)
                     }
                     bodyColumns = maxOf(bodyColumns, section.columns)
                 }

@@ -60,8 +60,23 @@ interface QuestionGenerator {
  */
 abstract class BaseGenerator : QuestionGenerator {
 
-    /** 返回 题干 to 答案 */
-    abstract fun make(ctx: GenContext): Pair<String, String>
+    /**
+     * 返回 题干 to 答案。
+     *
+     * 改成 open（v0.16.0）：看图题只实现 [makeFigure]，没有纯文字的版本，
+     * 让它强制实现一个永远用不到的 make() 只会逼出一行 `error(...)` 占位。
+     */
+    open fun make(ctx: GenContext): Pair<String, String> =
+        error("${this::class.simpleName} 没实现 make()，也不是看图题生成器")
+
+    /**
+     * 带配图的版本（v0.16.0 看图题用）。
+     *
+     * 默认返回 null，走 [make]。看图题重写它、把图形数据一起带出来 ——
+     * 图不是「题干里的字符」，出题阶段必须**同时**定下数字和图形，
+     * 否则答案算的是一回事、图上画的是另一回事（这类错印出来没人能发现）。
+     */
+    open fun makeFigure(ctx: GenContext): FigureQuestion? = null
 
     open val topic: String = ""
 
@@ -71,14 +86,66 @@ abstract class BaseGenerator : QuestionGenerator {
         var tries = 0
         while (out.size < ctx.count && tries < maxTries) {
             tries++
-            val pair = runCatching { make(ctx) }.getOrNull() ?: continue
-            val stem = pair.first.trim()
-            val answer = pair.second.trim()
+            val figQ = runCatching { makeFigure(ctx) }.getOrNull()
+            val stem: String
+            val answer: String
+            if (figQ != null) {
+                stem = figQ.stem.trim()
+                answer = figQ.answer.trim()
+            } else {
+                val pair = runCatching { make(ctx) }.getOrNull() ?: continue
+                stem = pair.first.trim()
+                answer = pair.second.trim()
+            }
             if (stem.isEmpty() || answer.isEmpty()) continue
-            if (!ctx.blocked.add(stableHash(stem))) continue
-            out.add(GeneratedQuestion(no = 0, type = type, stem = stem, answer = answer, topic = topic))
+            // 看图题的去重键必须带上图形数据：钟面题、统计图题的题干是**固定句式**
+            // （「看钟面，写出时刻」），只有数字在图上。只按题干去重的话，
+            // 同一张卷子出 8 道钟面题会挡住后 7 道，卷面剩一道、后面全白。
+            if (!ctx.blocked.add(stableHash(stem + figureKey(figQ?.figure)))) continue
+            out.add(
+                GeneratedQuestion(
+                    no = 0,
+                    type = type,
+                    stem = stem,
+                    answer = answer,
+                    topic = topic,
+                    figure = figQ?.figure,
+                )
+            )
         }
         return out
+    }
+}
+
+/**
+ * 看图题的生成结果：题干 + 答案 + 图形数据三件套。
+ *
+ * 三样必须在同一次随机里一次算完 —— 分两步生成（先出题干、再补图）
+ * 会让「图上 5 个、答案写 7」这种错悄悄印到纸上。
+ */
+data class FigureQuestion(
+    val stem: String,
+    val answer: String,
+    val figure: FigureSpec,
+)
+
+/**
+ * 把配图数据压成一段可比较文本，拼进去重键。
+ *
+ * 只取「真正决定这道题是什么」的字段：几组几个、时针分针、统计图的分类与数值。
+ * 不放 caption 这类展示字段 —— 改个说法不该被当成新题。
+ */
+private fun figureKey(spec: FigureSpec?): String {
+    if (spec == null) return ""
+    return buildString {
+        append(spec.kind)
+        append(spec.groups.joinToString(","))
+        append('|')
+        append(spec.shapes.joinToString(","))
+        append('|')
+        append(spec.labels.joinToString(","))
+        append('|')
+        append(spec.values.joinToString(","))
     }
 }
 
@@ -127,6 +194,10 @@ object GeneratorRegistry {
         CurricBlankGenerator, CurricChoiceGenerator,
         // v0.11.0 小学科学（内容全自编，见 domain/content/ScienceBank.kt）
         ScienceChoiceGenerator, ScienceJudgeGenerator, ScienceBlankGenerator,
+        // v0.16.0 看图题（配图由 core/pdf/figure/FigurePainter 现画，不打包图片）
+        // 放在最后：默认卷的「智能配比」按列表顺序取前 N 种，追加在末尾
+        // 才保证用户原来出过的卷子题型不变，要看图题自己勾选
+        FigureCountGenerator, FigureExprGenerator, ClockReadGenerator, BarChartGenerator,
     )
 
     /** 关于页实时统计题型总数 */
