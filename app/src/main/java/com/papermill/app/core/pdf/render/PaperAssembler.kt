@@ -3,6 +3,9 @@ package com.papermill.app.core.pdf.render
 import com.papermill.app.domain.generate.AnswerMode
 import com.papermill.app.domain.generate.GeneratedPaper
 import com.papermill.app.domain.generate.PaperSpec
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 /**
  * 业务卷子 → 渲染中间表示。
@@ -54,9 +57,18 @@ object PaperAssembler {
         return PaperDocument(
             title = if (spec.isMistakePaper) "${spec.title}（错题重练）" else spec.title,
             subtitle = subtitle,
+            subtitleInline = spec.headerOneLine,
             showNameRow = spec.showNameRow,
             sections = sections,
-            footerText = "卷子 · 题目由本 App 程序生成，非官方教材配套",
+            footerText = spec.footerText,
+            // 生成时间印在页脚右侧：家长要能看出这是哪天的卷子，
+            // 又不该为它多占一行 —— 页脚本来就要印东西。
+            // 页脚整条关掉（footerText == ""）时时间也一起不印：
+            // 「不印页脚」的意图是「纸尾干干净净」，只在右下角留个时间戳不叫不印。
+            footerStamp = if (spec.showCreatedAt && spec.footerText?.isEmpty() != true) {
+                "生成 " + SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.CHINA).format(Date(paper.createdAt))
+            } else "",
+            lineGap = spec.lineGap,
             orientation = spec.orientation,
         )
     }

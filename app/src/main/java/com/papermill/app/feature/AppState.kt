@@ -43,6 +43,7 @@ import com.papermill.app.domain.generate.GeneratedQuestion
 import com.papermill.app.domain.generate.GeneratedSection
 import com.papermill.app.domain.generate.GeneratorRegistry
 import com.papermill.app.domain.generate.GradeProfiles
+import com.papermill.app.domain.generate.LineGap
 import com.papermill.app.domain.generate.PaperComposer
 import com.papermill.app.domain.generate.PaperPurpose
 import com.papermill.app.domain.generate.PaperSpec
@@ -145,6 +146,33 @@ class AppState(private val rawContext: Context) {
     /** 竖版 / 横版 A4，预览页可直接改并即时重排 */
     var orientation by mutableStateOf(PageOrientation.PORTRAIT)
 
+    // ---------------- v0.17.0 卷面定制（都进 settings.json，下次开 App 还在） ----------------
+
+    /** 标题与「共 N 题 满分 M 分」排一行：省下 17pt 卷头高度 */
+    var headerOneLine by mutableStateOf(false)
+
+    /**
+     * 页脚模式：0 = 默认那句（题目由本 App 程序生成…），1 = 自定义，2 = 不印。
+     *
+     * 为什么用三个状态而不是「留空 = 不印」：留空是「我懒得写」还是「我不要页脚」
+     * 分不出来，而这两种意图的结果差 26pt 纸面高度。
+     */
+    var footerMode by mutableStateOf(0)
+    var footerCustom by mutableStateOf("")
+
+    /** 页脚右侧印生成时间 */
+    var showCreatedAt by mutableStateOf(true)
+
+    /** 题间行距档位 */
+    var lineGap by mutableStateOf(LineGap.NORMAL)
+
+    /** 页脚最终要印的文字：null 走默认，"" 表示不印 */
+    private fun footerTextForSpec(): String? = when (footerMode) {
+        1 -> footerCustom.trim()
+        2 -> ""
+        else -> null
+    }
+
     var paper by mutableStateOf<GeneratedPaper?>(null)
     var pdf by mutableStateOf<RenderedPdf?>(null)
     var previews by mutableStateOf<List<ImageBitmap>>(emptyList())
@@ -244,7 +272,42 @@ class AppState(private val rawContext: Context) {
     fun updateDockGlass(on: Boolean) {
         if (dockGlass == on) return
         dockGlass = on
-        LocalStore.saveSettings(ctx, AppSettings(dockGlass = on))
+        saveSettings()
+    }
+
+    /**
+     * 把「dock 玻璃 + 卷面定制」一起落盘。
+     *
+     * v0.17.0 之前这里每次只存 dockGlass，于是 `AppSettings(showNameRow = ...)` 这种
+     * 半新半旧的对象会把别的字段冲回默认值 —— 用户改了页脚，顺手切一下 dock 玻璃，
+     * 页脚就悄悄变回去了。所以所有写入统一走这一个出口。
+     */
+    fun saveSettings() {
+        runCatching {
+            LocalStore.saveSettings(
+                ctx,
+                AppSettings(
+                    dockGlass = dockGlass,
+                    showNameRow = showNameRow,
+                    headerOneLine = headerOneLine,
+                    footerMode = footerMode,
+                    footerCustom = footerCustom,
+                    showCreatedAt = showCreatedAt,
+                    lineGap = lineGap.name,
+                ),
+            )
+        }
+    }
+
+    /** 启动时把设置读回来（v0.17.0 起卷面样式也在里面） */
+    private fun applySettings(s: AppSettings) {
+        dockGlass = s.dockGlass
+        showNameRow = s.showNameRow
+        headerOneLine = s.headerOneLine
+        footerMode = s.footerMode.coerceIn(0, 2)
+        footerCustom = s.footerCustom
+        showCreatedAt = s.showCreatedAt
+        lineGap = LineGap.of(s.lineGap)
     }
 
     // ---------------------------------------------------------------- 上次位置
@@ -467,7 +530,9 @@ class AppState(private val rawContext: Context) {
         CurriculumBank.init(ctx)
         ScienceBank.init(ctx)
         TextbookCatalog.init(ctx)
-        dockGlass = LocalStore.loadSettings(ctx).dockGlass
+        // 卷面样式（姓名栏 / 一行标题 / 页脚 / 行距）跟着设置一起读回来，
+        // 用户上次调好的版式下次开 App 还是那样
+        applySettings(LocalStore.loadSettings(ctx))
         counts = PaperComposer.defaultSpec(grade, subjects, tilt, purpose).counts
         refreshLists()
     }
@@ -822,6 +887,10 @@ class AppState(private val rawContext: Context) {
             purpose = purpose,
             orientation = orientation,
             topicIds = unitTopicIds,
+            headerOneLine = headerOneLine,
+            footerText = footerTextForSpec(),
+            showCreatedAt = showCreatedAt,
+            lineGap = lineGap,
         )
     }
 

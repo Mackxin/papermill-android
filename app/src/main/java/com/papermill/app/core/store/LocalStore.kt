@@ -36,9 +36,22 @@ data class SavedPaper(
  * [dockGlass]：底部 tab 栏是否用半透明玻璃效果。
  * 默认 **false = 不透明实底** —— 透明会透出下面滚动的卡片文字，可读性打折扣，
  * 所以做成「想要的人自己去设置里开」，而不是所有人一起忍受。
+ *
+ * v0.17.0 起把这套**卷面样式**也放进来：姓名栏 / 一行标题 / 页脚 / 行距。
+ * 用户的原话是「这些可以后台隐藏掉」「行间距后台自定义」——
+ * 「后台」在这里就是「设一次、以后每张卷都这样」，所以必须跨启动保存，
+ * 不能只活在当前会话里。
  */
 data class AppSettings(
     val dockGlass: Boolean = false,
+    val showNameRow: Boolean = true,
+    val headerOneLine: Boolean = false,
+    /** 0 默认文案 / 1 自定义 / 2 不印 */
+    val footerMode: Int = 0,
+    val footerCustom: String = "",
+    val showCreatedAt: Boolean = true,
+    /** LineGap 的枚举名；存字符串而不是序号，将来加档位不会错位 */
+    val lineGap: String = "NORMAL",
 )
 
 /**
@@ -108,14 +121,30 @@ object LocalStore {
         if (!file.exists()) return AppSettings()
         return runCatching {
             val o = JSONObject(file.readText())
-            AppSettings(dockGlass = o.optBoolean("dockGlass", false))
+            AppSettings(
+                dockGlass = o.optBoolean("dockGlass", false),
+                showNameRow = o.optBoolean("showNameRow", true),
+                headerOneLine = o.optBoolean("headerOneLine", false),
+                footerMode = o.optInt("footerMode", 0),
+                footerCustom = o.optString("footerCustom", ""),
+                showCreatedAt = o.optBoolean("showCreatedAt", true),
+                lineGap = o.optString("lineGap", "NORMAL"),
+            )
         }.getOrDefault(AppSettings())
     }
 
     fun saveSettings(ctx: Context, settings: AppSettings) {
         runCatching {
             f(ctx, FILE_SETTINGS).writeText(
-                JSONObject().put("dockGlass", settings.dockGlass).toString(2)
+                JSONObject()
+                    .put("dockGlass", settings.dockGlass)
+                    .put("showNameRow", settings.showNameRow)
+                    .put("headerOneLine", settings.headerOneLine)
+                    .put("footerMode", settings.footerMode)
+                    .put("footerCustom", settings.footerCustom)
+                    .put("showCreatedAt", settings.showCreatedAt)
+                    .put("lineGap", settings.lineGap)
+                    .toString(2)
             )
         }
     }

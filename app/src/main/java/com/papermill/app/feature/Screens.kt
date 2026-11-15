@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -75,6 +76,7 @@ import com.papermill.app.domain.content.TextbookCatalog
 import com.papermill.app.domain.generate.AnswerMode
 import com.papermill.app.domain.generate.GeneratorRegistry
 import com.papermill.app.domain.generate.GradeProfiles
+import com.papermill.app.domain.generate.LineGap
 import com.papermill.app.domain.generate.PageOrientation
 import com.papermill.app.domain.generate.PaperPurpose
 import com.papermill.app.domain.generate.PaperTemplates
@@ -85,9 +87,11 @@ import com.papermill.app.domain.reference.ReferenceData
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.gestures.rememberTransformableState
-import androidx.compose.foundation.gestures.transformable
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
@@ -1062,10 +1066,107 @@ private fun CreateScreen(state: AppState, scope: CoroutineScope) {
                 }
             }
             Divider()
-            SettingRow("姓名栏") {
-                ChoiceChip("显示", state.showNameRow) { state.showNameRow = true }
-                ChoiceChip("不显示", !state.showNameRow) { state.showNameRow = false }
+            SettingRow("姓名 / 班级 / 日期 / 得分") {
+                ChoiceChip("显示", state.showNameRow) {
+                    state.showNameRow = true
+                    state.saveSettings()
+                }
+                ChoiceChip("隐藏", !state.showNameRow) {
+                    state.showNameRow = false
+                    state.saveSettings()
+                }
             }
+            Text(
+                "隐藏后省下 26pt 纸面高度（约一行题）。孩子在家做练习卷时，这四栏本来就没人填。",
+                fontSize = PaperDimens.TinySp,
+                color = PaperColors.OnSurfaceVariant,
+                lineHeight = 15.sp,
+            )
+            Divider()
+            SettingRow("标题排版") {
+                ChoiceChip("两行", !state.headerOneLine) {
+                    state.headerOneLine = false
+                    state.saveSettings()
+                }
+                ChoiceChip("一行", state.headerOneLine) {
+                    state.headerOneLine = true
+                    state.saveSettings()
+                }
+            }
+            Text(
+                "「共 N 题 满分 M 分」挪到标题右边同一行，卷头少占 17pt。",
+                fontSize = PaperDimens.TinySp,
+                color = PaperColors.OnSurfaceVariant,
+            )
+            Divider()
+            SettingRow("题间行距") {
+                LineGap.values().forEach { g ->
+                    ChoiceChip(g.label, state.lineGap == g) {
+                        state.lineGap = g
+                        state.saveSettings()
+                    }
+                }
+            }
+            Text(
+                when (state.lineGap) {
+                    LineGap.COMPACT -> "先尽量多塞题（页数最少），再把剩下的空档摊开铺满 —— 最省纸。"
+                    LineGap.NORMAL -> "常规间距，排版后仍会把页尾空白摊平。"
+                    LineGap.LOOSE -> "题与题之间留得更开，方便圈画和写过程；页数可能多一张。"
+                },
+                fontSize = PaperDimens.TinySp,
+                color = PaperColors.OnSurfaceVariant,
+                lineHeight = 15.sp,
+            )
+            Divider()
+            SettingRow("页脚") {
+                ChoiceChip("默认文字", state.footerMode == 0) {
+                    state.footerMode = 0
+                    state.saveSettings()
+                }
+                ChoiceChip("自定义", state.footerMode == 1) {
+                    state.footerMode = 1
+                    state.saveSettings()
+                }
+                ChoiceChip("不印", state.footerMode == 2) {
+                    state.footerMode = 2
+                    state.saveSettings()
+                }
+            }
+            if (state.footerMode == 1) {
+                Field3(
+                    value = state.footerCustom,
+                    onValueChange = {
+                        state.footerCustom = it
+                        state.saveSettings()
+                    },
+                    placeholder = "例如：三（2）班　周末练习　做完请家长签字",
+                    label = "页脚文字",
+                )
+            }
+            SettingRow("生成时间") {
+                // 页脚整条不印时，这两颗也点不动：时间本来就没地方印
+                ChoiceChip("印在页脚右侧", state.showCreatedAt, enabled = state.footerMode != 2) {
+                    state.showCreatedAt = true
+                    state.saveSettings()
+                }
+                ChoiceChip("不印", !state.showCreatedAt, enabled = state.footerMode != 2) {
+                    state.showCreatedAt = false
+                    state.saveSettings()
+                }
+            }
+            Text(
+                when {
+                    state.footerMode == 2 ->
+                        "页脚整条不印时，左边的文字和右边的生成时间都不印，分隔线也去掉，正文多吃 26pt。"
+                    !state.showCreatedAt ->
+                        "只印左边的文字，不带时间戳。"
+                    else ->
+                        "页脚左边是你写的文字，右边是生成时间，两者不会撞在一起。"
+                },
+                fontSize = PaperDimens.TinySp,
+                color = PaperColors.OnSurfaceVariant,
+                lineHeight = 15.sp,
+            )
             Divider()
             Spacer(Modifier.height(10.dp))
             Field3(
@@ -1091,26 +1192,46 @@ private fun CreateScreen(state: AppState, scope: CoroutineScope) {
 // ------------------------------------------------------------------ 放大查看
 
 /**
- * 全屏查看一页试卷：黑底 + 等比铺满 + 双指缩放，**点任意处退出**。
+ * 全屏查看试卷：黑底 + 等比铺满 + 双指缩放，**点任意处退出**。
  *
  * 为什么不做成普通的「点开大图」：A4 一页的小字（括号、题号、单位）在缩略图里
  * 只有 5-6 个像素高，光放大到屏宽还是看不清，必须能双指再往里推。
  * 所以这里给了 1×~5× 的缩放，退出仍然只要点一下 —— 放大之后想退出的动作
  * 不该变成「先缩回 1 倍再点关闭」。
+ *
+ * v0.17.0：一整张卷子往往 2-3 页，以前放大后只能看当前这页，想看下一页得先退出、
+ * 在缩略图里滑到那一页、再点进来。现在放大浮层里直接左右滑就能翻页，
+ * 两侧也给了箭头（有些人不会想到「在这个黑屏上也能横滑」）。
+ *
+ * 手势分工是这里唯一的难点：
+ *  - 1 倍时**单指横滑 = 翻页**（交给 HorizontalPager，我们不碰）；
+ *  - 双指 = 缩放（自己吃掉事件，pager 的拖拽会被取消）；
+ *  - 放大后**单指拖动 = 平移画面**（此时 pager 已关掉滚动，事件全归我们）。
+ * 如果直接用 transformable，它会连单指拖拽一起吃掉，翻页就永远滑不动了，
+ * 所以这里手写一个「只在双指 / 已放大时才消费事件」的手势。
  */
 @Composable
 private fun PageZoomDialog(
-    bitmap: ImageBitmap,
-    label: String,
+    pages: List<ImageBitmap>,
+    initialPage: Int,
     onDismiss: () -> Unit,
 ) {
+    if (pages.isEmpty()) return
+    val count = pages.size
+    val scope = rememberCoroutineScope()
+    val pager = rememberPagerState(
+        initialPage = initialPage.coerceIn(0, count - 1),
+    ) { count }
+
     var scale by remember { mutableStateOf(1f) }
     var offset by remember { mutableStateOf(Offset.Zero) }
-    val transformState = rememberTransformableState { zoomChange, panChange, _ ->
-        scale = (scale * zoomChange).coerceIn(1f, 5f)
-        // 缩回 1 倍时把位移归零，否则图片会停在屏幕外的空白上
-        offset = if (scale <= 1.001f) Offset.Zero else offset + panChange
+    // 翻页后放大倍数必须归 1：上一页推到了 3 倍，翻过去新的一页从 3 倍开始
+    // 会直接显示一块模糊的纸角，还以为这页印坏了
+    LaunchedEffect(pager.currentPage) {
+        scale = 1f
+        offset = Offset.Zero
     }
+
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false),
@@ -1119,25 +1240,74 @@ private fun PageZoomDialog(
             Modifier
                 .fillMaxSize()
                 .background(Color.Black)
-                .pointerInput(Unit) { detectTapGestures { onDismiss() } }
-                .transformable(transformState),
-            contentAlignment = Alignment.Center,
+                .pointerInput(Unit) {
+                    awaitEachGesture {
+                        awaitFirstDown(requireUnconsumed = false)
+                        var event = awaitPointerEvent()
+                        while (event.changes.any { it.pressed }) {
+                            val pressed = event.changes.count { it.pressed }
+                            if (pressed >= 2) {
+                                // 双指：先缩放，再按两指中点位移平移
+                                val next = (scale * event.calculateZoom()).coerceIn(1f, 5f)
+                                if (next <= 1.001f) {
+                                    scale = 1f
+                                    offset = Offset.Zero
+                                } else {
+                                    scale = next
+                                    offset += event.calculatePan()
+                                }
+                                event.changes.forEach { it.consume() }
+                            } else if (pressed == 1 && scale > 1.001f) {
+                                // 已经放大了：单指拖动就是移动画面，不让它去翻页
+                                offset += event.calculatePan()
+                                event.changes.forEach { it.consume() }
+                            }
+                            event = awaitPointerEvent()
+                        }
+                    }
+                },
         ) {
-            Image(
-                bitmap = bitmap,
-                contentDescription = label,
-                contentScale = ContentScale.Fit,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .graphicsLayer(
-                        scaleX = scale,
-                        scaleY = scale,
-                        translationX = offset.x,
-                        translationY = offset.y,
-                    ),
-            )
+            HorizontalPager(
+                state = pager,
+                // 放大状态下交给手指平移画面，翻页要先把倍数缩回去
+                userScrollEnabled = scale <= 1.001f,
+                modifier = Modifier.fillMaxSize(),
+            ) { page ->
+                Image(
+                    bitmap = pages[page],
+                    contentDescription = "第 ${page + 1} 页",
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        // 「点任意处退出」必须挂在**每一页的图片上**，不能挂在最外层 Box：
+                        // 挂外层时它会在按下那一刻就吃掉 down 事件，滚动手势收不到起点，
+                        // 横滑翻页整个失灵（实测滑了没反应）。挂在页内就等于
+                        // 预览缩略图那一套「页内可点 + 外层可滑」，两者互不干扰。
+                        .pointerInput(Unit) { detectTapGestures { onDismiss() } }
+                        .graphicsLayer(
+                            scaleX = scale,
+                            scaleY = scale,
+                            translationX = offset.x,
+                            translationY = offset.y,
+                        ),
+                )
+            }
+            if (count > 1) {
+                // 箭头：黑屏上横滑不是每个人都想得到，给个明摆着的出口
+                ZoomArrow("‹", Alignment.CenterStart, enabled = pager.currentPage > 0) {
+                    scope.launch { pager.animateScrollToPage(pager.currentPage - 1) }
+                }
+                ZoomArrow("›", Alignment.CenterEnd, enabled = pager.currentPage < count - 1) {
+                    scope.launch { pager.animateScrollToPage(pager.currentPage + 1) }
+                }
+            }
             Text(
-                if (scale > 1.001f) "$label · 已放大 ${"%.1f".format(scale)}×" else "$label · 点任意处退出，双指可放大",
+                buildString {
+                    append("第 ${pager.currentPage + 1} / $count 页")
+                    if (scale > 1.001f) append(" · 已放大 ${"%.1f".format(scale)}×")
+                    append(if (count > 1) " · 左右滑动翻页" else "")
+                    append(" · 点任意处退出")
+                },
                 fontSize = PaperDimens.TinySp,
                 color = Color.White.copy(alpha = 0.75f),
                 modifier = Modifier
@@ -1145,6 +1315,35 @@ private fun PageZoomDialog(
                     .padding(bottom = 34.dp),
             )
         }
+    }
+}
+
+/** 放大浮层两侧的翻页箭头。到头的那一侧变淡但仍然占位，避免页面跟着左右晃 */
+@Composable
+private fun BoxScope.ZoomArrow(
+    glyph: String,
+    align: Alignment,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .align(align)
+            .padding(horizontal = 12.dp)
+            .width(44.dp)
+            .height(44.dp)
+            .clip(RoundedCornerShape(22.dp))
+            // 深色半透明圆底：A4 纸面是白的，先前的「14% 白底 + 白箭头」
+            // 正好压在纸上，等于隐形；黑底圆 + 白字在纸上、黑边上都看得见
+            .background(Color.Black.copy(alpha = 0.42f))
+            .clickable(enabled = enabled) { onClick() },
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            glyph,
+            fontSize = 26.sp,
+            color = Color.White.copy(alpha = if (enabled) 0.95f else 0.3f),
+        )
     }
 }
 
@@ -1293,16 +1492,14 @@ private fun PreviewScreen(
 
     if (!state.showQuestionList) {
         if (state.previews.isNotEmpty()) {
-            // 放大浮层：放在 composition 里任意位置都行（Dialog 自开窗口），
+            // 放大浮层：放 composition 里任意位置都行（Dialog 自开窗口），
             // 放这里是为了和「点哪一页」的索引共用同一份 previews
             zoomPage?.let { index ->
-                state.previews.getOrNull(index)?.let { bmp ->
-                    PageZoomDialog(
-                        bitmap = bmp,
-                        label = "第 ${index + 1} / ${state.previews.size} 页",
-                        onDismiss = { zoomPage = null },
-                    )
-                }
+                PageZoomDialog(
+                    pages = state.previews,
+                    initialPage = index,
+                    onDismiss = { zoomPage = null },
+                )
             }
             val pageCount = state.previews.size
             val previewPager = rememberPagerState(

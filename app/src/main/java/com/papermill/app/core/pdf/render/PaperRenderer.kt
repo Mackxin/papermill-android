@@ -12,6 +12,7 @@ import com.papermill.app.core.pdf.layout.blocks.NoteBlock
 import com.papermill.app.core.pdf.layout.blocks.QuestionBlock
 import com.papermill.app.core.pdf.layout.blocks.SectionHeaderBlock
 import com.papermill.app.core.pdf.layout.blocks.TableBlock
+import com.papermill.app.domain.generate.LineGap
 import java.io.ByteArrayOutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -57,20 +58,60 @@ object PaperRenderer {
      */
     private const val ANSWER_MIN_FILL = 0.86f
 
-    /** 正文题间距的默认值（pt）：与 QuestionBlock.ITEM_GAP 一致 */
-    private const val BODY_ITEM_GAP = 4f
-
-    /** 正文撑开的目标填充率：低于它就试着把题间距拉开 */
-    private const val BODY_FILL_TARGET = 0.93f
+    /**
+     * 正文撑开的目标填充率：低于它就试着把题间距拉开。
+     *
+     * v0.17.0 从 0.93 提到 0.96 —— 用户的原话是「不要有太多空白」。
+     * 0.93 在一页 660pt 上意味着纸尾还空着 46pt，肉眼就是「半条横线」，
+     * 看着像漏印了一题；0.96 只剩 26pt，接近「一行都没浪费」。
+     */
+    private const val BODY_FILL_TARGET = 0.96f
 
     /**
-     * 正文撑开的档位。
+     * 正文撑开：在「不增页」的前提下，用二分把题间距逼到能填满纸的最大值。
      *
-     * 逐档加大而不是一步算到位：题间距一拉大，折行位置和分栏高度都会变，
-     * 只有真的重排一遍才知道会不会多出一页。逐档加、一超页就停在上一档。
-     * 上限 14pt —— 再大题目之间就散成一篇散沙，家长会以为是排版出错。
+     * 以前是「从 base 到 max 取 4 档，一超页就停在上一档」。实测问题很大：
+     * 52 道口算占 3 栏 18 行，四档只到 13pt，填充率停在 83%，
+     * 纸尾还空着 110pt —— 用户看到的就是「下面一大块白」。
+     * 等差数列的档位太粗：从 10pt 跳到 13pt 就多出一页，中间那一截全浪费了。
+     *
+     * 二分 6 次就能把误差压到 < 0.5pt（区间 2~32pt）：题间距一拉大，
+     * 折行位置和栏高都会变，只有真的重排一遍才知道会不会多页，
+     * 所以「能不能再大一点」只能靠试排来回答。
+     *
+     * 评分用 **[worst] 最差那一页**，不是最后一页。这一点至关重要：
+     * 一张两页的卷子，把间距从 4pt 拉到 12pt，题会从「第 1 页塞满」变成
+     * 「第 1 页空 113pt、第 2 页空 377pt」—— 页数没变、末页填充率也没变，
+     * 只看末页会误判成「没变化」，纸面却实实在在空出一大块。
+     * 用最小值评分，等于要求「拉间距不许把任何一页弄得更空」。
      */
-    private val BODY_GAP_STEPS = floatArrayOf(5.5f, 7f, 9f, 11f, 14f)
+    private fun stretchGap(
+        from: List<FlowLayout.Page>,
+        gap: LineGap,
+        fill: (List<FlowLayout.Page>) -> Float,
+        layout: (Float) -> List<FlowLayout.Page>,
+    ): ArrayList<FlowLayout.Page> {
+        var best = ArrayList(from)
+        var bestScore = fill(from)
+        var lo = gap.base
+        var hi = gap.max
+        repeat(6) {
+            val mid = (lo + hi) / 2f
+            val trial = layout(mid)
+            // 多出一页就说明这个间距过了，往回收；页数不变才值得比分数
+            if (trial.size != from.size) {
+                hi = mid
+            } else {
+                lo = mid
+                val score = fill(trial)
+                if (score > bestScore) {
+                    best = ArrayList(trial)
+                    bestScore = score
+                }
+            }
+        }
+        return best
+    }
 
     /**
      * 按实际题面宽度算这道大题该分几栏。
@@ -114,9 +155,12 @@ object PaperRenderer {
         val tp = TextPainter()
         val g = PageGeometry.of(doc.orientation)
 
-        // 首页被卷头占掉，后续页只有窄页眉 —— 两页可用高度不同
-        val contentHFirst = g.contentBottomSafe - (g.margin + coverHeight(doc))
-        val contentHOther = g.contentBottomSafe - (g.margin + RUNNING_H)
+        // 首页被卷头占掉，后续页只有窄页眉 —— 两页可用高度不同。
+        // 页脚被关掉时把那 26pt 还给正文：用户既然说「别浪费纸」，
+        // 下面不留字却照样空着 26pt 就是白扔一行。
+        val bottomSafe = g.contentBottom - (if (doc.hasFooter) g.footerH else 0f)
+        val contentHFirst = bottomSafe - (g.margin + coverHeight(doc))
+        val contentHOther = bottomSafe - (g.margin + RUNNING_H)
 
         // ---- 1) 整卷合并成两条流：正文一条、答案一条 ----
         // 旧版对每个大题各调一次 FlowLayout，导致「换个大题就换一页」：
@@ -125,7 +169,7 @@ object PaperRenderer {
         var bodyColumns = 2
 
         /** 正文块（[scale] 只作用于表格行高，见下面「单页速查表铺满」） */
-        fun buildBody(scale: Float, itemGap: Float = BODY_ITEM_GAP): List<Block> {
+        fun buildBody(scale: Float, itemGap: Float = doc.lineGap.base): List<Block> {
             val out = ArrayList<Block>()
             var firstHint = 0
             doc.sections.filter { !it.isAnswer }.forEach { section ->
@@ -230,16 +274,22 @@ object PaperRenderer {
             val cap = if (list.size == 1) contentHFirst else contentHOther
             return if (cap <= 0f) 1f else (bottom / cap).coerceIn(0f, 1f)
         }
-        if (bodyFillOf(pages) < BODY_FILL_TARGET) {
-            var best = pages
-            for (gap in BODY_GAP_STEPS) {
-                val trial = layoutBody(buildBody(1f, gap))
-                // 撑开不许把卷子撑多一页 —— 那是把「省半张纸」换成「多一张纸」
-                if (trial.size != pages.size) break
-                best = trial
-                if (bodyFillOf(trial) >= BODY_FILL_TARGET) break
+
+        /** 最差那一页的填充率：撑开间距时用它评分，避免「末页没变、首页变空」 */
+        fun worstFillOf(list: List<FlowLayout.Page>): Float {
+            if (list.isEmpty()) return 1f
+            var worst = 1f
+            list.forEachIndexed { i, page ->
+                val bottom = page.items.maxOfOrNull { it.y + it.block.measure(tp, it.w) } ?: 0f
+                val cap = if (i == 0) contentHFirst else contentHOther
+                if (cap > 0f) worst = minOf(worst, (bottom / cap).coerceIn(0f, 1f))
             }
-            pages = best
+            return worst
+        }
+        if (bodyFillOf(pages) < BODY_FILL_TARGET) {
+            pages = stretchGap(pages, doc.lineGap, ::worstFillOf) { gap ->
+                layoutBody(buildBody(1f, gap))
+            }
         }
 
         // ---- 答案页：自适应栏数 + 撑满整页 ----
@@ -410,7 +460,8 @@ object PaperRenderer {
 
     private fun coverHeight(doc: PaperDocument): Float {
         var h = TITLE_H
-        if (doc.subtitle.isNotEmpty()) h += SUB_H
+        // 一行标题：副标题不再单独占一行（省 17pt ≈ 一行口算的位置）
+        if (doc.subtitle.isNotEmpty() && !doc.subtitleInline) h += SUB_H
         if (doc.showNameRow) h += NAME_ROW_H
         return h + COVER_RULE_H
     }
@@ -420,25 +471,40 @@ object PaperRenderer {
         var y = g.margin
 
         val titlePaint = tp.paint(TITLE_SIZE, bold = true)
-        val titleW = tp.measure(doc.title, titlePaint)
-        b.drawText(
-            doc.title,
-            (g.pageW - titleW) / 2f,
-            y + tp.baselineOffset(titlePaint, TITLE_H),
-            titlePaint,
-        )
-        y += TITLE_H
+        val subPaint = tp.paint(SUB_SIZE, color = 0xFF555555.toInt())
 
-        if (doc.subtitle.isNotEmpty()) {
-            val subPaint = tp.paint(SUB_SIZE, color = 0xFF555555.toInt())
+        if (doc.subtitle.isNotEmpty() && doc.subtitleInline) {
+            // 标题 + 副标题当成一组居中：整组宽度算出来再定起点，
+            // 只把标题居中会让副标题伸到右边界外面
+            val titleW = tp.measure(doc.title, titlePaint)
             val subW = tp.measure(doc.subtitle, subPaint)
+            val gap = 12f
+            val start = (g.pageW - (titleW + gap + subW)) / 2f
+            val baseline = y + tp.baselineOffset(titlePaint, TITLE_H)
+            b.drawText(doc.title, start, baseline, titlePaint)
+            // 副标题与标题同基线：小字贴着基线看起来才像「一行里的注」
+            b.drawText(doc.subtitle, start + titleW + gap, baseline, subPaint)
+            y += TITLE_H
+        } else {
+            val titleW = tp.measure(doc.title, titlePaint)
             b.drawText(
-                doc.subtitle,
-                (g.pageW - subW) / 2f,
-                y + tp.baselineOffset(subPaint, SUB_H),
-                subPaint,
+                doc.title,
+                (g.pageW - titleW) / 2f,
+                y + tp.baselineOffset(titlePaint, TITLE_H),
+                titlePaint,
             )
-            y += SUB_H
+            y += TITLE_H
+
+            if (doc.subtitle.isNotEmpty()) {
+                val subW = tp.measure(doc.subtitle, subPaint)
+                b.drawText(
+                    doc.subtitle,
+                    (g.pageW - subW) / 2f,
+                    y + tp.baselineOffset(subPaint, SUB_H),
+                    subPaint,
+                )
+                y += SUB_H
+            }
         }
 
         if (doc.showNameRow) {
@@ -509,12 +575,22 @@ object PaperRenderer {
         return g.margin + RUNNING_H
     }
 
+    /**
+     * 页脚：左边是用户自定义的文字，右边是生成时间。
+     *
+     * 用户说了「底部这行能自定义」，又说「要显示生成时间」——两条都要就得
+     * 分开站：文字靠左、时间靠右，中间不会撞。以前是整句居中，
+     * 一旦允许自定义，长句和右边的时间必然叠在一起。
+     *
+     * 两样都空时**连分隔线也不画**，正文能多吃 26pt。
+     */
     private fun drawFooter(
         b: CanvasBackend,
         tp: TextPainter,
         doc: PaperDocument,
         g: PageGeometry,
     ) {
+        if (!doc.hasFooter) return
         val bottom = g.pageH - g.margin
         b.drawLine(
             g.margin, bottom - 12f,
@@ -522,8 +598,12 @@ object PaperRenderer {
             tp.rulePaint(0.5f, 0xFFDDDDDD.toInt()),
         )
         val p = tp.paint(7.5f, color = 0xFF999999.toInt())
-        val w = tp.measure(doc.footerText, p)
-        b.drawText(doc.footerText, (g.pageW - w) / 2f, bottom - 4f, p)
+        val text = doc.footerResolved
+        if (text.isNotEmpty()) b.drawText(text, g.margin, bottom - 4f, p)
+        if (doc.footerStamp.isNotEmpty()) {
+            val w = tp.measure(doc.footerStamp, p)
+            b.drawText(doc.footerStamp, g.pageW - g.margin - w, bottom - 4f, p)
+        }
     }
 
     // ------------------------------------------------------------------ 文件名

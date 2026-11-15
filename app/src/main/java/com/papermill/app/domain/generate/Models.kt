@@ -329,6 +329,35 @@ data class GeneratedSection(
     val instruction: String = "",
 )
 
+/**
+ * 题间行距档位（v0.17.0）。
+ *
+ * ============================================================
+ * 为什么是「基础间距 + 撑开上限」两个数，而不是一个系数
+ * ============================================================
+ * 用户要的是「充分利用纸张，别留太多空白」，这句话其实包含两件相反的事：
+ *  - 同样的内容要占更少的纸（→ 间距小、每页塞更多题、页数少）；
+ *  - 纸面上不要有大块空白（→ 间距大、把内容铺满）。
+ *
+ * 只调一个系数必然两头不讨好。所以这里给两个值：排版先用 [base] 排，
+ * 排完发现最后一页空着就把间距往 [max] 拉（不增页）。
+ * 紧凑档 base 小、max 反而最大 —— 先塞满，再把剩下的缝摊开。
+ *
+ * [max] 在 v0.17.0 里从 13~20 提到 24~32：原来四档等差数列太粗，
+ * 52 道口算最多只能填到 83%，纸尾白白空 110pt。现在放大到「把纸铺满」
+ * 才够用的区间，具体落点由 PaperRenderer 二分试排决定，不是固定步长。
+ */
+enum class LineGap(val label: String, val base: Float, val max: Float) {
+    COMPACT("紧凑", 2f, 32f),
+    NORMAL("标准", 4f, 26f),
+    LOOSE("宽松", 7f, 34f),
+    ;
+
+    companion object {
+        fun of(name: String?): LineGap = values().firstOrNull { it.name == name } ?: NORMAL
+    }
+}
+
 data class PaperSpec(
     val grade: Int,
     val subject: Subject,
@@ -358,6 +387,27 @@ data class PaperSpec(
      * 空集合 = 不限制（正常按年级出卷）。
      */
     val topicIds: Set<String> = emptySet(),
+
+    // ---------------- v0.17.0 卷面定制 ----------------
+
+    /**
+     * 标题与「共 N 题 满分 M 分」排成一行。
+     *
+     * 两行时卷头占 26 + 17 = 43pt，一行只要 26pt —— 省下的 17pt 在 A4 竖版上
+     * 差不多是一行口算的位置。可打印区域就这么高，卷头每省一点，正文就多一点。
+     */
+    val headerOneLine: Boolean = false,
+    /**
+     * 页脚文字。null = 用默认那句；空串 = **整条页脚都不印**（连分隔线一起去掉）。
+     *
+     * 用可空而不是空串表示默认，是因为「不印页脚」是真实需求：
+     * 页脚占 26pt 高度，去掉之后正文能多排一行。
+     */
+    val footerText: String? = null,
+    /** 页脚右侧印生成时间（家长要能看出这是哪天的卷子） */
+    val showCreatedAt: Boolean = true,
+    /** 题间行距档位 */
+    val lineGap: LineGap = LineGap.NORMAL,
 )
 
 data class GeneratedPaper(

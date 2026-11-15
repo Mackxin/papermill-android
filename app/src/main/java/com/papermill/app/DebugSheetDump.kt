@@ -12,6 +12,7 @@ import com.papermill.app.core.pdf.render.ReferenceRenderer
 import com.papermill.app.domain.content.CurriculumBank
 import com.papermill.app.domain.content.ScienceBank
 import com.papermill.app.domain.generate.GenContext
+import com.papermill.app.domain.generate.LineGap
 import com.papermill.app.domain.generate.PaperComposer
 import com.papermill.app.domain.generate.GeneratorRegistry
 import com.papermill.app.domain.generate.PaperPurpose
@@ -178,6 +179,30 @@ object DebugSheetDump {
                         QuestionType.FIGURE_COUNT to 2,
                         QuestionType.CLOCK_READ to 3,
                     ),
+                ),
+                // v0.17.0 卷面定制：同一份内容，只改「卷头 / 页脚 / 行距」，
+                // 看页数和页尾空白各差多少 —— 用户要的是「充分利用纸张」，
+                // 而这些开关承诺的正是「省下一行 / 省下 26pt」，得能对上账
+                "gap-compact" to PaperComposer.specWith(
+                    3, Subject.MATH, mapOf(QuestionType.ORAL to 52),
+                ).copy(lineGap = LineGap.COMPACT),
+                "gap-loose" to PaperComposer.specWith(
+                    3, Subject.MATH, mapOf(QuestionType.ORAL to 52),
+                ).copy(lineGap = LineGap.LOOSE),
+                "head-oneline" to PaperComposer.specWith(
+                    3, Subject.MATH, mapOf(QuestionType.ORAL to 52),
+                ).copy(headerOneLine = true),
+                "no-footer" to PaperComposer.specWith(
+                    3, Subject.MATH, mapOf(QuestionType.ORAL to 52),
+                ).copy(footerText = "", showCreatedAt = false),
+                "all-tight" to PaperComposer.specWith(
+                    3, Subject.MATH, mapOf(QuestionType.ORAL to 52),
+                ).copy(
+                    lineGap = LineGap.COMPACT,
+                    headerOneLine = true,
+                    showNameRow = false,
+                    footerText = "",
+                    showCreatedAt = false,
                 ),
             )
 

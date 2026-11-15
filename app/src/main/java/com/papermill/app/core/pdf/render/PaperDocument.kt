@@ -1,6 +1,7 @@
 package com.papermill.app.core.pdf.render
 
 import com.papermill.app.domain.generate.FigureSpec
+import com.papermill.app.domain.generate.LineGap
 import com.papermill.app.domain.generate.PageOrientation
 
 /**
@@ -50,12 +51,31 @@ data class PaperSection(
 data class PaperDocument(
     val title: String,
     val subtitle: String = "",
+    /** 副标题是否与标题排在同一行（v0.17.0：省下整整一行的卷头高度） */
+    val subtitleInline: Boolean = false,
     val showNameRow: Boolean = true,
     val sections: List<PaperSection>,
-    val footerText: String = "卷子 · 自编练习卷",
+    /** 页脚文字；null = 用渲染层默认那句，空串 = 整条页脚不印 */
+    val footerText: String? = DEFAULT_FOOTER,
+    /** 页脚右侧的生成时间（已格式化好的字符串，空串 = 不印） */
+    val footerStamp: String = "",
+    /** 题间行距档位：紧凑能多塞题，宽松更好写字（见 [LineGap]） */
+    val lineGap: LineGap = LineGap.NORMAL,
     /** 竖版 / 横版：决定 PdfDocument 页面宽高，并随结果传给打印框架 */
     val orientation: PageOrientation = PageOrientation.PORTRAIT,
-)
+) {
+    /** 有没有东西要印在页脚：两样都空时连分隔线一起省掉，正文能多吃 26pt */
+    val hasFooter: Boolean
+        get() = (footerText?.isNotEmpty() == true) || footerStamp.isNotEmpty()
+
+    /** 真正要印的文字：null 走默认文案 */
+    val footerResolved: String
+        get() = footerText ?: DEFAULT_FOOTER
+
+    companion object {
+        const val DEFAULT_FOOTER = "卷子 · 题目由本 App 程序生成，非官方教材配套"
+    }
+}
 
 /**
  * 渲染结果。
