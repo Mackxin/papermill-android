@@ -18,6 +18,8 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -72,8 +74,10 @@ import com.papermill.app.domain.generate.AnswerMode
 import com.papermill.app.domain.generate.GeneratorRegistry
 import com.papermill.app.domain.generate.GradeProfiles
 import com.papermill.app.domain.generate.PageOrientation
+import com.papermill.app.domain.generate.PaperPurpose
 import com.papermill.app.domain.generate.PaperTemplates
 import com.papermill.app.domain.generate.Subject
+import com.papermill.app.domain.generate.Tilt
 import com.papermill.app.domain.reference.PracticeData
 import com.papermill.app.domain.reference.ReferenceData
 import kotlinx.coroutines.CoroutineScope
@@ -675,6 +679,7 @@ private fun LazyListScope.homeScreenItems(state: AppState, scope: CoroutineScope
 
 // ------------------------------------------------------------------ 参数页：默认只露题量
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun CreateScreen(state: AppState, scope: CoroutineScope) {
     val signature = buildString {
@@ -811,9 +816,64 @@ private fun CreateScreen(state: AppState, scope: CoroutineScope) {
         }
     }
 
+    Spacer(Modifier.height(16.dp))
+    SectionLabel("02", "出题偏好", "决定出什么题、出多少")
+    Spacer(Modifier.height(8.dp))
+    CardSection {
+        Text(
+            "题型倾向",
+            fontSize = PaperDimens.CaptionSp,
+            color = PaperColors.OnSurfaceVariant,
+            modifier = Modifier.padding(top = 4.dp, bottom = 7.dp),
+        )
+        // 七个 chip 一行放不下：用 FlowRow 自然折行，硬塞成两行 Row 会参差不齐
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(PaperDimens.GapSmall),
+            verticalArrangement = Arrangement.spacedBy(PaperDimens.GapSmall),
+        ) {
+            Tilt.values().forEach { t ->
+                // 这一科压根没有该类题型时置灰：点了配比不会变的控件比不给点更糟
+                val usable = state.canUseTilt(t)
+                ChoiceChip(t.label, state.tilt == t, enabled = usable) {
+                    state.applyPreference(newTilt = t)
+                }
+            }
+        }
+        Spacer(Modifier.height(7.dp))
+        Text(
+            state.tilt.hint,
+            fontSize = PaperDimens.TinySp,
+            color = PaperColors.OnSurfaceVariant,
+            lineHeight = 15.sp,
+        )
+        val unusable = Tilt.values().filter { !state.canUseTilt(it) && it != Tilt.BALANCED }
+        if (unusable.isNotEmpty()) {
+            Text(
+                "当前科目没有【" + unusable.joinToString("、") { it.label.removeSuffix("偏多") } + "】这类题，已置灰",
+                fontSize = PaperDimens.TinySp,
+                color = PaperColors.Muted,
+                lineHeight = 15.sp,
+                modifier = Modifier.padding(top = 3.dp),
+            )
+        }
+        Divider()
+        SettingRow("卷面用途") {
+            PaperPurpose.values().forEach { p ->
+                ChoiceChip(p.label, state.purpose == p) { state.applyPreference(newPurpose = p) }
+            }
+        }
+        Text(
+            state.purpose.hint + "　当前配比：" +
+                state.counts.entries.joinToString("、") { "${it.key.label} ${it.value}" },
+            fontSize = PaperDimens.TinySp,
+            color = PaperColors.OnSurfaceVariant,
+            lineHeight = 15.sp,
+        )
+    }
+
     // v0.6.0 题型库：搜索 + 按科目筛选，点「＋10」就能加进组合
     Spacer(Modifier.height(14.dp))
-    SectionLabel("02", "题型库", "共 ${state.availableTypes.size} 种")
+    SectionLabel("03", "题型库", "共 ${state.availableTypes.size} 种")
     Spacer(Modifier.height(8.dp))
     var filterSubject by remember { mutableStateOf<Subject?>(null) }
     val subjectOptions = state.availableTypes
@@ -897,7 +957,7 @@ private fun CreateScreen(state: AppState, scope: CoroutineScope) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(Modifier.weight(1f)) {
-            SectionLabel("03", "卷面设置", if (state.showAdvanced) "收起" else "展开")
+            SectionLabel("04", "卷面设置", if (state.showAdvanced) "收起" else "展开")
         }
     }
     if (state.showAdvanced) {

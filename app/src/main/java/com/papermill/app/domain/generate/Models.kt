@@ -129,6 +129,96 @@ enum class QuestionType(
     SCIENCE_CHOICE("科学选择", 1),
     SCIENCE_JUDGE("科学判断", 2),
     SCIENCE_BLANK("科学填空", 1),
+    ;
+
+    /**
+     * 题型大类。题型倾向（[Tilt]）靠它决定「哪些题型算选择题、哪些算计算题」。
+     *
+     * 写成集中式 when 而不是塞进枚举构造参数：49 个题型逐一加参数容易漏，
+     * 这里一眼能看全，新加题型忘了归类会在编译期报「when 不完整」。
+     */
+    val family: QuestionFamily
+        get() = when (this) {
+            ORAL, ORAL_MISSING, ORAL_REMAINDER, VERTICAL, EXPRESSION, FRACTION, EQUATION,
+            RATIONAL, ALGEBRA, RADICAL, MAKE_TEN, CHAIN_CALC, MIXED_CALC, TENS_CALC,
+            TWO_DIGIT, COMPARE, COUNTING,
+            -> QuestionFamily.CALC
+
+            WORD_PROBLEM, PHYSICS_CALC, CHEMISTRY_CALC -> QuestionFamily.APPLY
+
+            SENTENCE_ORDER, CLOZE -> QuestionFamily.READING
+
+            SCIENCE_JUDGE -> QuestionFamily.JUDGE
+
+            KNOWLEDGE, THEME_SORT, PHONETIC_PICK, GRAMMAR, IDIOM_MEANING, POEM_MATCH,
+            CURRIC_CHOICE, SCIENCE_CHOICE,
+            -> QuestionFamily.CHOICE
+
+            PINYIN, HANZI, DICTATION, ENGLISH_WORD, FILL_BLANK, UNIT_CONVERT,
+            NUMBER_PATTERN, LETTER_ORDER, WORD_SCRAMBLE, THEME_PINYIN, THEME_GROUP,
+            PHONETIC_WRITE, TEXTBOOK_HANZI, TEXTBOOK_WORD, IDIOM_FILL, POEM_FILL,
+            CURRIC_BLANK, SCIENCE_BLANK,
+            -> QuestionFamily.BLANK
+        }
+}
+
+/**
+ * 题型大类。只用来做「题型倾向」的加权，不参与排版。
+ */
+enum class QuestionFamily(val label: String) {
+    CHOICE("选择"),
+    BLANK("填空"),
+    JUDGE("判断"),
+    CALC("计算"),
+    APPLY("应用"),
+    READING("阅读"),
+}
+
+/**
+ * 题型倾向：决定这份卷子以哪类题为主。
+ *
+ * 对应「均衡搭配 / 选择题偏多 / …」这类出题偏好 —— 它改的是**各大题的题型与题量**，
+ * 不改难度、不改版式。
+ */
+enum class Tilt(val label: String, val hint: String) {
+    BALANCED("均衡搭配", "按年级的常规配比，各类题型都来一点"),
+    CHOICE("选择题偏多", "选择题占大头，批改快，适合快速过一遍知识点"),
+    BLANK("填空题偏多", "填空占大头，练书写与记忆"),
+    JUDGE("判断题偏多", "判断题占大头，专门练概念辨析"),
+    CALC("计算解答偏多", "口算 / 竖式 / 脱式这类计算题占大头"),
+    APPLY("应用综合偏多", "应用题与综合题占大头，练审题与列式"),
+    READING("阅读理解偏多", "连词成句 / 选词填空这类语英阅读题占大头"),
+    ;
+
+    /** 这个倾向偏好的题型大类；[BALANCED] 没有偏好 */
+    val prefer: QuestionFamily? get() = when (this) {
+        BALANCED -> null
+        CHOICE -> QuestionFamily.CHOICE
+        BLANK -> QuestionFamily.BLANK
+        JUDGE -> QuestionFamily.JUDGE
+        CALC -> QuestionFamily.CALC
+        APPLY -> QuestionFamily.APPLY
+        READING -> QuestionFamily.READING
+    }
+}
+
+/**
+ * 卷面用途：决定这份卷子「铺多宽」。
+ *
+ * 日常巩固 = 一种题型大量练；单元检测 = 三四种题型均衡；综合复习 = 题型铺满、题量更大。
+ */
+enum class PaperPurpose(val label: String, val hint: String) {
+    DAILY("日常巩固", "一两种题型大量练，一页盯住一个知识点"),
+    UNIT("单元检测", "三四种题型均衡，覆盖一个单元"),
+    REVIEW("综合复习", "题型铺满、题量更大，按整册复习"),
+    ;
+
+    /** 单科卷用几种题型 */
+    val kinds: Int get() = when (this) {
+        DAILY -> 1
+        UNIT -> 3
+        REVIEW -> 4
+    }
 }
 
 enum class AnswerMode(val label: String) {
@@ -184,6 +274,10 @@ data class PaperSpec(
     val isMistakePaper: Boolean = false,
     /** 交叉学科：一份卷里可以同时出数学 + 语文 + 英语等；为空时按 [subject] 单科处理 */
     val subjects: List<Subject> = emptyList(),
+    /** 题型倾向：决定这份卷以哪类题为主 */
+    val tilt: Tilt = Tilt.BALANCED,
+    /** 卷面用途：日常巩固 / 单元检测 / 综合复习，决定铺多宽 */
+    val purpose: PaperPurpose = PaperPurpose.DAILY,
     /** 纸张方向：横版时 PDF 页面是 842×595pt，系统打印框也按横版 A4 匹配 */
     val orientation: PageOrientation = PageOrientation.PORTRAIT,
     /**

@@ -84,13 +84,28 @@ object PaperComposer {
 
     /**
      * 默认规格：打开就能直接出一份。
-     * 单科时只用**一个题型** —— 每个大题在排版上会另起一页，
-     * 「口算 20 + 竖式 4」会白占两张纸；单题型卷配合自动补题能正好排满一页。
-     * 勾了多学科时才给两个题型，保证各科都有题。
+     *
+     * v0.12.0 起由「卷面用途」决定铺多宽、「题型倾向」决定以哪类题为主：
+     *  - 日常巩固：一两种题型大量练，一页盯住一个知识点（原来就是这个行为）
+     *  - 单元检测：三四种题型均衡
+     *  - 综合复习：题型铺满、题量更大
+     *
+     * 单题型卷仍然有它的道理：每个大题另起一页，「口算 20 + 竖式 4」会白占两张纸。
+     * 所以 DAILY 只给一种题型，靠自动补题把整页填满。
      */
-    fun defaultSpec(grade: Int, subject: Subject): PaperSpec = defaultSpec(grade, listOf(subject))
+    fun defaultSpec(
+        grade: Int,
+        subject: Subject,
+        tilt: Tilt = Tilt.BALANCED,
+        purpose: PaperPurpose = PaperPurpose.DAILY,
+    ): PaperSpec = defaultSpec(grade, listOf(subject), tilt, purpose)
 
-    fun defaultSpec(grade: Int, subjects: List<Subject>): PaperSpec {
+    fun defaultSpec(
+        grade: Int,
+        subjects: List<Subject>,
+        tilt: Tilt = Tilt.BALANCED,
+        purpose: PaperPurpose = PaperPurpose.DAILY,
+    ): PaperSpec {
         val primary = subjects.firstOrNull() ?: Subject.MATH
         val types = GeneratorRegistry.availableFor(grade, subjects)
         val counts = LinkedHashMap<QuestionType, Int>()
@@ -98,20 +113,149 @@ object PaperComposer {
             // 科学是知识型科目，一份卷子本来就是「选择 + 判断 + 填空」三块，
             // 不像数学那样一种题型刷 30 道。而且题库每个年级每型只有 12 道，
             // 默认开 30 题会印出一张只有 12 题的卷子，标题和实际对不上。
-            counts[QuestionType.SCIENCE_CHOICE] = 8
-            counts[QuestionType.SCIENCE_JUDGE] = 10
-            counts[QuestionType.SCIENCE_BLANK] = 8
+            scienceCounts(tilt, purpose).forEach { (t, n) -> counts[t] = n }
         } else if (subjects.size > 1) {
-            types.take(2).forEachIndexed { i, t ->
-                counts[t] = if (t.answerLines > 0) 4 else if (i == 0) 20 else 10
+            // 多学科：每个科目至少要有一个题型，否则勾了英语却一道英语题都没有
+            pickForSubjects(types, subjects, tilt, purpose).forEachIndexed { i, t ->
+                counts[t] = countFor(t, i, purpose)
             }
-            // 综合卷里勾了科学，也给一道科学大题，否则选了科学却一道科学题都没有
-            if (Subject.SCIENCE in subjects) counts[QuestionType.SCIENCE_CHOICE] = 8
         } else {
-            val first = types.firstOrNull()
-            if (first != null) counts[first] = if (first.answerLines > 0) 8 else 30
+            val picked = orderByTilt(types, tilt).take(purpose.kinds)
+            picked.forEachIndexed { i, t -> counts[t] = countFor(t, i, purpose) }
         }
-        return specWith(grade, primary, counts, subjects = subjects)
+        return specWith(grade, primary, counts, subjects = subjects, tilt = tilt, purpose = purpose)
+    }
+
+    /**
+     * 科学卷的三块配比。
+     *
+     * 科学只有「选择 / 判断 / 填空」三种题型，题库每级每型 12 道 —— 所以**上限就是 12**，
+     * 写成 30 会印出一张只有 12 题的卷子，卷头写着 30 题。
+     *
+     * v0.12.0 之前这里写死 8/10/8，把倾向和用途整个吞了：用户在科学卷上连点七种倾向，
+     * 配比一个数字都不动。现在让倾向决定「主型」，用途决定「铺多宽」。
+     */
+    private fun scienceCounts(tilt: Tilt, purpose: PaperPurpose): Map<QuestionType, Int> {
+        // 主型：倾向指哪儿打哪儿；均衡搭配 / 该倾向科学上不适用时，默认判断题（科学最常用的辨析形式）
+        val main = when (tilt.prefer) {
+            QuestionFamily.CHOICE -> QuestionType.SCIENCE_CHOICE
+            QuestionFamily.BLANK -> QuestionType.SCIENCE_BLANK
+            QuestionFamily.JUDGE -> QuestionType.SCIENCE_JUDGE
+            else -> QuestionType.SCIENCE_JUDGE
+        }
+        val others = listOf(
+            QuestionType.SCIENCE_CHOICE,
+            QuestionType.SCIENCE_JUDGE,
+            QuestionType.SCIENCE_BLANK,
+        ).filter { it != main }
+        val out = LinkedHashMap<QuestionType, Int>()
+        when (purpose) {
+            // 日常巩固：主型刷满 + 一个陪衬，一页刚好
+            PaperPurpose.DAILY -> {
+                out[main] = 12
+                out[others.first()] = 8
+            }
+            // 单元检测：三块都有，主型略多
+            PaperPurpose.UNIT -> {
+                out[main] = 12
+                others.forEach { out[it] = 8 }
+            }
+            // 综合复习：三块都按题库上限压满
+            PaperPurpose.REVIEW -> {
+                out[main] = 12
+                others.forEach { out[it] = 10 }
+            }
+        }
+        return out
+    }
+
+    /**
+     * 这个「年级 + 科目」能不能真做出该倾向的题。
+     *
+     * 没有的话 UI 必须把倾向置灰。v0.12.0 初版是**静默退化**：数学卷上点「判断题偏多」，
+     * 配比一个字都不变，用户以为设上了、其实什么也没发生 —— 这跟 v0.11.2 那个
+     * 「columns 声明了从没被读」是同一类病：**控件点了有反应，但反应是假的**。
+     */
+    fun fits(grade: Int, subjects: List<Subject>, tilt: Tilt): Boolean {
+        val prefer = tilt.prefer ?: return true
+        return GeneratorRegistry.availableFor(grade, subjects).any {
+            it.family == prefer || it.label.contains(prefer.label)
+        }
+    }
+
+    /**
+     * 按倾向排序：**题型名字更贴切的优先**，其次才看大类。
+     *
+     * 只按大类排会挑出「自编题库」这种混装题当选择题代表；
+     * 名字里直接带「选择 / 填空 / 判断 / 应用」的题型才是这个倾向的正解。
+     * 只排序不过滤 —— 这一年级压根没有该类题时，卷子总得能出，退化成原顺序即可。
+     */
+    private fun orderByTilt(types: List<QuestionType>, tilt: Tilt): List<QuestionType> {
+        val prefer = tilt.prefer ?: return types
+        return types.sortedByDescending { t ->
+            when {
+                t.label.contains(prefer.label) -> 2
+                t.family == prefer -> 1
+                else -> 0
+            }
+        }
+    }
+
+    /** 多学科时，每个科目按倾向挑一个代表题型，凑够 [PaperPurpose.kinds] 种 */
+    private fun pickForSubjects(
+        types: List<QuestionType>,
+        subjects: List<Subject>,
+        tilt: Tilt,
+        purpose: PaperPurpose,
+    ): List<QuestionType> {
+        val out = LinkedHashMap<QuestionType, Unit>()
+        val perSubject = LinkedHashMap<Subject, Int>()
+        // 先保证每科一个（挑该科里最贴合倾向的那个）
+        subjects.forEach { s ->
+            val mine = orderByTilt(types.filter { GeneratorRegistry.subjectOf(it) == s }, tilt)
+            mine.firstOrNull()?.let { out[it] = Unit; perSubject[s] = 1 }
+        }
+        // 再按倾向补足到目标数量，轮流照顾每个科目，避免全给第一科
+        var round = 0
+        while (out.size < purpose.kinds + (subjects.size - 1).coerceAtLeast(0) && round < 8) {
+            var added = false
+            subjects.forEach { s ->
+                if (out.size >= purpose.kinds + (subjects.size - 1).coerceAtLeast(0)) return@forEach
+                val mine = orderByTilt(types.filter { GeneratorRegistry.subjectOf(it) == s }, tilt)
+                val next = mine.firstOrNull { it !in out }
+                if (next != null) {
+                    out[next] = Unit
+                    perSubject[s] = (perSubject[s] ?: 0) + 1
+                    added = true
+                }
+            }
+            if (!added) break
+            round++
+        }
+        return out.keys.toList()
+    }
+
+    /**
+     * 第 [index] 个题型的默认题量。
+     *
+     * 两重约束：
+     *  - 靠前的大题题量更大，靠后的递减，否则「两大题各 30 道」直接把卷子拉成三页；
+     *  - 带答题线的题一道占好几行，按行数封顶 —— 应用题给 16 道，一页根本装不下。
+     */
+    private fun countFor(t: QuestionType, index: Int, purpose: PaperPurpose): Int {
+        val table = when (purpose) {
+            PaperPurpose.DAILY -> intArrayOf(30, 10, 8, 8)
+            PaperPurpose.UNIT -> intArrayOf(18, 10, 8, 6)
+            PaperPurpose.REVIEW -> intArrayOf(16, 10, 8, 6)
+        }
+        val want = table[index.coerceIn(0, table.lastIndex)]
+        val cap = when {
+            t.answerLines >= 3 -> 8
+            t.answerLines == 2 -> 10
+            t.answerLines == 1 -> 16
+            else -> Int.MAX_VALUE
+        }
+        return minOf(want, cap)
     }
 
     fun specWith(
@@ -122,6 +266,8 @@ object PaperComposer {
         title: String? = null,
         isMistakePaper: Boolean = false,
         subjects: List<Subject> = emptyList(),
+        tilt: Tilt = Tilt.BALANCED,
+        purpose: PaperPurpose = PaperPurpose.DAILY,
     ): PaperSpec {
         val total = counts.values.sum()
         val autoTitle = if (subjects.size > 1) {
@@ -143,6 +289,8 @@ object PaperComposer {
             seed = seed,
             isMistakePaper = isMistakePaper,
             subjects = subjects,
+            tilt = tilt,
+            purpose = purpose,
         )
     }
 

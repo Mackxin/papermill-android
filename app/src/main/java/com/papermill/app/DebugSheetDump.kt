@@ -14,8 +14,10 @@ import com.papermill.app.domain.content.ScienceBank
 import com.papermill.app.domain.generate.GenContext
 import com.papermill.app.domain.generate.PaperComposer
 import com.papermill.app.domain.generate.GeneratorRegistry
+import com.papermill.app.domain.generate.PaperPurpose
 import com.papermill.app.domain.generate.QuestionType
 import com.papermill.app.domain.generate.Subject
+import com.papermill.app.domain.generate.Tilt
 import com.papermill.app.domain.reference.PracticeData
 import com.papermill.app.domain.reference.ReferenceData
 import java.io.File
@@ -172,6 +174,50 @@ object DebugSheetDump {
             }
             File(dir, "report.txt").writeText(report.toString())
             Log.i(TAG, "done -> ${dir.absolutePath}")
+        }.start()
+    }
+
+    /**
+     * 配比体检：把「倾向 × 用途 × 年级 × 科目」的组合全跑一遍，只打题型与题量。
+     *
+     * 为什么不能靠手点：7 种倾向 × 3 种用途 = 21 种组合，每种还要看年级/科目能不能出，
+     * 手点一遍十几分钟，而且很容易漏看「切了倾向但其实一道都没换」这种静默失败 ——
+     * 那正是 v0.11.2 的病根（columns 声明了却从没被读）。这里一次性把结论摊开看。
+     *
+     * ```
+     * adb shell am start -n com.papermill.app/.MainActivity --ez dumpRatios true
+     * ```
+     */
+    fun dumpRatios(ctx: Context) {
+        CurriculumBank.init(ctx)
+        ScienceBank.init(ctx)
+        Thread {
+            val grades = listOf(1, 3, 4, 6, 8)
+            grades.forEach { grade ->
+                val subjects = Subject.values().filter { it.availableFor(grade) }
+                subjects.forEach { subject ->
+                    Log.i(TAG, "===== ${grade} 年级 / ${subject.label} =====")
+                    Tilt.values().forEach { tilt ->
+                        val line = PaperPurpose.values().joinToString("　｜　") { p ->
+                            val spec = PaperComposer.defaultSpec(grade, listOf(subject), tilt, p)
+                            val detail = spec.counts.entries.joinToString("、") { "${it.key.label} ${it.value}" }
+                            "${p.label}(${spec.counts.values.sum()}): $detail"
+                        }
+                        Log.i(TAG, "  ${tilt.label} → $line")
+                    }
+                }
+            }
+            // 多学科组合也看一组：勾了语文+数学时，两边都得有题
+            val multi = listOf(Subject.CHINESE, Subject.MATH)
+            Log.i(TAG, "===== 3 年级 / 语文+数学 =====")
+            Tilt.values().forEach { tilt ->
+                PaperPurpose.values().forEach { p ->
+                    val spec = PaperComposer.defaultSpec(3, multi, tilt, p)
+                    val detail = spec.counts.entries.joinToString("、") { "${it.key.label} ${it.value}" }
+                    Log.i(TAG, "  ${tilt.label} / ${p.label} → ${spec.counts.values.sum()} 题：$detail")
+                }
+            }
+            Log.i(TAG, "ratios done")
         }.start()
     }
 

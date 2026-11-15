@@ -42,10 +42,12 @@ import com.papermill.app.domain.generate.GeneratedSection
 import com.papermill.app.domain.generate.GeneratorRegistry
 import com.papermill.app.domain.generate.GradeProfiles
 import com.papermill.app.domain.generate.PaperComposer
+import com.papermill.app.domain.generate.PaperPurpose
 import com.papermill.app.domain.generate.PaperSpec
 import com.papermill.app.domain.generate.PageOrientation
 import com.papermill.app.domain.generate.QuestionType
 import com.papermill.app.domain.generate.Subject
+import com.papermill.app.domain.generate.Tilt
 import com.papermill.app.domain.generate.stableHash
 import com.papermill.app.domain.reference.PracticeSheet
 import com.papermill.app.domain.reference.ReferenceSheet
@@ -103,6 +105,10 @@ class AppState(private val rawContext: Context) {
     var counts by mutableStateOf<Map<QuestionType, Int>>(emptyMap())
 
     var difficulty by mutableStateOf(2)
+    /** 题型倾向：决定这份卷以哪类题为主 */
+    var tilt by mutableStateOf(Tilt.BALANCED)
+    /** 卷面用途：日常巩固 / 单元检测 / 综合复习 */
+    var purpose by mutableStateOf(PaperPurpose.DAILY)
     var columns by mutableStateOf(2)
     var answerMode by mutableStateOf(AnswerMode.LAST_PAGE)
     var showNameRow by mutableStateOf(true)
@@ -304,7 +310,7 @@ class AppState(private val rawContext: Context) {
         ScienceBank.init(ctx)
         TextbookCatalog.init(ctx)
         dockGlass = LocalStore.loadSettings(ctx).dockGlass
-        counts = PaperComposer.defaultSpec(grade, subjects).counts
+        counts = PaperComposer.defaultSpec(grade, subjects, tilt, purpose).counts
         refreshLists()
     }
 
@@ -385,13 +391,31 @@ class AppState(private val rawContext: Context) {
         generate()
     }
 
+    /**
+     * 这个倾向在当前「年级 + 科目」下能不能真出题。
+     *
+     * 数学没有判断题、语文没有计算题 —— 这类组合点下去配比一个字都不会变。
+     * UI 拿它把 chip 置灰，让人一眼看出「不是我不想选，是这科压根没有」。
+     */
+    fun canUseTilt(t: Tilt): Boolean = PaperComposer.fits(grade, subjects, t)
+
+    /**
+     * 换年级 / 换科目后，原来选的倾向可能就落空了（比如从科学切到数学、
+     * 而当前选的是「判断题偏多」）。落空就静默回落到均衡搭配 ——
+     * 留在那个 chip 上会一直显示「已选中」，但配比是别的，比不选更误导。
+     */
+    private fun normalizeTilt() {
+        if (!PaperComposer.fits(grade, subjects, tilt)) tilt = Tilt.BALANCED
+    }
+
     fun selectGrade(g: Int) {
         clearUnitFilter()
         grade = g
         val kept = subjects.filter { it.availableFor(g) }.ifEmpty { listOf(Subject.MATH) }
         subjects = kept
         subject = kept.first()
-        counts = PaperComposer.defaultSpec(g, kept).counts
+        normalizeTilt()
+        counts = PaperComposer.defaultSpec(g, kept, tilt, purpose).counts
         titleOverride = null
         previewSeed = System.currentTimeMillis()
     }
@@ -409,7 +433,24 @@ class AppState(private val rawContext: Context) {
         }
         subjects = list
         subject = list.first()
-        counts = PaperComposer.defaultSpec(grade, list).counts
+        normalizeTilt()
+        counts = PaperComposer.defaultSpec(grade, list, tilt, purpose).counts
+        titleOverride = null
+        previewSeed = System.currentTimeMillis()
+    }
+
+    /**
+     * 改「题型倾向 / 卷面用途」后重新配比。
+     *
+     * 只重算题型与题量，不动难度、栏数、纸向 —— 这两个参数决定「出什么题」，
+     * 不决定「怎么印」，混在一起改会让人以为只是换了个标签。
+     */
+    fun applyPreference(newTilt: Tilt = tilt, newPurpose: PaperPurpose = purpose) {
+        clearUnitFilter()
+        // 该科做不出来的倾向直接不接 —— 接了就变成「点了没反应」的假控件
+        tilt = if (newTilt == tilt || canUseTilt(newTilt)) newTilt else tilt
+        purpose = newPurpose
+        counts = PaperComposer.defaultSpec(grade, subjects, tilt, purpose).counts
         titleOverride = null
         previewSeed = System.currentTimeMillis()
     }
@@ -612,6 +653,8 @@ class AppState(private val rawContext: Context) {
             showNameRow = showNameRow,
             fontSize = 11f,
             seed = seed,
+            tilt = tilt,
+            purpose = purpose,
             orientation = orientation,
             topicIds = unitTopicIds,
         )
@@ -819,7 +862,7 @@ class AppState(private val rawContext: Context) {
         grade = saved.grade
         subject = runCatching { Subject.valueOf(saved.subject) }.getOrDefault(Subject.MATH)
         subjects = listOf(subject)
-        counts = PaperComposer.defaultSpec(grade, subjects).counts
+        counts = PaperComposer.defaultSpec(grade, subjects, tilt, purpose).counts
         titleOverride = saved.title
         busy = true
         try {

@@ -31,6 +31,11 @@ class MainActivity : ComponentActivity() {
             DebugSheetDump.dumpPaper(this)
             return
         }
+        // 配比体检：倾向 × 用途 × 年级 × 科目 全组合，只打题型与题量
+        if (BuildConfig.DEBUG && intent?.getBooleanExtra("dumpRatios", false) == true) {
+            DebugSheetDump.dumpRatios(this)
+            return
+        }
         setContent {
             PaperMillTheme {
                 val state = remember { AppState(this@MainActivity) }
