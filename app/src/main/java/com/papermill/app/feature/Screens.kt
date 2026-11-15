@@ -1550,14 +1550,26 @@ private fun LazyListScope.referenceScreenItems(state: AppState, scope: Coroutine
 
     item { Spacer(Modifier.height(PaperDimens.Gap)) }
     item { SectionLabel("02", "练习纸", "${PracticeData.sheets.size} 张 · 格子铺满整页") }
-    item { Spacer(Modifier.height(PaperDimens.GapSmall)) }
-    sheetRows(
-        items = PracticeData.sheets,
-        titleOf = { it.title },
-        descOf = { it.subtitle },
-        metaOf = { "1 页 ${it.orientation.shortLabel}" },
-        onClick = { sheet -> scope.launch { state.renderPractice(sheet) } },
-    )
+    // v0.15.0：9 张涨到 22 张后不再平铺，按用途分 5 组显示（和上面速查表的分组样式一致）
+    PracticeData.sheetGroups.forEach { (group, list) ->
+        item {
+            Spacer(Modifier.height(PaperDimens.GapSmall))
+            Text(
+                group,
+                fontSize = PaperDimens.LabelSp,
+                fontWeight = FontWeight.SemiBold,
+                color = PaperColors.OnSurface,
+                modifier = Modifier.padding(start = 2.dp, bottom = 8.dp),
+            )
+        }
+        sheetRows(
+            items = list,
+            titleOf = { it.title },
+            descOf = { it.subtitle },
+            metaOf = { "1 页 ${it.orientation.shortLabel}" },
+            onClick = { sheet -> scope.launch { state.renderPractice(sheet) } },
+        )
+    }
 
     item { Spacer(Modifier.height(PaperDimens.Gap)) }
     item {
