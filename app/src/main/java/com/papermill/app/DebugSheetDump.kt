@@ -149,6 +149,15 @@ object DebugSheetDump {
                         QuestionType.WORD_PROBLEM to 3,
                     ),
                 ),
+                // v0.14.0 用户截图样本：52 道口算只排 2 栏、答案页 2 栏半页白
+                "oral52-g3" to PaperComposer.specWith(
+                    3, Subject.MATH, mapOf(QuestionType.ORAL to 52),
+                ),
+                // 混合卷：口算要 4 栏、选择题要 2 栏，看栏数能不能在大题边界切换
+                "oral-choose-g4" to PaperComposer.specWith(
+                    4, Subject.MATH,
+                    mapOf(QuestionType.ORAL to 24, QuestionType.CURRIC_CHOICE to 8),
+                ),
             )
 
             val report = StringBuilder("名称\t页数\t各页页尾空白(pt)\n")

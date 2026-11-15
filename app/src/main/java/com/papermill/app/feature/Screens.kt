@@ -48,6 +48,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -55,6 +56,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.platform.LocalConfiguration
@@ -83,6 +85,19 @@ import com.papermill.app.domain.reference.ReferenceData
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.rememberTransformableState
+import androidx.compose.foundation.gestures.transformable
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 
 /**
  * 页面框架 v2。
@@ -148,6 +163,52 @@ fun PaperMillRoot(state: AppState) {
     val pager = rememberPagerState(
         initialPage = TAB_ORDER.indexOf(state.navTab).coerceAtLeast(0),
     ) { TAB_ORDER.size }
+
+    // ============================================================
+    // 记住上次看到哪儿
+    // ============================================================
+    // 每个页签一个独立的 LazyListState：pager 会把离屏页销毁重建，
+    // 用 remember 在页内建的话，滑回来就回到顶部了。
+    val tabStates = remember { TAB_ORDER.associateWith { LazyListState() } }
+
+    LaunchedEffect(Unit) {
+        state.restoreSessionOnce()
+        // 复原要等 restoreSessionOnce 读完盘，所以放在它后面滚；
+        // 用 scrollToItem 而不是构造初始值，因为这份 session 是异步才到的
+        state.restoredSession.scrolls.forEach { (key, pos) ->
+            val tab = runCatching { NavTab.valueOf(key) }.getOrNull() ?: return@forEach
+            tabStates[tab]?.let { st ->
+                runCatching { st.scrollToItem(pos.getOrElse(0) { 0 }, pos.getOrElse(1) { 0 }) }
+            }
+        }
+    }
+
+    // 滚动即记录（只写内存）；停下来 1.2 秒再落一次盘。
+    // 只靠 onStop 落盘不够：从最近任务里划掉、或者系统直接杀进程都不一定走
+    // onStop，那时候位置就白记了。滚停后落一次，最多丢最后 1 秒的位置。
+    LaunchedEffect(Unit) {
+        snapshotFlow {
+            TAB_ORDER.map { k ->
+                val st = tabStates.getValue(k)
+                k.name to intArrayOf(st.firstVisibleItemIndex, st.firstVisibleItemScrollOffset)
+            }
+        }
+            .collect { list ->
+                list.forEach { (key, pos) -> state.noteScroll(key, pos[0], pos[1]) }
+                delay(1200)
+                state.persistSession()
+            }
+    }
+
+    // 切后台 / 退出时把「我在哪」写盘
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) state.persistSession()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     // ============================================================
     // 高亮与 pager 的三段联动（用 snapshotFlow 而不是 LaunchedEffect(key)）
@@ -229,6 +290,7 @@ fun PaperMillRoot(state: AppState) {
                         // 滑动时前后两页同时在场，首帧要摆上百个阴影节点 —— 这就是卡顿的主因。
                         // 改成按需组合后，屏幕上始终只有可见的那几行。
                         LazyColumn(
+                            state = tabStates.getValue(tab),
                             modifier = Modifier.fillMaxSize(),
                             contentPadding = PaddingValues(
                                 start = PaperDimens.ScreenPad,
@@ -253,7 +315,16 @@ fun PaperMillRoot(state: AppState) {
                     }
                 } else {
                     val scroll = rememberScrollState()
-                    LaunchedEffect(state.screen) { scroll.scrollTo(0) }
+                    LaunchedEffect(state.screen) {
+                        // 只有「从盘里复原到参数页」这一次回到原位，其余一律从顶部开始
+                        val restore = if (state.screen == Screen.CREATE) state.takeCreateScrollRestore() else null
+                        scroll.scrollTo(restore ?: 0)
+                    }
+                    LaunchedEffect(Unit) {
+                        snapshotFlow { scroll.value }.collect {
+                            if (state.screen == Screen.CREATE) state.noteCreateScroll(it)
+                        }
+                    }
                     Column(
                         Modifier
                             .fillMaxSize()
@@ -467,42 +538,11 @@ private fun LazyListScope.homeScreenItems(state: AppState, scope: CoroutineScope
         }
     }
 
-    // 特色入口：自由组合。紧贴 Hero 下方，点整张卡进面板。
-    // 这是本 App 区别于「点一下就出卷」的题库类 App 的核心 —— 题由你配，不由我们限死。
-    item {
-        Spacer(Modifier.height(12.dp))
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .shadow(Surface3.cardShadow, Surface3.shape)
-                .clip(Surface3.shape)
-                .background(PaperColors.Surface)
-                .clickable { state.screen = Screen.CREATE }
-                .padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        "自由组合出题",
-                        fontSize = 17.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = PaperColors.OnSurface,
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    StatChip("特色", PaperColors.Accent, PaperColors.AccentContainer)
-                }
-                Spacer(Modifier.height(5.dp))
-                Text(
-                    "${GeneratorRegistry.count} 种题型随便挑：智能配比、搜索、一键加题，题量自己定",
-                    fontSize = PaperDimens.CaptionSp,
-                    color = PaperColors.OnSurfaceVariant,
-                    lineHeight = 17.sp,
-                )
-            }
-            Text("›", fontSize = 22.sp, color = PaperColors.Primary)
-        }
-    }
+    // 这里原来有一张「自由组合出题」特色卡片，和底栏的「自定义」指向同一个页面
+    // （都只是 state.screen = Screen.CREATE）。两个入口上下相隔不到一屏，属于纯重复：
+    // 删掉卡片，把入口统一交给常驻的底栏按钮 —— 它是动作区，滚动到哪里都能点到；
+    // 卡片只是把它又写了一遍，还白占了首屏纵向空间，把「年级 / 科目」挤到下一屏。
+    // 「49 种题型随便挑」这句话没丢，挪到了参数页 03 题型库的标题里。
 
     item {
         Spacer(Modifier.height(12.dp))
@@ -1048,6 +1088,66 @@ private fun CreateScreen(state: AppState, scope: CoroutineScope) {
     }
 }
 
+// ------------------------------------------------------------------ 放大查看
+
+/**
+ * 全屏查看一页试卷：黑底 + 等比铺满 + 双指缩放，**点任意处退出**。
+ *
+ * 为什么不做成普通的「点开大图」：A4 一页的小字（括号、题号、单位）在缩略图里
+ * 只有 5-6 个像素高，光放大到屏宽还是看不清，必须能双指再往里推。
+ * 所以这里给了 1×~5× 的缩放，退出仍然只要点一下 —— 放大之后想退出的动作
+ * 不该变成「先缩回 1 倍再点关闭」。
+ */
+@Composable
+private fun PageZoomDialog(
+    bitmap: ImageBitmap,
+    label: String,
+    onDismiss: () -> Unit,
+) {
+    var scale by remember { mutableStateOf(1f) }
+    var offset by remember { mutableStateOf(Offset.Zero) }
+    val transformState = rememberTransformableState { zoomChange, panChange, _ ->
+        scale = (scale * zoomChange).coerceIn(1f, 5f)
+        // 缩回 1 倍时把位移归零，否则图片会停在屏幕外的空白上
+        offset = if (scale <= 1.001f) Offset.Zero else offset + panChange
+    }
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(Color.Black)
+                .pointerInput(Unit) { detectTapGestures { onDismiss() } }
+                .transformable(transformState),
+            contentAlignment = Alignment.Center,
+        ) {
+            Image(
+                bitmap = bitmap,
+                contentDescription = label,
+                contentScale = ContentScale.Fit,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer(
+                        scaleX = scale,
+                        scaleY = scale,
+                        translationX = offset.x,
+                        translationY = offset.y,
+                    ),
+            )
+            Text(
+                if (scale > 1.001f) "$label · 已放大 ${"%.1f".format(scale)}×" else "$label · 点任意处退出，双指可放大",
+                fontSize = PaperDimens.TinySp,
+                color = Color.White.copy(alpha = 0.75f),
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 34.dp),
+            )
+        }
+    }
+}
+
 @Composable
 private fun SettingRow(label: String, content: @Composable () -> Unit) {
     Text(
@@ -1072,6 +1172,8 @@ private fun PreviewScreen(
     val pdf = state.pdf
     val isRef = state.isReference
     val pct = state.lastContentFillPercent
+    // 点开的是第几页；null = 没在放大
+    var zoomPage by remember { mutableStateOf<Int?>(null) }
 
     CardSection {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1191,6 +1293,17 @@ private fun PreviewScreen(
 
     if (!state.showQuestionList) {
         if (state.previews.isNotEmpty()) {
+            // 放大浮层：放在 composition 里任意位置都行（Dialog 自开窗口），
+            // 放这里是为了和「点哪一页」的索引共用同一份 previews
+            zoomPage?.let { index ->
+                state.previews.getOrNull(index)?.let { bmp ->
+                    PageZoomDialog(
+                        bitmap = bmp,
+                        label = "第 ${index + 1} / ${state.previews.size} 页",
+                        onDismiss = { zoomPage = null },
+                    )
+                }
+            }
             val pageCount = state.previews.size
             val previewPager = rememberPagerState(
                 initialPage = state.previewPage.coerceIn(0, pageCount - 1),
@@ -1226,7 +1339,10 @@ private fun PreviewScreen(
                             .shadow(6.dp, RoundedCornerShape(18.dp))
                             .clip(RoundedCornerShape(18.dp))
                             .background(Color.White)
-                            .padding(4.dp),
+                            .padding(4.dp)
+                            // 点一下放大看：缩略图只有屏幕一半高，想看清「竖式第 3 行
+                            // 有没有印歪」「括号全角还是半角」根本不够
+                            .clickable { zoomPage = page },
                     ) {
                         if (bmp != null) {
                             Image(
@@ -1268,6 +1384,13 @@ private fun PreviewScreen(
                 color = PaperColors.OnSurfaceVariant,
                 textAlign = TextAlign.Center,
                 modifier = Modifier.fillMaxWidth(),
+            )
+            Text(
+                "点一下页面可放大查看",
+                fontSize = PaperDimens.TinySp,
+                color = PaperColors.Muted,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
             )
             // A/B 卷：两张的题量结构一致、题目不同，翻页看的是同一张，切卷看的是另一张
             if (state.batchSize > 1) {

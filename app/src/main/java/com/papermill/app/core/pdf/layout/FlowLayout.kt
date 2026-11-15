@@ -48,8 +48,12 @@ class FlowLayout(
     fun layout(blocks: List<Block>, tp: TextPainter): List<Page> {
         if (blocks.isEmpty()) return listOf(Page(emptyList()))
 
-        val cols = columns.coerceAtLeast(1)
-        val colW = (contentW - columnGap * (cols - 1)) / cols
+        // cols / colW / colUsed 都是「当前段」的属性，不是整条流的：
+        // 大题标题这种整宽块会把 colUsed 清零并开启新段，顺手把栏数换成该大题要的栏数
+        // （见 Block.columnHint）。在此之前所有大题共用一个栏数，只能取折中值，
+        // 结果口算右半张空白、选择题又折行。
+        var cols = columns.coerceAtLeast(1)
+        var colW = (contentW - columnGap * (cols - 1)) / cols
         val pages = ArrayList<Page>()
 
         var items = ArrayList<Placed>()
@@ -58,7 +62,7 @@ class FlowLayout(
         // y：本页已用到的最下沿；segTop：当前段（栏目区）的起始 y
         var y = 0f
         var segTop = 0f
-        val colUsed = FloatArray(cols)
+        var colUsed = FloatArray(cols)
 
         fun flushPage() {
             pages.add(Page(items))
@@ -68,6 +72,14 @@ class FlowLayout(
             y = 0f
             segTop = 0f
             colUsed.fill(0f)
+        }
+
+        /** 换栏数：整宽块刚把 colUsed 清零，此刻换最安全，绝不会把已有内容扫掉 */
+        fun applyColumns(hint: Int) {
+            if (hint <= 0 || hint == cols) return
+            cols = hint.coerceAtLeast(1)
+            colW = (contentW - columnGap * (cols - 1)) / cols
+            colUsed = FloatArray(cols)
         }
 
         // 队列而不是 for 循环：拆分出来的「后半截」要插回队首接着排
@@ -103,6 +115,8 @@ class FlowLayout(
                 y += h
                 segTop = y
                 colUsed.fill(0f)
+                // 新段开始：换成这道大题要的栏数（口算 4 栏、选择题 2 栏、应用题整宽）
+                applyColumns(block.columnHint)
                 continue
             }
 

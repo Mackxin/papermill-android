@@ -13,6 +13,8 @@ import com.papermill.app.core.pdf.layout.Block
 class SectionHeaderBlock(
     private val title: String,
     private val size: Float = 11.5f,
+    /** 这道大题下面按几栏排；0 = 沿用当前栏数 */
+    override val columnHint: Int = 0,
 ) : Block {
 
     override val fullWidth: Boolean = true

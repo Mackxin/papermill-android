@@ -41,6 +41,26 @@ data class AppSettings(
     val dockGlass: Boolean = false,
 )
 
+/**
+ * 「上次看到哪儿」的快照。
+ *
+ * 为什么连页签都要记：用户往往是在错题本/打印纸那一页退出的，
+ * 重进却回到首页，等于每次都要自己再点一遍。
+ *
+ * [scrolls] 的 key 是页签或页面名，value 是 `[firstVisibleItemIndex, offset]`；
+ * 记 index + offset 而不是像素高度，因为字体/屏宽变化后像素值会漂。
+ */
+data class SessionState(
+    val tab: String = "HOME",
+    val screen: String = "HOME",
+    val previewPage: Int = 0,
+    /** 退出时正在看的那张卷（试卷库 id），重进后按它复原预览页 */
+    val paperId: String = "",
+    /** 参数页用的是 ScrollState（像素），单独记一个 */
+    val createScroll: Int = 0,
+    val scrolls: Map<String, List<Int>> = emptyMap(),
+)
+
 data class MistakeItem(    val id: String,
     val grade: Int,
     val subject: String,
@@ -67,6 +87,7 @@ object LocalStore {
     private const val FILE_PAPERS = "papers.json"
     private const val FILE_MISTAKES = "mistakes.json"
     private const val FILE_SETTINGS = "settings.json"
+    private const val FILE_SESSION = "session.json"
 
     private fun f(ctx: Context, name: String) = File(ctx.filesDir, name)
 
@@ -95,6 +116,56 @@ object LocalStore {
         runCatching {
             f(ctx, FILE_SETTINGS).writeText(
                 JSONObject().put("dockGlass", settings.dockGlass).toString(2)
+            )
+        }
+    }
+
+    // -------------------------------------------------------------- 上次位置
+
+    /**
+     * 上次浏览到哪儿：页签、页面、预览页码、正在看的那张卷、各列表的滚动位置。
+     *
+     * 单独存一个文件而不是塞进 settings：这份数据每天都在变，
+     * 混进用户设置里会让备份/恢复把「我在哪」一起带走，没意义。
+     */
+    fun loadSession(ctx: Context): SessionState {
+        val file = f(ctx, FILE_SESSION)
+        if (!file.exists()) return SessionState()
+        return runCatching {
+            val o = JSONObject(file.readText())
+            val scrolls = LinkedHashMap<String, List<Int>>()
+            o.optJSONObject("scrolls")?.let { s ->
+                s.keys().forEach { k ->
+                    val a = s.optJSONArray(k) ?: return@forEach
+                    if (a.length() >= 2) scrolls[k] = listOf(a.getInt(0), a.getInt(1))
+                }
+            }
+            SessionState(
+                tab = o.optString("tab", "HOME"),
+                screen = o.optString("screen", "HOME"),
+                previewPage = o.optInt("previewPage", 0),
+                paperId = o.optString("paperId", ""),
+                createScroll = o.optInt("createScroll", 0),
+                scrolls = scrolls,
+            )
+        }.getOrDefault(SessionState())
+    }
+
+    fun saveSession(ctx: Context, session: SessionState) {
+        runCatching {
+            val scrolls = JSONObject()
+            session.scrolls.forEach { (k, v) ->
+                scrolls.put(k, JSONArray().put(v.getOrElse(0) { 0 }).put(v.getOrElse(1) { 0 }))
+            }
+            f(ctx, FILE_SESSION).writeText(
+                JSONObject()
+                    .put("tab", session.tab)
+                    .put("screen", session.screen)
+                    .put("previewPage", session.previewPage)
+                    .put("paperId", session.paperId)
+                    .put("createScroll", session.createScroll)
+                    .put("scrolls", scrolls)
+                    .toString(2)
             )
         }
     }

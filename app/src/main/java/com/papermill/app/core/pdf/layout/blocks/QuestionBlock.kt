@@ -51,6 +51,18 @@ class QuestionBlock(
         return lastLines
     }
 
+    /**
+     * 这道题**不折行**需要多宽（题号槽位 + 题干一行）。
+     *
+     * 排版时拿它来定栏数：口算一行只要 80pt，塞进 247pt 的栏里右边全是空白；
+     * 选择题带四个选项要 240pt，硬挤进 4 栏就得折成三行。
+     * 取 80 分位而不是最大值 —— 一道特别长的题不该把整页压成 1 栏。
+     */
+    fun singleLineWidth(tp: TextPainter): Float {
+        val p = tp.paint(size)
+        return numberWidth(tp) + tp.measure(stem, p)
+    }
+
     override fun measure(tp: TextPainter, width: Float): Float {
         val p = tp.paint(size)
         val lineH = tp.lineHeight(p)

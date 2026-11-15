@@ -29,6 +29,7 @@ import com.papermill.app.core.store.AppSettings
 import com.papermill.app.core.store.LocalStore
 import com.papermill.app.core.store.MistakeItem
 import com.papermill.app.core.store.SavedPaper
+import com.papermill.app.core.store.SessionState
 import com.papermill.app.core.update.UpdateChecker
 import com.papermill.app.domain.content.CurricUnit
 import com.papermill.app.domain.content.CurriculumBank
@@ -113,7 +114,18 @@ class AppState(private val rawContext: Context) {
 
     private val ctx = rawContext.applicationContext
 
-    var screen by mutableStateOf(Screen.HOME)
+    /**
+     * 开机就去读「上次停在哪儿」，而不是等界面挂起来再读。
+     *
+     * 踩过的坑：一开始在 `LaunchedEffect` 里异步复原（goTab 切页面）。可底部
+     * 页签的 pager 有个「落页后校正」的监听，它拿初始的 settledPage=0（首页）
+     * 往回对齐，把刚复原好的 REFERENCE 又拽回首页 —— 看起来就是「记忆没生效」。
+     * 现在初始 screen 直接由这份 session 决定，pager 建出来第一帧就是对的。
+     */
+    private val bootSession: SessionState =
+        runCatching { LocalStore.loadSession(ctx) }.getOrDefault(SessionState())
+
+    var screen by mutableStateOf(bootScreen())
 
     var grade by mutableStateOf(3)
     var subject by mutableStateOf(Subject.MATH)
@@ -234,6 +246,105 @@ class AppState(private val rawContext: Context) {
         dockGlass = on
         LocalStore.saveSettings(ctx, AppSettings(dockGlass = on))
     }
+
+    // ---------------------------------------------------------------- 上次位置
+
+    /** 上次退出时存下的浏览位置；界面据此决定列表从哪里开始滚 */
+    var restoredSession by mutableStateOf(bootSession)
+        private set
+
+    /** 当前会话的实时位置（滚动时不断更新，退出时落盘） */
+    private var liveScrolls: MutableMap<String, List<Int>> = LinkedHashMap(bootSession.scrolls)
+
+    /** 参数页用的是 ScrollState（像素），不进 scrolls */
+    var createScrollPx by mutableStateOf(bootSession.createScroll)
+        private set
+
+    /**
+     * 记某个列表滚到了哪儿。
+     *
+     * 只存内存不落盘：滚动每帧都调，落盘会把主线程 IO 打满。
+     * 真正写文件在 [persistSession]（Activity onStop 时调一次）。
+     */
+    fun noteScroll(key: String, index: Int, offset: Int) {
+        val prev = liveScrolls[key]
+        if (prev != null && prev[0] == index && prev[1] == offset) return
+        liveScrolls[key] = listOf(index, offset)
+    }
+
+    fun noteCreateScroll(px: Int) {
+        createScrollPx = px
+    }
+
+    /**
+     * 取一次「复原参数页滚动位置」的任务，取完就作废。
+     *
+     * 不能直接把 createScrollPx 当初始值：参数页的滚动条是共用的，
+     * 每次从别的页面进来都该从顶部开始，只有「刚从盘里复原」这一次要回到原位。
+     */
+    fun takeCreateScrollRestore(): Int? {
+        if (!createScrollPending) return null
+        createScrollPending = false
+        return createScrollPx
+    }
+
+    /** 退出 / 切后台时把当前状态写盘。失败不打扰用户：丢了只是下次回到顶部 */
+    fun persistSession() {
+        runCatching {
+            LocalStore.saveSession(
+                ctx,
+                SessionState(
+                    tab = navTab.name,
+                    screen = screen.name,
+                    previewPage = previewPage,
+                    // 只在预览页记卷 id：其他页面上 savedPaperId 可能是上一次的残留
+                    paperId = if (screen == Screen.PREVIEW) savedPaperId else "",
+                    createScroll = createScrollPx,
+                    scrolls = liveScrolls.toMap(),
+                ),
+            )
+        }
+    }
+
+    /**
+     * 启动时的异步复原：只有「上次停在试卷预览页」需要它。
+     *
+     * 列表类页面（首页 / 打印纸 / 错题本 / 更多 / 参数页）在 [bootScreen] 里
+     * 已经定好了初始页面，不需要再切 —— 再切一次反而会和 pager 打架。
+     */
+    suspend fun restoreSessionOnce() {
+        if (sessionRestored) return
+        sessionRestored = true
+        val saved = bootSession
+        if (saved.screen != "PREVIEW" || saved.paperId.isEmpty()) {
+            // 参数页：记下待复原的滚动位置，界面切进去时取一次
+            if (saved.screen == "CREATE" && saved.createScroll > 0) createScrollPending = true
+            return
+        }
+        // 预览页需要重新渲染才有东西可看：按记下的卷 id 打开，页码也回到原处。
+        // 卷被删了就老实待着（bootScreen 已经把 screen 落到首页了）
+        val paper = savedPapers.firstOrNull { it.id == saved.paperId } ?: return
+        runCatching {
+            reopen(paper)
+            if (screen == Screen.PREVIEW) {
+                previewPage = saved.previewPage.coerceIn(0, (previews.size - 1).coerceAtLeast(0))
+            }
+        }
+    }
+
+    /** 从 session 推出开机页面：预览页先落首页，等 [restoreSessionOnce] 把卷渲染出来再说 */
+    private fun bootScreen(): Screen = when (bootSession.screen) {
+        Screen.REFERENCE.name -> Screen.REFERENCE
+        Screen.MISTAKES.name -> Screen.MISTAKES
+        Screen.MORE.name -> Screen.MORE
+        Screen.CREATE.name -> Screen.CREATE
+        Screen.HISTORY.name -> Screen.HISTORY
+        Screen.HELP.name -> Screen.HELP
+        else -> Screen.HOME
+    }
+
+    private var sessionRestored = false
+    private var createScrollPending = false
 
     val hasPrintService: Boolean = PrintServiceProbe.hasService(ctx)
     val versionName: String = BuildConfig.VERSION_NAME
