@@ -24,6 +24,7 @@ object PaperAssembler {
                     questions = s.questions.map { PaperQuestion(no = it.no, stem = it.stem) },
                     columns = s.columns,
                     answerLines = s.answerLines,
+                    instruction = s.instruction,
                 )
             )
         }

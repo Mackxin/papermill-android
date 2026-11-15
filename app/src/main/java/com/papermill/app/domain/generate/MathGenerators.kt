@@ -106,19 +106,21 @@ object VerticalGenerator : BaseGenerator() {
     override fun make(ctx: GenContext): Pair<String, String> {
         val p = GradeProfiles.of(ctx.grade)
         val rng = ctx.rng
+        // 题干只写算式：「用竖式计算：」这类做题指令由大题说明统一说一次
+        // （QuestionType.VERTICAL.instruction），否则一页印 20 遍全是重复字。
         return if (rng.nextBoolean()) {
             val a = r(rng, 20, p.addMax)
             val b = r(rng, 11, (p.addMax / 2).coerceAtLeast(12))
-            val stem = "用竖式计算：$a+$b＝（　　）"
+            val stem = "$a+$b＝（　　）"
             val ans = "${a + b}"
-            verifyArithmetic(stem.replace("用竖式计算：", "").replace("＝", "="), ans)
+            verifyArithmetic(stem.replace("＝", "="), ans)
             stem to ans
         } else {
             val a = r(rng, 30, p.addMax)
             val b = r(rng, 11, a - 1)
-            val stem = "用竖式计算：$a-$b＝（　　）"
+            val stem = "$a-$b＝（　　）"
             val ans = "${a - b}"
-            verifyArithmetic(stem.replace("用竖式计算：", "").replace("＝", "="), ans)
+            verifyArithmetic(stem.replace("＝", "="), ans)
             stem to ans
         }
     }

@@ -90,6 +90,15 @@ class FlowLayout(
                     // 切不动（一道题、标题）才按老规则：只有本页已有内容才翻页
                     if (items.isNotEmpty()) flushPage()
                 }
+                // 标题不许单独留在页尾：连它后面那道题一起放得下才留在这页
+                if (block.keepWithNext && items.isNotEmpty()) {
+                    val chain = keepChainHeight(queue, tp, colW, contentW)
+                    if (y + h + chain > cap + 0.5f) {
+                        queue.addFirst(block)
+                        flushPage()
+                        continue
+                    }
+                }
                 items.add(Placed(block, 0f, y, contentW))
                 y += h
                 segTop = y
@@ -121,6 +130,25 @@ class FlowLayout(
 
         if (items.isNotEmpty()) pages.add(Page(items))
         return pages.ifEmpty { listOf(Page(emptyList())) }
+    }
+
+    /**
+     * 「不许单独留在页尾」的链条高度：后面连续几个 [Block.keepWithNext] 的块，
+     * 加上第一个普通块，一共要多少高度。只算到第一个普通块为止 ——
+     * 再往后的内容本来就可以翻页。
+     */
+    private fun keepChainHeight(
+        queue: ArrayDeque<Block>,
+        tp: TextPainter,
+        colW: Float,
+        contentW: Float,
+    ): Float {
+        var sum = 0f
+        for (b in queue) {
+            sum += b.measure(tp, if (b.fullWidth) contentW else colW)
+            if (!b.keepWithNext) break
+        }
+        return sum
     }
 
     /**

@@ -37,6 +37,15 @@ object PaperRenderer {
 
     private const val COLUMN_GAP = 20f
 
+    /** 答案页：题与题之间的基础呼吸 */
+    private const val ANSWER_GAP = 4f
+
+    /** 答案页栏宽下限：再窄，带解析的答案会被折成豆腐块 */
+    private const val MIN_ANSWER_COL_W = 108f
+
+    /** 撑满整页时允许把行距拉到多少：超过这个值宁可多加一栏，也不要把答案拉成稀稀拉拉几行 */
+    private const val MAX_ANSWER_GAP = 26f
+
     private const val TITLE_SIZE = 17f
     private const val TITLE_H = 26f
     private const val SUB_SIZE = 9f
@@ -60,16 +69,16 @@ object PaperRenderer {
         // 旧版对每个大题各调一次 FlowLayout，导致「换个大题就换一页」：
         // 6 种题型的一年级卷被印成 7 页。现在所有大题的块进同一个流，
         // 标题 / 需要书写过程的题用整宽块占满一行，段与段在同一页里上下相接。
-        val answerBlocks = ArrayList<Block>()
         var bodyColumns = 2
-        // 答案最长有多少字：带解析的语法题答案很长，四栏会把一句解析拆成好几行
-        var maxAnswerLen = 0
 
         /** 正文块（[scale] 只作用于表格行高，见下面「单页速查表铺满」） */
         fun buildBody(scale: Float): List<Block> {
             val out = ArrayList<Block>()
             doc.sections.filter { !it.isAnswer }.forEach { section ->
                 out.add(SectionHeaderBlock(section.title))
+                // 做题指令只印一次：以前「用竖式计算：」是拼在每道题题干里的，
+                // 一页 20 道题就重复 20 遍
+                if (section.instruction.isNotBlank()) out.add(NoteBlock(section.instruction))
                 val table = section.table
                 if (table != null) {
                     // 整张表一个块：跨页由 FlowLayout + TableBlock.split 按剩余高度自己切，
@@ -82,10 +91,10 @@ object PaperRenderer {
                     )
                     out.add(FullWidthBlock(NoteBlock("本表可直接打印张贴，题目均由本 App 整理编排。")))
                 } else {
-                    // 长题干 / 英文句子 / 带选项的单选题必须占整行：
-                    // 正文流统一按 bodyColumns 分栏，只判断 answerLines 会让
-                    // 连词成句、选词填空被塞进半栏，英文句子和 A/B/C 选项被折得七零八落。
-                    val forceFullWidth = section.answerLines > 0 || section.columns <= 1
+                    // 长题干 / 英文句子 / 带选项的单选题必须占整行：题型用 columns <= 1
+                    // 声明这一点。注意**不再**按 answerLines > 0 强制整宽 ——
+                    // 竖式计算要留横线，但横线只在栏内就够，一栏一题会把半张纸浪费掉。
+                    val forceFullWidth = section.columns <= 1
                     section.questions.forEach { q ->
                         val qb = QuestionBlock(no = q.no, stem = q.stem, answerLines = section.answerLines)
                         out.add(if (forceFullWidth) FullWidthBlock(qb) else qb)
@@ -94,17 +103,6 @@ object PaperRenderer {
                 }
             }
             return out
-        }
-
-        doc.sections.filter { it.isAnswer }.forEach { section ->
-            answerBlocks.add(SectionHeaderBlock(section.title))
-            val forceFullWidth = section.answerLines > 0 || section.columns <= 1
-            section.questions.forEach { q ->
-                // 答案流里 stem 就是「题号 + 答案（+解析）」，用它估长度即可
-                maxAnswerLen = maxOf(maxAnswerLen, q.stem.length)
-                val qb = QuestionBlock(no = q.no, stem = q.stem, answerLines = section.answerLines)
-                answerBlocks.add(if (forceFullWidth) FullWidthBlock(qb) else qb)
-            }
         }
 
         fun layoutBody(blocks: List<Block>): ArrayList<FlowLayout.Page> {
@@ -141,21 +139,62 @@ object PaperRenderer {
             }
         }
 
-        // 答案页单独成流：本来就该另起一页，四栏小字更省纸。
-        // 但如果答案里带解析（语法题那种），四栏会把一句话拆得七零八落，降到两栏。
+        // ---- 答案页：自适应栏数 + 撑满整页 ----
+        // 以前是「答案长就 2 栏、短就 4 栏」，选完就排，排完剩下的半页白白空着
+        // （34 道题的答案只占了纸的上半张）。现在按实际答案试排 2..6 栏：
+        // 挑「能一页装完、行距又不用拉得离谱」的栏数，再把剩余高度摊到行距上，
+        // 让答案均匀铺满整页。
         var firstAnswerPage = -1
-        if (answerBlocks.isNotEmpty()) {
+        val answerSections = doc.sections.filter { it.isAnswer }
+        if (answerSections.any { it.questions.isNotEmpty() }) {
             firstAnswerPage = pages.size
-            pages.addAll(
-                FlowLayout(
-                    contentW = g.contentW,
-                    contentHFirst = contentHFirst,
-                    contentHOther = contentHOther,
-                    columns = if (maxAnswerLen > 20) 2 else 4,
-                    columnGap = COLUMN_GAP,
-                    startsOnFirstPage = false,
-                ).layout(answerBlocks, tp)
-            )
+            val answerCount = answerSections.sumOf { it.questions.size }
+
+            /** [gap] 是题与题之间的呼吸：撑满整页就靠加大它，字号不动 */
+            fun answerFlow(columns: Int, gap: Float): ArrayList<FlowLayout.Page> {
+                val blocks = ArrayList<Block>()
+                answerSections.forEach { section ->
+                    blocks.add(SectionHeaderBlock(section.title))
+                    section.questions.forEach { q ->
+                        blocks.add(
+                            QuestionBlock(
+                                no = q.no,
+                                stem = q.stem,
+                                answerLines = section.answerLines,
+                                itemGap = gap,
+                            )
+                        )
+                    }
+                }
+                return ArrayList(
+                    FlowLayout(
+                        contentW = g.contentW,
+                        contentHFirst = contentHFirst,
+                        contentHOther = contentHOther,
+                        columns = columns,
+                        columnGap = COLUMN_GAP,
+                        startsOnFirstPage = false,
+                    ).layout(blocks, tp)
+                )
+            }
+
+            // 栏宽不能再窄：带解析的语法答案挤成豆腐块比留白更糟
+            val maxCols = (g.contentW / MIN_ANSWER_COL_W).toInt().coerceIn(2, 6)
+            var answerPages = answerFlow(maxCols, ANSWER_GAP)
+            for (c in 2..maxCols) {
+                val laid = answerFlow(c, ANSWER_GAP)
+                if (laid.size != 1) continue // 这一档装不下一页，加栏数再试
+                // 一页装得下就走这一档，且栏数越少越好：栏宽、字不用折、也更好扫。
+                // 再把剩余高度摊到行距上（有上限），把页面撑满。
+                val used = laid[0].items.maxOfOrNull { it.y + it.block.measure(tp, it.w) } ?: 0f
+                val rows = ((answerCount + c - 1) / c).coerceAtLeast(1) // 向上取整，末行不满也算一行
+                val slack = ((contentHOther * 0.94f - used) / (rows - 1).coerceAtLeast(1))
+                    .coerceIn(0f, MAX_ANSWER_GAP)
+                val filled = answerFlow(c, ANSWER_GAP + slack)
+                answerPages = if (filled.size == 1) filled else laid
+                break
+            }
+            pages.addAll(answerPages)
         }
 
         val total = pages.size

@@ -19,6 +19,14 @@ interface Block {
 
     /** 是否要横跨整页（大题标题、卷头）：多栏排版时它不参与分栏 */
     val fullWidth: Boolean get() = false
+
+    /**
+     * 不许单独留在页尾：下面那块（通常是第一道题）也得同页放得下，
+     * 否则整块挪到下一页。
+     *
+     * 大字标题孤零零挂在页脚上方、题目全在下一页，是最容易被家长一眼看出的排版事故。
+     */
+    val keepWithNext: Boolean get() = false
 }
 
 /**

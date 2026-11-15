@@ -17,6 +17,9 @@ class SectionHeaderBlock(
 
     override val fullWidth: Boolean = true
 
+    /** 标题不能单独留在页尾（后面一道题都放不下时，整体挪到下一页） */
+    override val keepWithNext: Boolean = true
+
     override fun measure(tp: TextPainter, width: Float): Float {
         val p = tp.paint(size, bold = true)
         return tp.lineHeight(p) + TOP_PAD + BOTTOM_PAD

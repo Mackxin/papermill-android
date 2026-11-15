@@ -735,9 +735,10 @@ private fun CreateScreen(state: AppState, scope: CoroutineScope) {
                         color = PaperColors.Success,
                         lineHeight = 16.sp,
                     )
-                    // 开了补满还是不满：是题库量不够，不是开关没生效
+                    // 开了补满还是不满：可能是题库见底，也可能只是「再加一组就顶到下一页」，
+                    // 这里无法区分（实时预览只试排几轮），所以不要断言「题库不够」
                     autoExtra > 0 -> Text(
-                        "自动补满加了 $autoExtra 题，但题库不够了，最后一页只到 $fill% —— 再选一种题型就能补上。",
+                        "自动补满加了 $autoExtra 题，最后一页到 $fill% —— 想更满可以再加几题或换题型。",
                         fontSize = PaperDimens.CaptionSp,
                         color = PaperColors.Accent,
                         lineHeight = 16.sp,
@@ -794,7 +795,13 @@ private fun CreateScreen(state: AppState, scope: CoroutineScope) {
             StepperRow(
                 label = type.label,
                 value = state.counts[type] ?: 0,
-                hint = if (type.answerLines > 0) "需书写过程 · 自动单栏" else "客观题 · 按栏数排",
+                // 说明要跟排版策略一致：竖式计算带答题线但会排成 3 栏，
+                // 以前一律写「自动单栏」，实际印出来不是那样
+                hint = when {
+                    type.columns <= 1 -> "需书写过程 · 自动单栏"
+                    type.answerLines > 0 -> "带答题线 · 自动 ${maxOf(type.columns, state.columns)} 栏"
+                    else -> "客观题 · 按栏数排"
+                },
                 onMinus = { state.setCount(type, -1) },
                 onPlus = { state.setCount(type, 1) },
                 onMinusMore = { state.setCount(type, -5) },
@@ -867,8 +874,10 @@ private fun CreateScreen(state: AppState, scope: CoroutineScope) {
                     Text(
                         if (count > 0) {
                             "已加入 $count 题 · 再加 10 题"
-                        } else if (type.answerLines > 0) {
+                        } else if (type.columns <= 1) {
                             "需书写过程 · 加入后自动单栏"
+                        } else if (type.answerLines > 0) {
+                            "带答题线 · 加入后按 ${maxOf(type.columns, state.columns)} 栏排"
                         } else {
                             "客观题 · 按栏数排版"
                         },

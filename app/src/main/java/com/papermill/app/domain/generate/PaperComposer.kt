@@ -50,17 +50,26 @@ object PaperComposer {
                 GeneratorRegistry.subjectOf(type)?.let { "${it.label}·" } ?: ""
             } else ""
 
+            // 每道题都带同一句「用竖式计算：」「重排字母组成单词：」时，
+            // 把它提到大题下面印一次，题干只留真正变化的部分
+            val (hoisted, trimmed) = hoistInstruction(questions)
+
             sections.add(
                 GeneratedSection(
                     index = sections.size + 1,
                     title = "${CN_NUM.getOrElse(sections.size) { (sections.size + 1).toString() }}、" +
                         "$prefix${type.label}（每题 2 分，共 ${questions.size * 2} 分）",
                     type = type,
-                    questions = questions,
-                    // 需要书写过程、或题干本身很长（连词成句 / 选词填空）的题型强制单栏，
-                    // 否则 2 栏会把英文长句挤成好几行，印出来既难看又难写
-                    columns = if (type.answerLines > 0 || type.columns <= 1) 1 else spec.columns,
+                    questions = trimmed,
+                    // 栏数：题型推荐的栏数与用户选的全局栏数取较大者。
+                    // v0.11.2 之前这里只判断 `type.columns <= 1`，等于题型自己的栏数
+                    // 从来没生效过 —— 竖式计算声明了 1 栏，就永远一栏一题、白占半张纸。
+                    columns = if (type.columns <= 1) 1 else maxOf(type.columns, spec.columns),
                     answerLines = type.answerLines,
+                    instruction = listOfNotNull(
+                        type.instruction.takeIf { it.isNotBlank() },
+                        hoisted,
+                    ).joinToString("　"),
                 )
             )
         }
@@ -135,6 +144,43 @@ object PaperComposer {
             isMistakePaper = isMistakePaper,
             subjects = subjects,
         )
+    }
+
+    /**
+     * 把「每道题都重复一遍的做题指令」抽出来，作为大题说明只印一次。
+     *
+     * 判据是**最长公共前缀里最后一个冒号**：竖式计算每道题都以「用竖式计算：」开头、
+     * 单词拼装以「重排字母组成单词：」开头，这种前缀一提就干净。
+     *
+     * 三条保守限制，避免把正常题干砍坏：
+     *  - 冒号位置不能太靠前（< 4）—— 「A.」「12、」这类编号不是指令；
+     *  - 前缀里至少 3 个字母 / 汉字 —— 「（　）」之类的符号串不算；
+     *  - 抽完不能有题目变成空壳 —— 说明这个前缀其实是题目的全部内容。
+     *
+     * @return 抽出的说明（无可抽时为 null）与新题干列表
+     */
+    private fun hoistInstruction(
+        questions: List<GeneratedQuestion>,
+    ): Pair<String?, List<GeneratedQuestion>> {
+        if (questions.size < 3) return null to questions
+        var prefix = questions.first().stem
+        questions.forEach { q ->
+            prefix = commonPrefix(prefix, q.stem)
+        }
+        val colon = prefix.indexOfLast { it == '：' || it == ':' }
+        if (colon < 3) return null to questions
+        val head = prefix.substring(0, colon + 1)
+        if (head.count { it.isLetter() } < 3) return null to questions
+        val rest = questions.map { it.stem.substring(head.length).trim() }
+        if (rest.any { it.isEmpty() }) return null to questions
+        return head to questions.mapIndexed { i, q -> q.copy(stem = rest[i]) }
+    }
+
+    private fun commonPrefix(a: String, b: String): String {
+        val n = minOf(a.length, b.length)
+        var i = 0
+        while (i < n && a[i] == b[i]) i++
+        return a.substring(0, i)
     }
 }
 
@@ -223,4 +269,5 @@ object PaperTemplates {
             if (usable.isEmpty()) null else p.copy(wanted = usable)
         }
     }
+
 }

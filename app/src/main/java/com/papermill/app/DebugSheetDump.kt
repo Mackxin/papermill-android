@@ -131,6 +131,22 @@ object DebugSheetDump {
                     8, Subject.PHYSICS,
                     mapOf(QuestionType.CURRIC_BLANK to 8, QuestionType.CURRIC_CHOICE to 10),
                 ),
+                // v0.11.2 排版反馈的固定体检样本：
+                // 竖式计算要三栏、单词拼装不该每题重复指令、答案页要撑满整页
+                "vertical-g4" to PaperComposer.specWith(
+                    4, Subject.MATH, mapOf(QuestionType.VERTICAL to 9),
+                ),
+                "scramble-g4" to PaperComposer.specWith(
+                    4, Subject.ENGLISH, mapOf(QuestionType.WORD_SCRAMBLE to 15),
+                ),
+                "mixed-g4" to PaperComposer.specWith(
+                    4, Subject.MATH,
+                    mapOf(
+                        QuestionType.ORAL to 20,
+                        QuestionType.VERTICAL to 9,
+                        QuestionType.WORD_PROBLEM to 3,
+                    ),
+                ),
             )
 
             val report = StringBuilder("名称\t页数\t各页页尾空白(pt)\n")

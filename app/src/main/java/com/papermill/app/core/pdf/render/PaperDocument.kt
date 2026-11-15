@@ -34,6 +34,8 @@ data class PaperSection(
     val columns: Int = 1,
     /** 每题下方留几条答题横线（应用题用；口算为 0，答案位写在题干里） */
     val answerLines: Int = 0,
+    /** 大题说明：印在标题下面、只印一次（做题指令不要去每道题里重复） */
+    val instruction: String = "",
     /** 非空时本 section 渲染成网格表格，忽略 questions */
     val table: PaperTable? = null,
     /** 非空时整份文档渲染成一页铺满的练习纸，忽略 sections 的其它内容 */

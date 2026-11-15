@@ -28,18 +28,28 @@ enum class Subject(val code: String, val label: String) {
 
 enum class QuestionType(
     val label: String,
-    /** 默认栏数；有答题横线的题型强制单栏 */
+    /** 推荐栏数：排版时与用户选的全局栏数取较大者；<= 1 表示题干长、必须整宽 */
     val columns: Int = 2,
     /** 每题下方留几条答题横线 */
     val answerLines: Int = 0,
+    /**
+     * 大题说明：印在大题标题下面、只印一次。
+     *
+     * 这类「做题指令」以前是拼在每道题题干前面的（「用竖式计算：2515+3568＝」），
+     * 一张卷印 20 遍就是满纸重复。现在题干只留真正变化的部分，
+     * 指令统一提到大题下说一次。
+     */
+    val instruction: String = "",
 ) {
     // 小学数学
     ORAL("口算", 2),
     // v0.8.0：求未知项 / 有余数除法（口算的两个「变式」，答案位在算式中间）
     ORAL_MISSING("求未知项", 3),
     ORAL_REMAINDER("有余数除法", 2),
-    VERTICAL("竖式计算", 1, 2),
-    EXPRESSION("脱式计算", 1, 2),
+    // 竖式是竖着写的：三栏并排刚好，一栏一题能把一页纸浪费掉一半。
+    // 三道横线够写「两个加数 + 横线 + 得数」，四位数加法也不会挤。
+    VERTICAL("竖式计算", 3, 3, "用竖式计算下面各题，把得数写在括号里。"),
+    EXPRESSION("脱式计算", 1, 2, "脱式计算，写出每一步的过程。"),
     FRACTION("分数运算", 2),
     EQUATION("解方程", 2, 1),
     WORD_PROBLEM("应用题", 1, 4),
@@ -80,7 +90,7 @@ enum class QuestionType(
 
     // v0.5.0 英语题型：只借鉴「单词拼装 / 句子排序 / 选词填空」的题型模式，
     // 词表与句子全部自编，不取自任何第三方仓库
-    WORD_SCRAMBLE("单词拼装", 2),
+    WORD_SCRAMBLE("单词拼装", 2, 0, "把打乱的字母重新排好，写出正确的单词，拼写要完整。"),
     SENTENCE_ORDER("连词成句", 1),
     CLOZE("选词填空", 1),
 
@@ -152,6 +162,8 @@ data class GeneratedSection(
     val questions: List<GeneratedQuestion>,
     val columns: Int,
     val answerLines: Int,
+    /** 印在大题标题下面、只印一次的做题说明（见 [QuestionType.instruction]） */
+    val instruction: String = "",
 )
 
 data class PaperSpec(

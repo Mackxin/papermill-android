@@ -84,6 +84,9 @@ private data class Built(
 private const val TYPICAL_CONTENT_H = 657f
 private const val TYPICAL_CONTENT_H_LANDSCAPE = 410f
 private const val TYPICAL_QUESTION_H = 20.5f
+
+/** 一条答题横线占的高度：与 QuestionBlock 的 lineHeight × 1.55 对齐 */
+private const val TYPICAL_ANSWER_LINE_H = 24.8f
 private const val FILL_TARGET = 0.84f
 /** 自动补题总量上限：想要更多由用户在预览页显式点「加 N 题」 */
 private const val MAX_AUTO_EXTRA = 24
@@ -482,9 +485,20 @@ class AppState(private val rawContext: Context) {
 
     val estimatedPages: Int
         get() {
-            var pages = 1
-            pages += totalQuestions / (columns * 26).coerceAtLeast(1)
-            pages += counts.entries.filter { it.key.answerLines > 0 }.sumOf { it.value } / 8
+            // 按题型各自的高度折算：竖式 3 栏、每道还要 3 条答题线，一道顶 4 道口算。
+            // 以前统一按「每页 2 栏 × 26 题」估，竖式卷会多报一页（估 3 页实际 2 页）。
+            val contentH = if (orientation == PageOrientation.LANDSCAPE) {
+                TYPICAL_CONTENT_H_LANDSCAPE
+            } else {
+                TYPICAL_CONTENT_H
+            }
+            var used = 0f
+            counts.forEach { (t, n) ->
+                val cols = if (t.columns <= 1) 1 else maxOf(t.columns, columns)
+                val h = TYPICAL_QUESTION_H + t.answerLines * TYPICAL_ANSWER_LINE_H
+                used += n * h / cols
+            }
+            var pages = 1 + (used / contentH).toInt()
             if (answerMode == AnswerMode.LAST_PAGE) pages += 1
             return pages.coerceAtLeast(1)
         }
@@ -536,11 +550,19 @@ class AppState(private val rawContext: Context) {
         } else {
             TYPICAL_CONTENT_H
         }
-        // 2 栏时一道题只占约半行高度；单栏长句题按 1 栏算
-        val effectiveCols = if (fillType != null &&
-            (fillType.answerLines > 0 || fillType.columns <= 1)
-        ) 1 else columns.coerceAtLeast(1)
-        val gainPerQuestion = TYPICAL_QUESTION_H / effectiveCols
+        // 2 栏时一道题只占约半行高度；单栏长句题按 1 栏算。
+        // 栏数口径与 PaperComposer 保持一致（题型推荐栏数与用户选的取较大者），
+        // 否则这里按 1 栏估、实际印成 3 栏，补题量会算得离谱。
+        val effectiveCols = when {
+            fillType == null -> columns.coerceAtLeast(1)
+            fillType.columns <= 1 -> 1
+            else -> maxOf(fillType.columns, columns)
+        }
+        // 每道题在「页高」上占多少：栏数决定并排几道，答题横线决定它比口算高几倍。
+        // 以前只算栏数、不算答题线，竖式（3 条横线）被当成口算那么矮，
+        // 估算出的补题量偏大，试排时越过页边界被回退，末页永远差一截。
+        val qHeight = TYPICAL_QUESTION_H + (fillType?.answerLines ?: 0) * TYPICAL_ANSWER_LINE_H
+        val gainPerQuestion = qHeight / effectiveCols
         return ceil((0.90f - ratio) * pageH / gainPerQuestion)
             .toInt().coerceIn(1, 16)
     }
@@ -699,8 +721,8 @@ class AppState(private val rawContext: Context) {
 
             // 每轮只走估算量的 80%，靠多轮试排逼近 90%：
             // 一次补满容易越过页边界，被「不增页」约束整轮回退。
-            val lineFactor = 1f + fillType.answerLines
-            val step = (need * 0.8f / lineFactor).toInt()
+            // 答题线的高度已经在 suggestedExtra 里算过了，这里不能再除一次。
+            val step = (need * 0.8f).toInt()
                 .coerceIn(1, need)
                 .coerceAtMost(MAX_AUTO_EXTRA - extraAdded)
             if (step <= 0) break
@@ -841,8 +863,11 @@ class AppState(private val rawContext: Context) {
                         index = idx + 1,
                         title = "${idx + 1}、${type.label}（错题重练）",
                         type = type, questions = list,
-                        columns = if (type.answerLines > 0) 1 else 2,
+                        // 与 PaperComposer 同一套栏数口径，错题卷才不会和普通卷排得不一样
+                        columns = if (type.columns <= 1) 1
+                        else maxOf(type.columns, columns),
                         answerLines = type.answerLines,
+                        instruction = type.instruction,
                     )
                 }
                 val spec = currentSpec(System.currentTimeMillis()).copy(
