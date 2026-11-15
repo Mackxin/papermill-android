@@ -160,7 +160,7 @@ fun StickyBar(content: @Composable RowScope.() -> Unit) {
             .fillMaxWidth()
             .heightIn(min = PaperDimens.ActionBarH)
             .background(PaperColors.Background)
-            .padding(horizontal = PaperDimens.ScreenPad, vertical = 5.dp),
+            .padding(horizontal = PaperDimens.ScreenPad, vertical = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalAlignment = Alignment.CenterVertically,
         content = content,
@@ -925,7 +925,7 @@ fun PrimaryButton(
     val shape = RoundedCornerShape(16.dp)
     Box(
         modifier
-            .height(46.dp)
+            .height(PaperDimens.ActionBtnH)
             .then(if (enabled) Modifier.shadow(8.dp, shape) else Modifier)
             .clip(shape)
             .background(
@@ -958,7 +958,7 @@ fun SecondaryButton(
     val shape = RoundedCornerShape(16.dp)
     Box(
         modifier
-            .height(46.dp)
+            .height(PaperDimens.ActionBtnH)
             .clip(shape)
             .background(PaperColors.SurfaceAlt)
             .clickable(enabled = enabled) { onClick() },

@@ -61,7 +61,16 @@ object PaperDimens {
     val ChipRadius = 14.dp
     val Gap = 14.dp
     val GapSmall = 10.dp
-    val ActionBarH = 54.dp
+
+    /**
+     * 主 / 次按钮的高度。原本 46dp，宽度只有 106–138dp 时（预览页三个并排的
+     * 「系统打印 / 保存 / 分享」）显得又窄又厚，像三块立着的砖。
+     * 压到 40dp 后高宽比正常，底部操作条也跟着矮下来。
+     */
+    val ActionBtnH = 40.dp
+
+    /** 底部操作条高度 = 按钮 40 + 上下留白 4×2 */
+    val ActionBarH = 48.dp
     val NavH = 64.dp
 
     val TitleSp = 27.sp
