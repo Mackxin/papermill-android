@@ -85,10 +85,19 @@ object PaperComposer {
         val primary = subjects.firstOrNull() ?: Subject.MATH
         val types = GeneratorRegistry.availableFor(grade, subjects)
         val counts = LinkedHashMap<QuestionType, Int>()
-        if (subjects.size > 1) {
+        if (subjects.size == 1 && primary == Subject.SCIENCE) {
+            // 科学是知识型科目，一份卷子本来就是「选择 + 判断 + 填空」三块，
+            // 不像数学那样一种题型刷 30 道。而且题库每个年级每型只有 12 道，
+            // 默认开 30 题会印出一张只有 12 题的卷子，标题和实际对不上。
+            counts[QuestionType.SCIENCE_CHOICE] = 8
+            counts[QuestionType.SCIENCE_JUDGE] = 10
+            counts[QuestionType.SCIENCE_BLANK] = 8
+        } else if (subjects.size > 1) {
             types.take(2).forEachIndexed { i, t ->
                 counts[t] = if (t.answerLines > 0) 4 else if (i == 0) 20 else 10
             }
+            // 综合卷里勾了科学，也给一道科学大题，否则选了科学却一道科学题都没有
+            if (Subject.SCIENCE in subjects) counts[QuestionType.SCIENCE_CHOICE] = 8
         } else {
             val first = types.firstOrNull()
             if (first != null) counts[first] = if (first.answerLines > 0) 8 else 30

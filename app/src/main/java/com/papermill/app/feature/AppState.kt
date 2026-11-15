@@ -31,6 +31,7 @@ import com.papermill.app.core.store.SavedPaper
 import com.papermill.app.core.update.UpdateChecker
 import com.papermill.app.domain.content.CurricUnit
 import com.papermill.app.domain.content.CurriculumBank
+import com.papermill.app.domain.content.ScienceBank
 import com.papermill.app.domain.content.TextbookCatalog
 import com.papermill.app.domain.generate.AnswerMode
 import com.papermill.app.domain.generate.BankQuestionSource
@@ -297,6 +298,7 @@ class AppState(private val rawContext: Context) {
         // 课标题库必须先 init：题型可用性判断要读 index.json 的题量统计，
         // 没初始化时 countOf 一律返回 0，那两个题型会静默消失
         CurriculumBank.init(ctx)
+        ScienceBank.init(ctx)
         TextbookCatalog.init(ctx)
         dockGlass = LocalStore.loadSettings(ctx).dockGlass
         counts = PaperComposer.defaultSpec(grade, subjects).counts
@@ -509,6 +511,16 @@ class AppState(private val rawContext: Context) {
     /** 正式卷用：还差多少题 */
     val finalSuggestExtra: Int get() = suggestedExtra(lastContentFillPercent / 100f)
 
+    /**
+     * 题库抽干了（这一年级能出的题已经全部印上）。
+     *
+     * 和「版面排满了」要分开说：前者再点「补满这一页」也不会多一道题，
+     * 界面上却还写着「建议再加约 16 题」，等于骗人 —— 科学题库一个年级只有三十几道，
+     * 一张卷就能把它用光。
+     */
+    var poolDrained by mutableStateOf(false)
+        private set
+
     private fun suggestedExtra(ratio: Float): Int = suggestedExtra(ratio, null)
 
     /**
@@ -629,6 +641,8 @@ class AppState(private val rawContext: Context) {
         val counts: LinkedHashMap<QuestionType, Int>,
         val extra: Int,
         val fill: Float,
+        /** 加题已经加不出新题了（题源见底），界面要据此换文案 */
+        val drained: Boolean = false,
     )
 
     /**
@@ -657,6 +671,7 @@ class AppState(private val rawContext: Context) {
         var extraAdded = 0
         var basePages = -1
         var lastCount = -1
+        var drained = false
 
         for (attempt in 0..rounds) {
             val probe = withContext(Dispatchers.IO) { buildOnce(seed, working, save = false) }
@@ -673,6 +688,7 @@ class AppState(private val rawContext: Context) {
             }
             // 题库抽干后计数再涨也出不了新题，别空转
             val noProgress = lastCount >= 0 && probe.paper.questions.size <= lastCount
+            if (noProgress) drained = true
             lastCount = probe.paper.questions.size
 
             val fillType = pickFillType(working, probe)
@@ -692,7 +708,9 @@ class AppState(private val rawContext: Context) {
             extraAdded += step
         }
 
-        return FillPlan(bestCounts, bestExtra, bestRatio.coerceAtLeast(0f))
+        // 一轮都没补（说明第一版就已经满页 / 或者加不进去）不算「抽干」，
+        // 只有「加了题但题数没涨」才是题源见底
+        return FillPlan(bestCounts, bestExtra, bestRatio.coerceAtLeast(0f), drained)
     }
 
     /**
@@ -714,6 +732,10 @@ class AppState(private val rawContext: Context) {
             val result = withContext(Dispatchers.IO) { buildOnce(seed, plan.counts, save = true) }
             counts = LinkedHashMap(plan.counts)
             applyBuilt(result)
+            // 「抽干」的判定不能只看 fillToPage 的 noProgress —— 它可能提前因为
+            // 页数到顶就 break 了。更稳的推断：自动补满已经加过题（extra>0）、
+            // 末页却还是没排满，那就是题源见底了，不是版面限制。
+            poolDrained = plan.drained || (plan.extra > 0 && lastContentFillPercent < 84)
 
             val extraAdded = plan.extra
             val actual = result.paper.questions.size
@@ -876,6 +898,9 @@ class AppState(private val rawContext: Context) {
             rng = Random(System.nanoTime()),
             blocked = base.questions.map { stableHash(it.stem) }.toMutableSet(),
             subjects = base.spec.effectiveSubjectsForState().toSet(),
+            // 补题要的是「真的多出几道新题」。池子抽干就返回空，
+            // 否则会把这批题当成没出现过、原样再贴一遍，同一道题在同一张卷里印两次
+            allowReuse = false,
         )
         val fresh = generator.generate(ctx2)
         if (fresh.isEmpty()) return null
@@ -951,6 +976,10 @@ class AppState(private val rawContext: Context) {
             var best: AppendProbe? = null
             var bestRatio = pdf?.let { contentFillRatio(it) } ?: 0f
             var total = 0
+            // 补上去到底有没有多出题。没有 = 题源抽干了（科学题库一个年级就三十几道），
+            // 不是「版面排满了」—— 两种情况的说法不能混，否则用户一直点、一直没反应
+            var sawMore = false
+            val baseSize = gp.questions.size
 
             for (attempt in 0..5) {
                 if (bestRatio >= FILL_TARGET) break
@@ -959,6 +988,7 @@ class AppState(private val rawContext: Context) {
                 val want = total + step
                 if (want > 40) break
                 val probe = withContext(Dispatchers.IO) { probeAppend(gp, want) } ?: break
+                if (probe.paper.questions.size > baseSize) sawMore = true
                 // 补到多出一张纸、或填充率没有长进，就停，保留上一轮最好的版本
                 if (probe.pages > basePages || probe.ratio <= bestRatio + 0.005f) break
                 best = probe
@@ -967,7 +997,11 @@ class AppState(private val rawContext: Context) {
             }
 
             if (best != null) {
+                poolDrained = false
                 applyAppend(best, "自动补满，已加")
+            } else if (!sawMore) {
+                poolDrained = true
+                toast = "这一年级的题已经全部用上了（共 $baseSize 道），想多练可以换年级或换科目"
             } else {
                 toast = "当前版面已经排得比较满，再加题会多出一张纸"
             }
@@ -1151,7 +1185,11 @@ class AppState(private val rawContext: Context) {
 
     /** 每天一份不重样：以当天日期为种子，混合该年级 3 门主科 */
     suspend fun generateDaily() {
-        val picked = Subject.values().filter { it.availableFor(grade) }.take(3)
+        // 科学不算主科：混进来的话，一二年级的「每日一练」会变成 数+语+科学，
+        // 把英语挤掉。想要科学就用「选个卷子」单独出。
+        val picked = Subject.values()
+            .filter { it != Subject.SCIENCE && it.availableFor(grade) }
+            .take(3)
         subjects = picked
         subject = picked.first()
         val types = GeneratorRegistry.availableFor(grade, picked)

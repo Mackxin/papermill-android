@@ -1021,11 +1021,18 @@ private fun PreviewScreen(
         if (!isRef && state.finalSuggestExtra > 0) {
             Spacer(Modifier.height(9.dp))
             Text(
-                // 按单元出的卷子题就是那么多，再「建议加题」等于骗人，这句得换掉
-                if (state.unitTopicIds.isNotEmpty()) {
-                    "这一单元的题已经全部印上了，所以最后一页没排满 —— 想多练就点下面的「改成按整册出卷」。"
-                } else {
-                    "最后一页还有空白，建议再加约 ${state.finalSuggestExtra} 题 —— 直接在下面点「补满这一页」即可。"
+                // 三种情况三句话，别混：
+                //  1) 按单元出卷 —— 这一单元的题就这么多，给「改成按整册」的出口；
+                //  2) 题库抽干（科学一个年级只有三十几道）—— 再加也加不出来，说清上限在哪；
+                //  3) 真还有空间 —— 才建议补满。
+                when {
+                    state.unitTopicIds.isNotEmpty() ->
+                        "这一单元的题已经全部印上了，所以最后一页没排满 —— 想多练就点下面的「改成按整册出卷」。"
+                    state.poolDrained ->
+                        "这一年级能出的题已经全部印上了（共 ${state.paper?.questions?.size ?: 0} 道），" +
+                            "最后一页没排满是题库上限 —— 想多练可以换年级或换科目。"
+                    else ->
+                        "最后一页还有空白，建议再加约 ${state.finalSuggestExtra} 题 —— 直接在下面点「补满这一页」即可。"
                 },
                 fontSize = PaperDimens.CaptionSp,
                 color = PaperColors.Accent,

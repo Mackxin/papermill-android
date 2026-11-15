@@ -41,6 +41,12 @@ object ContentCatalog {
             "按知识点自编的选择 / 判断题，选项洗牌后出题；不是任何教辅或题库的原题。",
         ),
         CatalogEntry(
+            "小学科学",
+            "${ScienceBank.total()} 道",
+            "1–6 年级科学：选择 / 判断 / 填空三种题型，按「基础 / 标准 / 提高」三档难度分好，\n" +
+                "覆盖生命、物质、地球宇宙、技术与工程四大块。全部按课标知识点自编，不收录任何原题。",
+        ),
+        CatalogEntry(
             "英语音标",
             "${Phonics.all.size} 个",
             "${Phonics.vowels.size} 元音 + ${Phonics.consonants.size} 辅音，国际通用记音符号（IPA），" +

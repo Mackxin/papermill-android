@@ -10,6 +10,7 @@ enum class Subject(val code: String, val label: String) {
     MATH("MATH", "数学"),
     CHINESE("CHINESE", "语文"),
     ENGLISH("ENGLISH", "英语"),
+    SCIENCE("SCIENCE", "科学"),
     PHYSICS("PHYSICS", "物理"),
     CHEMISTRY("CHEMISTRY", "化学"),
     ;
@@ -18,6 +19,8 @@ enum class Subject(val code: String, val label: String) {
     fun availableFor(grade: Int): Boolean = when (this) {
         MATH, CHINESE -> grade in 1..9
         ENGLISH -> grade in 3..9
+        // 小学科学按课标是 1–6 年级（初中分成了物理 / 化学 / 生物 / 地理）
+        SCIENCE -> grade in 1..6
         PHYSICS -> grade in 8..9
         CHEMISTRY -> grade == 9
     }
@@ -110,6 +113,12 @@ enum class QuestionType(
     // 题干普遍是整句（数学中位 33 字、英语最长 136 字），半栏会折成竖条，只能整行
     CURRIC_BLANK("知识点填空", 1),
     CURRIC_CHOICE("知识点选择", 1),
+
+    // v0.11.0 小学科学（1–6 年级）：题库全自编，见 domain/content/ScienceBank.kt
+    // 选择题四个选项一行放不下会折得乱七八糟，必须整行
+    SCIENCE_CHOICE("科学选择", 1),
+    SCIENCE_JUDGE("科学判断", 2),
+    SCIENCE_BLANK("科学填空", 1),
 }
 
 enum class AnswerMode(val label: String) {

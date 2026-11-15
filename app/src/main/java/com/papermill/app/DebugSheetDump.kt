@@ -10,6 +10,7 @@ import com.papermill.app.core.pdf.render.PdfPreviewRenderer
 import com.papermill.app.core.pdf.render.PracticeRenderer
 import com.papermill.app.core.pdf.render.ReferenceRenderer
 import com.papermill.app.domain.content.CurriculumBank
+import com.papermill.app.domain.content.ScienceBank
 import com.papermill.app.domain.generate.GenContext
 import com.papermill.app.domain.generate.PaperComposer
 import com.papermill.app.domain.generate.GeneratorRegistry
@@ -170,41 +171,60 @@ object DebugSheetDump {
      */
     fun dumpQuestions(ctx: Context) {
         CurriculumBank.init(ctx)
+        ScienceBank.init(ctx)
         Thread {
-            val jobs = listOf(
-                Triple(QuestionType.CURRIC_BLANK, Subject.MATH, 5),
-                Triple(QuestionType.CURRIC_CHOICE, Subject.MATH, 5),
-                Triple(QuestionType.CURRIC_CHOICE, Subject.CHINESE, 4),
-                Triple(QuestionType.CURRIC_CHOICE, Subject.PHYSICS, 3),
-                Triple(QuestionType.CURRIC_BLANK, Subject.ENGLISH, 3),
+            // (题型, 科目, 年级, 题量, 难度)：拆成五元组，之前靠「是不是物理」决定年级，加科目就得改三元组
+            data class Job(
+                val type: QuestionType,
+                val subject: Subject,
+                val grade: Int,
+                val count: Int,
+                val difficulty: Int = 2,
             )
-            jobs.forEach { (type, subject, n) ->
-                val gen = GeneratorRegistry.of(type, if (subject == Subject.PHYSICS) 8 else 4)
+            val jobs = listOf(
+                Job(QuestionType.CURRIC_BLANK, Subject.MATH, 4, 5),
+                Job(QuestionType.CURRIC_CHOICE, Subject.MATH, 4, 5),
+                Job(QuestionType.CURRIC_CHOICE, Subject.CHINESE, 4, 4),
+                Job(QuestionType.CURRIC_CHOICE, Subject.PHYSICS, 8, 3),
+                Job(QuestionType.CURRIC_BLANK, Subject.ENGLISH, 4, 3),
+                // v0.11.0 小学科学：三个年级各看一遍，确认难度与年级对得上
+                Job(QuestionType.SCIENCE_CHOICE, Subject.SCIENCE, 3, 12),
+                Job(QuestionType.SCIENCE_JUDGE, Subject.SCIENCE, 3, 10),
+                Job(QuestionType.SCIENCE_BLANK, Subject.SCIENCE, 3, 12),
+                Job(QuestionType.SCIENCE_CHOICE, Subject.SCIENCE, 1, 6, difficulty = 1),
+                Job(QuestionType.SCIENCE_CHOICE, Subject.SCIENCE, 6, 6, difficulty = 3),
+            )
+            jobs.forEach { job ->
+                val gen = GeneratorRegistry.of(job.type, job.grade)
                 if (gen == null) {
-                    Log.e(TAG, "===== ${type.label} / ${subject.label}：该年级取不到生成器 =====")
+                    Log.e(TAG, "===== ${job.type.label} / ${job.subject.label}：该年级取不到生成器 =====")
                     return@forEach
                 }
-                val grade = if (subject == Subject.PHYSICS) 8 else 4
                 val ctxGen = GenContext(
-                    grade = grade,
-                    count = n,
-                    difficulty = 2,
+                    grade = job.grade,
+                    count = job.count,
+                    difficulty = job.difficulty,
                     rng = java.util.Random(42),
                     blocked = HashSet(),
-                    subjects = setOf(subject),
+                    subjects = setOf(job.subject),
                 )
                 val list = runCatching { gen.generate(ctxGen) }.getOrElse { emptyList() }
-                Log.i(TAG, "===== ${type.label} / ${subject.label} 小学${grade}年级（${list.size} 题）=====")
+                Log.i(TAG, "===== ${job.type.label} / ${job.subject.label} ${job.grade} 年级 · " +
+                    "要 ${job.count} 题 / 出 ${list.size} 题 · 难度 ${job.difficulty} =====")
                 list.forEachIndexed { i, q ->
                     Log.i(TAG, "Q${i + 1} ${q.stem.replace("\n", " ｜ ")}")
                     Log.i(TAG, "   答：${q.answer}")
-                    if (type == QuestionType.CURRIC_CHOICE) {
-                        Log.i(TAG, "   核对：${verifyChoice(q.stem, q.answer)}")
+                    when (job.type) {
+                        QuestionType.CURRIC_CHOICE -> Log.i(TAG, "   核对：${verifyChoice(q.stem, q.answer)}")
+                        QuestionType.SCIENCE_CHOICE ->
+                            Log.i(TAG, "   核对：${verifyScienceChoice(q.stem, q.answer)}")
+                        else -> Unit
                     }
                 }
             }
             Log.i(TAG, "===== 课标题库总量：${CurriculumBank.totalQuestions()} 题 / " +
                 "${CurriculumBank.totalTopics()} 个知识点 =====")
+            Log.i(TAG, "===== 科学题库总量：${ScienceBank.total()} 题 =====")
 
             // 题型可用性矩阵：语文没有填空题，勾语文时「知识点填空」不该出现在参数页
             listOf(
@@ -215,13 +235,16 @@ object DebugSheetDump {
                 "初二·物理" to (8 to listOf(Subject.PHYSICS)),
                 "初三·化学" to (9 to listOf(Subject.CHEMISTRY)),
                 "六年级·数学+语文" to (6 to listOf(Subject.MATH, Subject.CHINESE)),
+                "三年级·科学" to (3 to listOf(Subject.SCIENCE)),
+                "六年级·数学+科学" to (6 to listOf(Subject.MATH, Subject.SCIENCE)),
             ).forEach { (label, pair) ->
                 val (g, subs) = pair
                 val types = GeneratorRegistry.availableFor(g, subs)
                 Log.i(
                     TAG,
                     "[题型] $label：含填空=${QuestionType.CURRIC_BLANK in types} " +
-                        "含选择=${QuestionType.CURRIC_CHOICE in types} 共 ${types.size} 种",
+                        "含选择=${QuestionType.CURRIC_CHOICE in types} " +
+                        "含科学=${QuestionType.SCIENCE_CHOICE in types} 共 ${types.size} 种",
                 )
             }
         }.start()
@@ -283,5 +306,26 @@ object DebugSheetDump {
             }
         }
         return from / SCALE
+    }
+
+    /**
+     * 科学选择题自检：洗牌后答案字母指向的选项文字，必须等于源题库里这道题的正确选项。
+     *
+     * 渲染格式是两行：`【知识点】题干` + `A. xx　B. yy　C. zz`，答案形如 `（B）凝结…`。
+     * 只要「字母取到的文字」和「源题 answer 字母对应的文字」一致，说明洗牌没把答案带歪。
+     */
+    private fun verifyScienceChoice(stem: String, answer: String): String {
+        val lines = stem.split("\n")
+        if (lines.size < 2) return "FAIL 题干格式不对"
+        val srcStem = lines[0].substringAfter("】", lines[0]).trim()
+        val options = lines[1].split("　").map { it.trim() }.filter { it.isNotEmpty() }
+        val letter = answer.substringAfter("（").substringBefore("）").trim().firstOrNull()
+            ?: return "FAIL 答案里没有字母"
+        val picked = options.firstOrNull { it.startsWith("$letter.") }
+            ?.substringAfter(".")?.trim() ?: return "FAIL 字母 $letter 在选项里找不到"
+        val source = ScienceBank.findByStem(srcStem) ?: return "FAIL 源题库里没找到这道题"
+        val idx = source.answer.trim().uppercase().firstOrNull()?.minus('A') ?: return "FAIL 源题答案异常"
+        val expect = source.options.getOrNull(idx)?.trim() ?: return "FAIL 源题选项越界"
+        return if (picked == expect) "OK（$letter → $picked）" else "FAIL 期望「$expect」实际「$picked」"
     }
 }

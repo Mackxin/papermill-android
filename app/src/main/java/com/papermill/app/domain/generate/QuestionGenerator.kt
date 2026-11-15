@@ -13,6 +13,15 @@ data class GenContext(
     val subjects: Set<Subject> = emptySet(),
     /** 按单元出卷时限定在这些知识点里（空 = 不限制） */
     val topicIds: Set<String> = emptySet(),
+    /**
+     * 题库型生成器专用：池子被 [blocked] 挡光时，是否允许放宽「历史避让」。
+     *
+     *  - 正常出卷 = true：题库就十几道题，连着出两张同年级卷子，第二张会被历史避让挡光，
+     *    于是一个大题整块消失。允许放宽，宁可重印两道旧题也要把卷子填满。
+     *  - 「补满这一页」的试排探针 = false：它要的是**真正的追加**，
+     *    池子干了就该返回空，让界面老实说「题已经全部用上了」，而不是把旧题复制一份贴上。
+     */
+    val allowReuse: Boolean = true,
 )
 
 interface QuestionGenerator {
@@ -116,6 +125,8 @@ object GeneratorRegistry {
         OralMissingGenerator, OralRemainderGenerator,
         // v0.9.0 课标题库（cn-math-taxonomy · CC BY-NC 4.0，内容见 domain/content/CurriculumBank.kt）
         CurricBlankGenerator, CurricChoiceGenerator,
+        // v0.11.0 小学科学（内容全自编，见 domain/content/ScienceBank.kt）
+        ScienceChoiceGenerator, ScienceJudgeGenerator, ScienceBlankGenerator,
     )
 
     /** 关于页实时统计题型总数 */
