@@ -47,4 +47,28 @@ object PdfSharer {
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         )
     }
+
+    /**
+     * 多张图片一起分享（每页一张 PNG）。
+     *
+     * 为什么要 `ACTION_SEND_MULTIPLE` 而不是逐张发：微信只接受一次多图，
+     * 逐张发会连续弹 3 次选择器，用户点到最后一张时前面两张早忘了发到哪儿。
+     * `EXTRA_STREAM` 的类型也必须是 `ArrayList<Uri>`，传单个 Uri 会被部分应用忽略。
+     */
+    fun shareImages(context: Context, files: List<File>, title: String) {
+        if (files.isEmpty()) return
+        val uris = ArrayList(
+            files.map { FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", it) }
+        )
+        val send = Intent(Intent.ACTION_SEND_MULTIPLE).apply {
+            type = "image/png"
+            putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris)
+            putExtra(Intent.EXTRA_SUBJECT, title)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        context.startActivity(
+            Intent.createChooser(send, "发送试卷图片")
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        )
+    }
 }

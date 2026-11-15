@@ -12,6 +12,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import com.papermill.app.BuildConfig
 import com.papermill.app.core.export.PdfExporter
@@ -54,6 +55,7 @@ import com.papermill.app.domain.reference.ReferenceSheet
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -93,6 +95,20 @@ private const val FILL_TARGET = 0.84f
 /** 自动补题总量上限：想要更多由用户在预览页显式点「加 N 题」 */
 private const val MAX_AUTO_EXTRA = 24
 
+/** A/B 卷的标号。顺带决定了「生成张数」的最大值 */
+private val COPY_LABELS = listOf("A 卷", "B 卷")
+
+/**
+ * B 卷相对 A 卷的种子偏移。
+ *
+ * 取一个质数，避免 seed 与 seed+1 这种相邻值在某些随机实现里抽出高度相似的题序；
+ * 又不能用 0 —— 同种子会出完全一样的两张卷，A/B 卷就失去意义了。
+ */
+private const val COPY_SEED_STEP = 7919L
+
+/** 导出图片的渲染倍率：A4 竖版 595×842pt × 2.2 ≈ 1309×1852px，放微信里看/打印都清楚 */
+private const val EXPORT_IMAGE_SCALE = 2.2f
+
 class AppState(private val rawContext: Context) {
 
     private val ctx = rawContext.applicationContext
@@ -121,6 +137,37 @@ class AppState(private val rawContext: Context) {
     var pdf by mutableStateOf<RenderedPdf?>(null)
     var previews by mutableStateOf<List<ImageBitmap>>(emptyList())
     var savedPaperId by mutableStateOf("")
+
+    /**
+     * 一次出几张：1 张普通卷，2 张出 A / B 卷。
+     *
+     * A/B 卷的用法是防抄：同桌拿到的是同一套结构、不同的题目。
+     * 所以 B 卷**沿用 A 卷补满后的题量**，只换种子 —— 两张卷的大题结构、每大题题数
+     * 完全一致，批改时对得上号；如果让 B 卷自己再补一轮，很可能补出不同题数，
+     * 反而变成两份不同的卷子。
+     */
+    var copies by mutableStateOf(1)
+
+    /** 这一批生成的卷（通常 1 张，A/B 卷时 2 张），供预览页在 A / B 之间切换 */
+    private var batchBuilt by mutableStateOf<List<Built>>(emptyList())
+
+    /** 当前预览的是批里的第几张 */
+    var activeCopy by mutableStateOf(0)
+        private set
+
+    /** 这一批共几张（A/B 卷 = 2）；预览页据此决定要不要显示 A/B 切换 */
+    val batchSize: Int get() = batchBuilt.size
+
+    /** 当前卷的标号（「A 卷」/「B 卷」），单张卷返回空串 */
+    val copyLabel: String get() = if (batchBuilt.size <= 1) "" else COPY_LABELS.getOrElse(activeCopy) { "" }
+
+    fun selectCopy(index: Int) {
+        if (index !in batchBuilt.indices || index == activeCopy) return
+        activeCopy = index
+        applyBuilt(batchBuilt[index], clearBatch = false)
+        previewPage = 0
+        toast = "${copyLabel}：共 ${batchBuilt[index].pdf.pageCount} 页"
+    }
     var wrongNumbers by mutableStateOf<Set<Int>>(emptySet())
     var showQuestionList by mutableStateOf(false)
     var isReference by mutableStateOf(false)
@@ -630,7 +677,12 @@ class AppState(private val rawContext: Context) {
             ?: availableTypes.firstOrNull()
     }
 
-    private fun currentSpec(seed: Long, useCounts: Map<QuestionType, Int> = counts): PaperSpec {
+    private fun currentSpec(
+        seed: Long,
+        useCounts: Map<QuestionType, Int> = counts,
+        /** A/B 卷后缀：题量结构与 A 卷完全一致，只是换了种子重抽题目 */
+        copySuffix: String = "",
+    ): PaperSpec {
         val total = useCounts.values.sum()
         val autoTitle = when {
             // 按单元出卷：标题直接写单元名，家长一眼知道这张卷考的是哪一课
@@ -640,11 +692,13 @@ class AppState(private val rawContext: Context) {
             else ->
                 "${GradeProfiles.stageLabel(grade)} · ${GradeProfiles.gradeLabel(grade)} · ${subject.label}练习"
         }
+        val baseTitle = titleOverride?.takeIf { it.isNotBlank() } ?: autoTitle
         return PaperSpec(
             grade = grade,
             subject = subject,
             subjects = subjects,
-            title = titleOverride?.takeIf { it.isNotBlank() } ?: autoTitle,
+            // 卷头直接印「A 卷 / B 卷」：两张纸混在一起时，老师一眼能分出来
+            title = if (copySuffix.isEmpty()) baseTitle else "$baseTitle　$copySuffix",
             subtitle = "共 $total 题　满分 ${total * 2} 分",
             counts = useCounts,
             difficulty = difficulty,
@@ -689,8 +743,9 @@ class AppState(private val rawContext: Context) {
         useCounts: Map<QuestionType, Int>,
         save: Boolean,
         withPreviews: Boolean = save,
+        copySuffix: String = "",
     ): Built {
-        val spec = currentSpec(seed, useCounts)
+        val spec = currentSpec(seed, useCounts, copySuffix)
         val recent = LocalStore.recentHashes(ctx, grade, subject)
         val gp = PaperComposer.compose(spec, recent)
         val rendered = PaperRenderer.render(PaperAssembler.build(gp))
@@ -794,9 +849,20 @@ class AppState(private val rawContext: Context) {
         busy = true
         try {
             val plan = fillToPage(seed, counts, rounds = 5)
-            val result = withContext(Dispatchers.IO) { buildOnce(seed, plan.counts, save = true) }
             counts = LinkedHashMap(plan.counts)
-            applyBuilt(result)
+            // A/B 卷：B 卷沿用 A 卷补满后的题量与结构，只换种子。
+            // 让 B 卷自己再补一轮的话，两张卷的大题题数很可能对不上，批改时没法对号。
+            val wanted = copies.coerceIn(1, COPY_LABELS.size)
+            val built = withContext(Dispatchers.IO) {
+                (0 until wanted).map { i ->
+                    val s = seed + i * COPY_SEED_STEP
+                    buildOnce(s, plan.counts, save = true, copySuffix = COPY_LABELS.getOrElse(i) { "" })
+                }
+            }
+            val result = built.first()
+            batchBuilt = built
+            activeCopy = 0
+            applyBuilt(result, clearBatch = false)
             // 「抽干」的判定不能只看 fillToPage 的 noProgress —— 它可能提前因为
             // 页数到顶就 break 了。更稳的推断：自动补满已经加过题（extra>0）、
             // 末页却还是没排满，那就是题源见底了，不是版面限制。
@@ -806,6 +872,9 @@ class AppState(private val rawContext: Context) {
             val actual = result.paper.questions.size
             toast = buildString {
                 append("已生成 $actual 题，共 ${result.pdf.pageCount} 页")
+                if (built.size > 1) {
+                    append("　已出 A / B 两张：题量与结构一致、题目各不相同")
+                }
                 if (extraAdded > 0) append("（自动补了 $extraAdded 题，未增加页数）")
                 // 去重 / 历史卷避让少给两三题是常态，别动不动报「题量不足」吓人
                 val shortage = totalQuestions - actual
@@ -1274,7 +1343,18 @@ class AppState(private val rawContext: Context) {
 
     // ---------------------------------------------------------------- 打印 / 导出
 
-    private fun applyBuilt(b: Built) {
+    /**
+     * 把一份生成结果推上界面。
+     *
+     * [clearBatch] 默认清掉 A/B 批 —— 打开历史卷、错题卷、每日一练都会经过这里，
+     * 不清的话预览页会残留上一批的「A 卷 / B 卷」切换，点下去跳到一个毫不相干的卷子。
+     * 只有 generate() 自己（以及 A/B 之间切换）需要保留整批。
+     */
+    private fun applyBuilt(b: Built, clearBatch: Boolean = true) {
+        if (clearBatch) {
+            batchBuilt = emptyList()
+            activeCopy = 0
+        }
         paper = b.paper
         pdf = b.pdf
         previews = b.previews
@@ -1309,6 +1389,45 @@ class AppState(private val rawContext: Context) {
         val file = savePdf() ?: return
         runCatching { PdfSharer.share(ctx, file, paper?.spec?.title ?: "练习卷") }
             .onFailure { toast = "分享失败：${it.message}" }
+    }
+
+    /**
+     * 把当前卷的每一页导出成 PNG，并一次性交给分享面板。
+     *
+     * 为什么要有这条路：奔图云打印小程序、微信里的一些打印号只收图片不收 PDF；
+     * 老师把卷子发群里让家长自己打印时，图片也比 PDF 更容易在手机上直接打。
+     *
+     * 渲染倍率用 [EXPORT_IMAGE_SCALE]（高于预览的 1.5），因为预览只求看得清，
+     * 导出是要落到纸上或放大看的 —— 用预览那张图导出，1 页 A4 只有 892px 宽，
+     * 打印出来字会发虚。
+     */
+    suspend fun exportImages() {
+        val current = pdf ?: return
+        busy = true
+        try {
+            val files = withContext(Dispatchers.IO) {
+                val dir = File(PdfExporter.papersDir(ctx), "images").apply { mkdirs() }
+                val base = current.fileName.substringBeforeLast('.').ifBlank { "试卷" }
+                PdfPreviewRenderer.render(ctx, current.bytes, scale = EXPORT_IMAGE_SCALE)
+                    .mapIndexed { i, image ->
+                        val file = File(dir, "${base}_第${i + 1}页.png")
+                        FileOutputStream(file).use { out ->
+                            image.asAndroidBitmap().compress(Bitmap.CompressFormat.PNG, 100, out)
+                        }
+                        file
+                    }
+            }
+            if (files.isEmpty()) {
+                toast = "没有可导出的页"
+            } else {
+                toast = "已导出 ${files.size} 张图片到 ${files.first().parent}/"
+                runCatching { PdfSharer.shareImages(ctx, files, paper?.spec?.title ?: "练习卷") }
+                    .onFailure { toast = "图片已存好，但打开分享面板失败：${it.message}" }
+            }
+        } catch (t: Throwable) {
+            toast = "导出图片失败：${t.message ?: t.javaClass.simpleName}"
+        }
+        busy = false
     }
 
     fun addWrongToMistakes() {

@@ -988,6 +988,22 @@ private fun CreateScreen(state: AppState, scope: CoroutineScope) {
                 color = PaperColors.OnSurfaceVariant,
             )
             Divider()
+            SettingRow("生成张数") {
+                ChoiceChip("1 张", state.copies == 1) { state.copies = 1 }
+                ChoiceChip("2 张（A / B 卷）", state.copies == 2) { state.copies = 2 }
+            }
+            Text(
+                if (state.copies == 2) {
+                    "两张卷的大题结构和每大题题数完全一致，只换题目 —— 同桌拿到不同的卷子，" +
+                        "抄不了答案，批改时还能对号。两张都会存进试卷库。"
+                } else {
+                    "需要防抄时选 2 张：同一套结构出 A / B 两份，题目各不相同。"
+                },
+                fontSize = PaperDimens.TinySp,
+                color = PaperColors.OnSurfaceVariant,
+                lineHeight = 15.sp,
+            )
+            Divider()
             SettingRow("难度") {
                 listOf(1 to "基础", 2 to "标准", 3 to "提高").forEach { (v, label) ->
                     ChoiceChip(label, state.difficulty == v) { state.difficulty = v }
@@ -1253,6 +1269,26 @@ private fun PreviewScreen(
                 textAlign = TextAlign.Center,
                 modifier = Modifier.fillMaxWidth(),
             )
+            // A/B 卷：两张的题量结构一致、题目不同，翻页看的是同一张，切卷看的是另一张
+            if (state.batchSize > 1) {
+                Spacer(Modifier.height(9.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    listOf(0, 1).forEach { i ->
+                        val label = if (i == 0) "A 卷" else "B 卷"
+                        ChoiceChip(label, state.activeCopy == i) { state.selectCopy(i) }
+                        Spacer(Modifier.width(PaperDimens.GapSmall))
+                    }
+                    Text(
+                        "两张都已存入试卷库",
+                        fontSize = PaperDimens.TinySp,
+                        color = PaperColors.Muted,
+                    )
+                }
+            }
         } else {
             CardSection { Text("还没有生成内容", fontSize = PaperDimens.BodySp) }
         }
@@ -1262,6 +1298,22 @@ private fun PreviewScreen(
                 "批改后到「题目清单」勾错题；也可以换题、删题、加题。",
                 fontSize = PaperDimens.CaptionSp,
                 color = PaperColors.OnSurfaceVariant,
+            )
+            // 图片导出：奔图云打印小程序、微信里的打印号只收图片不收 PDF
+            Spacer(Modifier.height(9.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                SecondaryButton(
+                    if (state.busy) "正在导出…" else "存成图片（每页一张 PNG）",
+                    modifier = Modifier.weight(1f),
+                ) { scope.launch { state.exportImages() } }
+            }
+            Text(
+                "微信里的打印号、奔图云打印小程序多数只收图片；导出的图片在 " +
+                    "Android/data/com.papermill.app/files/papers/images/ 里。",
+                fontSize = PaperDimens.TinySp,
+                color = PaperColors.Muted,
+                lineHeight = 14.sp,
+                modifier = Modifier.padding(top = 5.dp),
             )
         }
     } else if (isRef) {
