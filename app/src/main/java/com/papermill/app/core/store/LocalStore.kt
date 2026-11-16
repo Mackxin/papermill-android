@@ -52,6 +52,14 @@ data class AppSettings(
     val showCreatedAt: Boolean = true,
     /** LineGap 的枚举名；存字符串而不是序号，将来加档位不会错位 */
     val lineGap: String = "NORMAL",
+    /**
+     * 底部 tab 栏显示哪几个页签（v0.18.0）。
+     *
+     * 存逗号分隔的枚举名而不是 JSON 数组：这份数据只有「有序的一小串名字」，
+     * 数组要额外处理空值/脏值，字符串简单过滤一下就够了。
+     * 顺序即展示顺序 —— 用户想「错题本放第一格」也在这一串里表达。
+     */
+    val dockTabs: String = "HOME,REFERENCE,MISTAKES,HISTORY,TEXTBOOK,MORE",
 )
 
 /**
@@ -129,6 +137,7 @@ object LocalStore {
                 footerCustom = o.optString("footerCustom", ""),
                 showCreatedAt = o.optBoolean("showCreatedAt", true),
                 lineGap = o.optString("lineGap", "NORMAL"),
+                dockTabs = o.optString("dockTabs", "HOME,REFERENCE,MISTAKES,HISTORY,TEXTBOOK,MORE"),
             )
         }.getOrDefault(AppSettings())
     }
@@ -144,6 +153,7 @@ object LocalStore {
                     .put("footerCustom", settings.footerCustom)
                     .put("showCreatedAt", settings.showCreatedAt)
                     .put("lineGap", settings.lineGap)
+                    .put("dockTabs", settings.dockTabs)
                     .toString(2)
             )
         }
@@ -309,11 +319,52 @@ object LocalStore {
     }
 
     /** 按题干 hash 去重；已经存在则把掌握度打回 NEW（又错了一次） */
-    fun addMistakes(ctx: Context, paper: GeneratedPaper, paperId: String, numbers: Set<Int>): Int {
+    fun addMistakes(ctx: Context, paper: GeneratedPaper, paperId: String, numbers: Set<Int>): Int =
+        addMistakesCore(
+            ctx = ctx,
+            grade = paper.spec.grade,
+            subjectCode = paper.spec.subject.code,
+            paperId = paperId,
+            questions = paper.questions.map {
+                SavedQuestion(it.no, it.stem, it.answer, it.type.name, it.topic)
+            },
+            numbers = numbers,
+        )
+
+    /**
+     * 从试卷库里的历史卷记错题（v0.18.0）。
+     *
+     * 孩子做完卷子往往是过一阵才批改，那会儿手边只剩纸，App 早就退到后台了。
+     * 这条路径不重新渲染 PDF，直接用存下来的题目快照，所以点开就能勾。
+     */
+    fun addMistakesFromSaved(ctx: Context, paper: SavedPaper, numbers: Set<Int>): Int =
+        addMistakesCore(ctx, paper.grade, paper.subject, paper.id, paper.questions, numbers)
+
+    /**
+     * 只带题目清单的批改入口：批改面板可能来自预览页（刚生成的卷），
+     * 也可能来自试卷库（几天前的卷），两者都归一到这里。
+     */
+    fun addMistakesForPaper(
+        ctx: Context,
+        grade: Int,
+        subjectCode: String,
+        paperId: String,
+        questions: List<SavedQuestion>,
+        numbers: Set<Int>,
+    ): Int = addMistakesCore(ctx, grade, subjectCode, paperId, questions, numbers)
+
+    private fun addMistakesCore(
+        ctx: Context,
+        grade: Int,
+        subjectCode: String,
+        paperId: String,
+        questions: List<SavedQuestion>,
+        numbers: Set<Int>,
+    ): Int {
         val list = loadMistakes(ctx).toMutableList()
         val existing = list.associateBy { stableHash(it.stem) }.toMutableMap()
         var added = 0
-        paper.questions.filter { it.no in numbers }.forEach { q ->
+        questions.filter { it.no in numbers }.forEach { q ->
             val hash = stableHash(q.stem)
             val hit = existing[hash]
             if (hit != null) {
@@ -322,8 +373,8 @@ object LocalStore {
             } else {
                 val item = MistakeItem(
                     id = "m_${System.currentTimeMillis()}_${q.no}",
-                    grade = paper.spec.grade, subject = paper.spec.subject.code,
-                    type = q.type.name, topic = q.topic, stem = q.stem, answer = q.answer,
+                    grade = grade, subject = subjectCode,
+                    type = q.type, topic = q.topic, stem = q.stem, answer = q.answer,
                     sourcePaperId = paperId, sourceNo = q.no,
                     wrongAt = System.currentTimeMillis(), mastery = "NEW", practiceCount = 0,
                 )

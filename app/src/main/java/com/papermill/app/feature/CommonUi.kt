@@ -167,18 +167,17 @@ fun StickyBar(content: @Composable RowScope.() -> Unit) {
     )
 }
 
-/** dock 里四个页签的顺序与文字（顺序必须和 Screens.TAB_ORDER 一致） */
-private val DOCK_TABS = listOf(
-    "出卷" to NavTab.HOME,
-    "打印纸" to NavTab.REFERENCE,
-    "错题本" to NavTab.MISTAKES,
-    "更多" to NavTab.MORE,
-)
-
-private val DockItemH = 42.dp
+/**
+ * 页签高度（v0.18.0 从 42dp 压到 36dp）。
+ *
+ * 用户原话「高度也不用那么高」—— 42dp 的胶囊大约有 10dp 是纯留白，
+ * 压到 36dp 后文字仍然是 13sp 上下、点击区还有 36dp（超过 32dp 的可点下限），
+ * 但整条 dock 矮了 6dp，滚动内容能多露一行。
+ */
+private val DockItemH = 36.dp
 
 /**
- * 悬浮胶囊 dock：4 个页签，纯文字（不放图标），选中项淡紫胶囊 + 主色字。
+ * 悬浮胶囊 dock：文字页签，选中项淡紫胶囊 + 主色字。
  *
  * 用户明确要求「tab 栏不需要图标」——去掉图标后整条更矮更安静，
  * 选中态靠胶囊底色 + 字重变化表达，比图标+文字的双行更利落。
@@ -195,6 +194,9 @@ private val DockItemH = 42.dp
  * 现在改成由调用方喂**连续页位置**（`currentPage + currentPageOffsetFraction`），
  * 胶囊按 `slot * position` 平移：手指拖多少，它就走多少；松手后的回弹/自动翻页动画
  * 也会被同一个公式带着走，不再有第二种节奏。
+ *
+ * v0.18.0 起页签集合变成 `state.dockTabs`（用户可开关），
+ * 每格宽度按**可见数量**平分，字号跟着格子宽度收 —— 6 个页签时不至于互相挤成一条黑。
  */
 @Composable
 fun FloatingDock(
@@ -204,12 +206,13 @@ fun FloatingDock(
     position: () -> Float,
     onSelect: (NavTab) -> Unit,
 ) {
-    val shape = RoundedCornerShape(26.dp)
+    val shape = RoundedCornerShape(24.dp)
     val glass = state.dockGlass
+    val tabs = state.dockTabs
     BoxWithConstraints(
         modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .padding(horizontal = 16.dp, vertical = 6.dp)
             .shadow(18.dp, shape)
             .clip(shape)
             .background(
@@ -244,26 +247,32 @@ fun FloatingDock(
                     Modifier.border(1.dp, PaperColors.Outline, shape)
                 }
             )
-            .padding(horizontal = 6.dp, vertical = 6.dp),
+            .padding(horizontal = 5.dp, vertical = 5.dp),
     ) {
-        val slot = maxWidth / DOCK_TABS.size
+        val slot = maxWidth / tabs.size
 
         // 滑块：位置放在 Modifier.offset 的 lambda 里读 —— 那个 lambda 跑在**布局阶段**，
-        // 拖动时只有这个节点的位置被重算，不会把整条 dock（含 4 段文字）逐帧重组。
+        // 拖动时只有这个节点的位置被重算，不会把整条 dock（含每一段文字）逐帧重组。
         Box(
             Modifier
                 .align(Alignment.CenterStart)
                 .offset { IntOffset((slot.toPx() * position()).roundToInt(), 0) }
                 .width(slot)
                 .height(DockItemH)
-                .clip(RoundedCornerShape(18.dp))
+                .clip(RoundedCornerShape(16.dp))
                 .background(PaperColors.PrimaryContainer)
         )
 
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            DOCK_TABS.forEachIndexed { i, (label, tab) ->
+            tabs.forEachIndexed { i, tab ->
                 DockItem(
-                    label = label,
+                    label = tab.label,
+                    // 页签越多格子越窄：6 个时 12sp 刚好，再大就要换行/省略号
+                    fontSize = when {
+                        tabs.size <= 4 -> 13.5f
+                        tabs.size == 5 -> 12.5f
+                        else -> 12f
+                    },
                     // 三角权重：离哪页最近就亮到几分。拖到两页正中间时两个都是 0.5、
                     // 胶囊正压在中间，眼睛读到的是「正在过去」而不是「已经过去了」。
                     emphasis = { (1f - abs(position() - i)).coerceIn(0f, 1f) },
@@ -276,6 +285,7 @@ fun FloatingDock(
 @Composable
 private fun RowScope.DockItem(
     label: String,
+    fontSize: Float,
     emphasis: () -> Float,
     onClick: () -> Unit,
 ) {
@@ -284,7 +294,7 @@ private fun RowScope.DockItem(
     val t = emphasis()
     val fg = lerp(PaperColors.OnSurfaceVariant, PaperColors.Primary, t)
     // 字重只在过半后切一次，避免每帧换字体尺寸触发重新排版
-    val weight = if (t > 0.5f) FontWeight.Bold else FontWeight.Normal
+    val weight = if (t > 0.5f) FontWeight.SemiBold else FontWeight.Normal
     // 关掉 ripple：用户明确要求去掉「高亮之前先闪一层灰底」。
     // 选中态胶囊本身就是点击反馈，再叠一层灰反而脏。
     val interaction = remember { MutableInteractionSource() }
@@ -293,16 +303,27 @@ private fun RowScope.DockItem(
         Modifier
             .weight(1f)
             .height(DockItemH)
-            .clip(RoundedCornerShape(18.dp))
+            .clip(RoundedCornerShape(16.dp))
             .clickable(
                 interactionSource = interaction,
                 indication = null,
             ) { onClick() },
         contentAlignment = Alignment.Center,
     ) {
+        // 每格宽度是固定的（weight 平分），但文字宽度会被字重改变。
+        // 做法：正文与「加粗版」叠两层，加粗那层透明但照样参与测量，
+        // 格子内容宽度永远按最粗的那一份算 —— 切换选中态时文字不会左右挪，
+        // 也不会因为宽度变化把整行重新排版（那就是用户报的「点一下抖一下」）。
         Text(
             label,
-            fontSize = 13.5.sp,
+            fontSize = fontSize.sp,
+            color = Color.Transparent,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+        )
+        Text(
+            label,
+            fontSize = fontSize.sp,
             color = fg,
             fontWeight = weight,
             maxLines = 1,
@@ -420,6 +441,18 @@ fun ChoiceChip(
             .padding(horizontal = 15.dp, vertical = 9.dp),
         contentAlignment = Alignment.Center,
     ) {
+        // 选中态原来是 `fontWeight = SemiBold`：字一粗，chip 就宽了 1~2dp，
+        // 同一行里排在它右边的 chip 全部往右挪一点 —— 用户看到的就是
+        // 「点某个会滑动，还自己抖一下」（v0.18.0 报的问题）。
+        // 解法是把「加粗版的宽度」当度量基准：透明的那一层照样参与测量，
+        // chip 宽度从此与选中状态无关，点它只会变色，不会动。
+        Text(
+            text,
+            fontSize = PaperDimens.LabelSp,
+            color = Color.Transparent,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+        )
         Text(
             text,
             fontSize = PaperDimens.LabelSp,

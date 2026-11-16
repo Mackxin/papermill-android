@@ -29,6 +29,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -45,6 +46,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -69,6 +71,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.papermill.app.core.design.PaperColors
 import com.papermill.app.core.design.PaperDimens
+import com.papermill.app.core.store.SavedPaper
 import com.papermill.app.core.update.UpdateChecker
 import com.papermill.app.domain.content.ContentCatalog
 import com.papermill.app.domain.content.CurriculumBank
@@ -80,6 +83,7 @@ import com.papermill.app.domain.generate.LineGap
 import com.papermill.app.domain.generate.PageOrientation
 import com.papermill.app.domain.generate.PaperPurpose
 import com.papermill.app.domain.generate.PaperTemplates
+import com.papermill.app.domain.generate.QuestionType
 import com.papermill.app.domain.generate.Subject
 import com.papermill.app.domain.generate.Tilt
 import com.papermill.app.domain.reference.PracticeData
@@ -112,20 +116,24 @@ import androidx.lifecycle.LifecycleEventObserver
  * 结构是「顶栏 → 可滚动内容 → 固定操作条 → 固定底部导航」，
  * 用户随便滚到哪，出卷 / 打印永远在拇指够得到的位置。
  */
-/** 底部 4 个页签对应的页面；其余 Screen 是压在页签之上、带返回键的子页面 */
-private val TAB_SCREENS = setOf(Screen.HOME, Screen.REFERENCE, Screen.MISTAKES, Screen.MORE)
-private val TAB_ORDER = listOf(NavTab.HOME, NavTab.REFERENCE, NavTab.MISTAKES, NavTab.MORE)
-
 /**
- * 底部玻璃 dock 占位高度（外 padding 8 + 内 padding 6 + 胶囊 42 + 6 + 8 = 70dp）。
+ * 底部玻璃 dock 占位高度（外 padding 6 + 内 padding 5 + 胶囊 36 + 5 + 6 = 58dp）。
  *
  * dock 现在是浮层，不占布局位；内容区要按这个高度留出底部内边距，
  * 否则滚到最底时最后一行会被 dock 压住。
+ *
+ * v0.18.0 连同胶囊一起压矮：42dp 的胶囊里约 10dp 是纯留白，压到 36dp 后
+ * 整条从 70dp 降到 58dp，一屏能多露一行内容 —— 这是用户要的「高度不用那么高」。
  */
-private val DOCK_SPACE = 70.dp
+private val DOCK_SPACE = 58.dp
 
 /** 页内可滚动内容需要额外留出的底部空间：操作条 + dock + 呼吸余量 */
 private val BOTTOM_SAFE = DOCK_SPACE + PaperDimens.ActionBarH + 16.dp
+
+/** 底部有固定操作条的页面：提示条要浮在操作条之上，不能压住按钮 */
+private val STICKY_BAR_SCREENS = setOf(
+    Screen.HOME, Screen.CREATE, Screen.PREVIEW, Screen.LOCAL_PDF, Screen.MISTAKES,
+)
 
 @Composable
 fun PaperMillRoot(state: AppState) {
@@ -165,17 +173,33 @@ fun PaperMillRoot(state: AppState) {
         }
     }
 
-    // 四个页签做成可左右滑动的 pager，滑动落页后同步 state
-    val pager = rememberPagerState(
-        initialPage = TAB_ORDER.indexOf(state.navTab).coerceAtLeast(0),
-    ) { TAB_ORDER.size }
+    // 页签集合由用户设置决定（v0.18.0）：可见的那几个才进 pager，
+    // 顺序也就是 dock 的顺序，两处共用一个列表，不会再出现「点了跳到隔壁」。
+    val tabs = state.dockTabs
+    val isTabScreen = tabs.any { it.screen == state.screen }
+
+    // 页签做成可左右滑动的 pager，滑动落页后同步 state。
+    //
+    // `key(tabs)` 很关键：页签集合一变（用户在「更多」里关掉一个），
+    // 旧页码在新集合里指的可能是**另一页** —— 实测关掉「试卷库」后，
+    // 页码 5 越界、pager 回弹到 4，回弹过程中 settledPage 短暂报出 3，
+    // 顶栏标题就变成了「课本」，底下的内容还是「更多」。
+    // 直接按新集合重建 pager，初始页取「当前页面在新集合里的位置」，
+    // 页码与页面从一开始就是一致的，也就没有回弹这回事。
+    val pager = key(tabs) {
+        rememberPagerState(
+            initialPage = tabs.indexOf(state.navTab).coerceAtLeast(0),
+        ) { tabs.size }
+    }
 
     // ============================================================
     // 记住上次看到哪儿
     // ============================================================
     // 每个页签一个独立的 LazyListState：pager 会把离屏页销毁重建，
     // 用 remember 在页内建的话，滑回来就回到顶部了。
-    val tabStates = remember { TAB_ORDER.associateWith { LazyListState() } }
+    // 按 NavTab.entries 全量建，而不是按当前可见的那几个 ——
+    // 隐藏再显示时滚动位置要还在，键也不能因为可见集合变化而缺失。
+    val tabStates = remember { NavTab.entries.associateWith { LazyListState() } }
 
     LaunchedEffect(Unit) {
         state.restoreSessionOnce()
@@ -197,7 +221,7 @@ fun PaperMillRoot(state: AppState) {
             // 用 Triple 而不是 intArrayOf：数组没有结构化 equals，
             // distinctUntilChanged 会认为「每帧都是新值」，滚动停止后还在空转；
             // Triple 有结构相等，静止时不再发射，也就不会反复重启那 1.2 秒的计时。
-            TAB_ORDER.map { k ->
+            NavTab.entries.map { k ->
                 val st = tabStates.getValue(k)
                 Triple(k.name, st.firstVisibleItemIndex, st.firstVisibleItemScrollOffset)
             }
@@ -228,21 +252,22 @@ fun PaperMillRoot(state: AppState) {
     // animateScrollToPage 被协程取消 → pager 卡在两页中间不动。
     // snapshotFlow 挂在 LaunchedEffect(Unit) 里，永不重启，也就不会互相取消。
 
-    // ① 手指拖动时高亮立刻跟随（滑过半页就切），这就是用户要的「跟着一起动」
-    LaunchedEffect(Unit) {
+    // ① 手指拖动时高亮立刻跟随（滑过半页就切），这就是用户要的「跟着一起动」。
+    // key 用 pager：页签集合变化会重建 pager，旧实例上的监听必须跟着换掉
+    LaunchedEffect(pager) {
         snapshotFlow { pager.currentPage }.collect { page ->
-            if (pager.isScrollInProgress && state.screen in TAB_SCREENS) {
-                val target = TAB_ORDER[page]
+            if (pager.isScrollInProgress && isTabScreen) {
+                val target = tabs[page]
                 if (state.navTab != target) state.goTab(target)
             }
         }
     }
 
     // ② 落页后校正一次：程序动画途中被 ① 改掉的 navTab，在停下来时对齐到真实页
-    LaunchedEffect(Unit) {
+    LaunchedEffect(pager) {
         snapshotFlow { pager.settledPage }.collect { page ->
-            if (state.screen in TAB_SCREENS) {
-                val target = TAB_ORDER[page]
+            if (isTabScreen) {
+                val target = tabs[page]
                 if (state.navTab != target) state.goTab(target)
             }
         }
@@ -250,10 +275,10 @@ fun PaperMillRoot(state: AppState) {
 
     // ③ 点 dock / 从子页面回来时把 pager 挪过去。
     // 手指正在滑的时候不发指令，否则松手那刻 settle 还没走完就被抢走。
-    LaunchedEffect(Unit) {
+    LaunchedEffect(pager) {
         snapshotFlow { state.navTab }.collect { tab ->
-            if (state.screen !in TAB_SCREENS || pager.isScrollInProgress) return@collect
-            val idx = TAB_ORDER.indexOf(tab)
+            if (!isTabScreen || pager.isScrollInProgress) return@collect
+            val idx = tabs.indexOf(tab)
             if (idx < 0 || pager.currentPage == idx) return@collect
             // 相邻页滑过去（手感连续、能看到内容跟手）；
             // **跨页直接瞬切**，不扫过中间页。
@@ -280,7 +305,7 @@ fun PaperMillRoot(state: AppState) {
 
     val (title, subtitle) = screenTitle(state)
     // 页签页不显示返回箭头（现代 App 惯例），子页面才显示
-    val onBack: (() -> Unit)? = if (state.screen in TAB_SCREENS) null else ({ state.back() })
+    val onBack: (() -> Unit)? = if (isTabScreen) null else ({ state.back() })
 
     Box(Modifier.fillMaxSize().background(PaperColors.Background)) {
         // 内容层一路铺到屏幕底部：滚动内容会从 dock 背后穿过去，玻璃质感才透得出来
@@ -294,7 +319,7 @@ fun PaperMillRoot(state: AppState) {
             )
 
             Box(Modifier.weight(1f)) {
-                if (state.screen in TAB_SCREENS) {
+                if (isTabScreen) {
                     HorizontalPager(
                         state = pager,
                         modifier = Modifier.fillMaxSize(),
@@ -303,7 +328,10 @@ fun PaperMillRoot(state: AppState) {
                         // Compose 1.6 里这个参数叫 beyondBoundsPageCount（1.7 才改名）。
                         beyondBoundsPageCount = 1,
                     ) { page ->
-                        val tab = TAB_ORDER[page]
+                        // 页签可以在「更多」里随时增删，pager 的页数与 tabs 长度不一定
+                        // 同一帧对齐（少一个时 pageCount 先变、当前页后夹），
+                        // 这里取不到就直接不排 —— 宁可空一帧，也不要 ArrayIndexOutOfBounds
+                        val tab = tabs.getOrNull(page) ?: return@HorizontalPager
                         // 用 LazyColumn 而不是 Column + verticalScroll：
                         // 原来「打印纸」页一次性组合 36 张带 elevation 阴影的卡，
                         // 滑动时前后两页同时在场，首帧要摆上百个阴影节点 —— 这就是卡顿的主因。
@@ -323,6 +351,13 @@ fun PaperMillRoot(state: AppState) {
                                 NavTab.HOME -> homeScreenItems(state, scope)
                                 NavTab.REFERENCE -> referenceScreenItems(state, scope)
                                 NavTab.MISTAKES -> mistakesScreenItems(state)
+                                NavTab.HISTORY -> historyScreenItems(
+                                    state, scope,
+                                    onImport = { importLauncher.launch("*/*") },
+                                )
+                                // 课本页本身就是「一串卡片」，内部没有嵌套滚动，整块塞进一个
+                                // item 是安全的；它的单元列表最多几十行，一次性组合也无所谓。
+                                NavTab.TEXTBOOK -> item { TextbookScreen(state, scope) }
                                 NavTab.MORE -> moreScreenItems(
                                     state, scope,
                                     onImport = { importLauncher.launch("*/*") },
@@ -354,9 +389,7 @@ fun PaperMillRoot(state: AppState) {
                         when (state.screen) {
                             Screen.CREATE -> CreateScreen(state, scope)
                             Screen.PREVIEW -> PreviewScreen(state, scope, activity)
-                            Screen.HISTORY -> HistoryScreen(state, scope) { importLauncher.launch("*/*") }
                             Screen.HELP -> HelpScreen(state)
-                            Screen.TEXTBOOK -> TextbookScreen(state, scope)
                             Screen.LOCAL_PDF -> LocalPdfScreen(state) {
                                 pdfLauncher.launch(arrayOf("application/pdf"))
                             }
@@ -368,10 +401,10 @@ fun PaperMillRoot(state: AppState) {
             }
         }
 
-        // 浮层：提示条与操作条固定在 dock 上方，dock 本身贴底
-        Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth()) {
-            ToastBar(state.toast) { state.clearToast() }
-
+        // 浮层：操作条固定在 dock 上方，dock 本身贴底。
+        // 提示条**不在**这个 Column 里（见下面）：它一出现就把按钮整体顶上去，是「抖一下」的来源。
+        Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth()) {
+            Column(Modifier.fillMaxWidth()) {
             when (state.screen) {
                 Screen.HOME -> StickyBar {
                     SecondaryButton(
@@ -429,6 +462,21 @@ fun PaperMillRoot(state: AppState) {
                 else -> Unit
             }
             Spacer(Modifier.height(DOCK_SPACE))
+            }
+
+            // 提示条浮在操作条上方，不参与排版：
+            // 原来它和操作条同在一条 Column 里，弹一条「已生成 32 题」会把
+            // 底部的两个按钮整体往上顶 60dp，6 秒后再落回来 —— 就是用户说的
+            // 「点某个会滑动，还会自己抖动一下」。
+            val barH = if (state.screen in STICKY_BAR_SCREENS) PaperDimens.ActionBarH else 0.dp
+            Box(
+                Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .padding(bottom = DOCK_SPACE + barH + 4.dp),
+            ) {
+                ToastBar(state.toast) { state.clearToast() }
+            }
         }
 
         FloatingDock(
@@ -442,7 +490,166 @@ fun PaperMillRoot(state: AppState) {
                 pager.currentPage + pager.currentPageOffsetFraction
             },
         ) { tab -> state.goTab(tab) }
+
+        // 批改面板压在整棵界面上（v0.18.0）：预览页和试卷库都要能开它，
+        // 所以放在根节点只挂一份，不在两个页面各写一遍
+        state.grading?.let { session ->
+            GradingDialog(
+                session = session,
+                onDismiss = { state.grading = null },
+                onConfirm = { state.finishGrading(it) },
+            )
+        }
     }
+}
+
+/**
+ * 「批改记错题」面板（v0.18.0）。
+ *
+ * 用户的原话是「孩子做完了哪些是错题如何快速记录下来」——
+ * 旧流程是「进预览页 → 展开题目清单 → 一题一题勾 checkbox → 点加入错题本」，
+ * 一张 20 题的卷子要点二十多下，还都是小方块，家长一边看纸一边戳屏幕很难对准。
+ *
+ * 这里给两条路，按题量自己选：
+ *  - 题少（十来道）：直接点数字格子，一格一题，手指粗也不容易点错；
+ *  - 题多：在输入框里敲「3 7 12-15」，照着自己用笔在卷子上标的号念一遍就行。
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun GradingDialog(
+    session: GradingSession,
+    onDismiss: () -> Unit,
+    onConfirm: (Set<Int>) -> Unit,
+) {
+    // 面板重开时清空：上一张卷勾的号不能带到这张卷上
+    var picked by remember(session.paperId, session.title) { mutableStateOf(emptySet<Int>()) }
+    var typed by remember(session.paperId, session.title) { mutableStateOf("") }
+    var hint by remember(session.paperId, session.title) { mutableStateOf("") }
+    val valid = remember(session) { session.items.map { it.no }.toSet() }
+
+    val toggle: (Int) -> Unit = { no ->
+        picked = if (no in picked) picked - no else picked + no
+    }
+
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(20.dp))
+                .background(PaperColors.Surface)
+                .padding(18.dp),
+        ) {
+            Text("批改记错题", fontSize = 18.sp, fontWeight = FontWeight.SemiBold, color = PaperColors.OnSurface)
+            Spacer(Modifier.height(3.dp))
+            Text(
+                "${session.title} · ${session.items.size} 题",
+                fontSize = PaperDimens.CaptionSp,
+                color = PaperColors.OnSurfaceVariant,
+            )
+            Spacer(Modifier.height(12.dp))
+
+            // 题号网格：一屏放得下就直接点，放不下就自己滚
+            Box(Modifier.fillMaxWidth().heightIn(max = 268.dp).verticalScroll(rememberScrollState())) {
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(7.dp),
+                    verticalArrangement = Arrangement.spacedBy(7.dp),
+                ) {
+                    session.items.forEach { item ->
+                        val on = item.no in picked
+                        Box(
+                            Modifier
+                                .width(42.dp)
+                                .height(38.dp)
+                                .clip(RoundedCornerShape(11.dp))
+                                .background(
+                                    if (on) PaperColors.ErrorContainer else PaperColors.SurfaceAlt
+                                )
+                                .clickable { toggle(item.no) },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                "${item.no}",
+                                fontSize = PaperDimens.LabelSp,
+                                fontWeight = if (on) FontWeight.Bold else FontWeight.Normal,
+                                color = if (on) PaperColors.Error else PaperColors.OnSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(12.dp))
+            Field3(
+                value = typed,
+                onValueChange = { typed = it; hint = "" },
+                placeholder = "也可以直接敲题号：3 7 12-15",
+            )
+            Spacer(Modifier.height(7.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    hint.ifEmpty { if (typed.isBlank()) "" else "点右边套用，会累加到上面已点的题号上" },
+                    fontSize = PaperDimens.TinySp,
+                    color = if (hint.isEmpty()) PaperColors.Muted else PaperColors.Error,
+                    modifier = Modifier.weight(1f),
+                    lineHeight = 15.sp,
+                )
+                MiniAction("套用题号") {
+                    val parsed = parseNumberList(typed, valid)
+                    if (parsed.isEmpty()) {
+                        hint = "没读出题号，写成 3 7 12-15 这样试试"
+                    } else {
+                        picked = picked + parsed
+                        typed = ""
+                        hint = ""
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(14.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+                SecondaryButton("取消", modifier = Modifier.weight(1f)) { onDismiss() }
+                PrimaryButton(
+                    if (picked.isEmpty()) "加入错题本" else "加入错题本（${picked.size} 题）",
+                    enabled = picked.isNotEmpty(),
+                    modifier = Modifier.weight(1.3f),
+                ) { onConfirm(picked) }
+            }
+            if (session.items.any { it.no > 0 }) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "只会存题目和答案，不会拍照、不会上传；同一个题号重复记只算「又错一次」。",
+                    fontSize = PaperDimens.TinySp,
+                    color = PaperColors.Muted,
+                    lineHeight = 15.sp,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 把「3 7 12-15」解析成题号集合。
+ *
+ * 分隔符任由用户敲：空格、逗号、顿号、中文逗号都认 ——
+ * 家长多半是照着自己卷子上用笔标的号念，标点是什么随手就来。
+ * 区间只认横杠（半角、全角、波浪号都收），越界的号直接丢掉而不是报错：
+ * 敲错一个号不该让整次输入白费。
+ */
+private fun parseNumberList(raw: String, valid: Set<Int>): Set<Int> {
+    val out = mutableSetOf<Int>()
+    raw.split(' ', ',', '，', '、', ';', '；', '\n', '\t').filter { it.isNotBlank() }.forEach { token ->
+        val m = Regex("^(\\d+)\\s*[-~～－—]\\s*(\\d+)$").find(token.trim())
+        if (m != null) {
+            val a = m.groupValues[1].toIntOrNull()
+            val b = m.groupValues[2].toIntOrNull()
+            if (a != null && b != null) {
+                for (n in minOf(a, b)..maxOf(a, b)) if (n in valid) out += n
+            }
+        } else {
+            token.trim().toIntOrNull()?.let { if (it in valid) out += it }
+        }
+    }
+    return out
 }
 
 private fun screenTitle(state: AppState): Pair<String, String> = when (state.screen) {
@@ -459,7 +666,7 @@ private fun screenTitle(state: AppState): Pair<String, String> = when (state.scr
     Screen.MISTAKES -> "错题本" to "数据只存在这台手机"
     Screen.MORE -> "更多" to "数据 / 打印 / 更新 / 关于"
     Screen.TEXTBOOK -> "课本" to "按单元出卷 · 教材原文在线阅读"
-    Screen.HISTORY -> "试卷库" to "只存题目快照，随时重开"
+    Screen.HISTORY -> "试卷库" to "最近的卷子 · 可重新打开或改参数再出一张"
     Screen.HELP -> "打印帮助" to "在家打印与远程打印两种方式"
     Screen.LOCAL_PDF -> "打印本地 PDF" to (state.localPdf?.let { "${it.pages} 页 · ${it.name}" } ?: "选一个 PDF")
 }
@@ -836,6 +1043,68 @@ private fun CreateScreen(state: AppState, scope: CoroutineScope) {
         }
     }
 
+    // ============================================================
+    // 页脚那行字（v0.18.0 从「卷面设置」折叠区提出来）
+    // ============================================================
+    // 用户问「卷子左下角的文字怎么自定义」，而它原来埋在
+    // 「04 卷面设置」→ 展开 → 中间那一组的第二颗 chip 后面，
+    // 找得到才怪。这行字每张卷子都会印，属于高频定制项，
+    // 所以提到和实时预览并排的位置，不展开也能改。
+    Spacer(Modifier.height(16.dp))
+    CardSection(title = "页脚那行字", hint = "印在每页左下角") {
+        Field3(
+            value = if (state.footerMode == 1) state.footerCustom else "",
+            onValueChange = {
+                state.footerCustom = it
+                // 一动手打字就切到「自定义」：不然用户敲了半天，纸上还是默认那句
+                if (state.footerMode != 1) state.footerMode = 1
+                state.saveSettings()
+            },
+            placeholder = "例如：三（2）班　周末练习　做完请家长签字",
+        )
+        Spacer(Modifier.height(9.dp))
+        SettingRow("用哪种") {
+            ChoiceChip("默认文字", state.footerMode == 0) {
+                state.footerMode = 0
+                state.saveSettings()
+            }
+            ChoiceChip("我写的", state.footerMode == 1) {
+                state.footerMode = 1
+                state.saveSettings()
+            }
+            ChoiceChip("不印", state.footerMode == 2) {
+                state.footerMode = 2
+                state.saveSettings()
+            }
+        }
+        Spacer(Modifier.height(9.dp))
+        SettingRow("生成时间") {
+            // 页脚整条不印时这两颗点不动：时间本来就没地方印
+            ChoiceChip("印在右侧", state.showCreatedAt, enabled = state.footerMode != 2) {
+                state.showCreatedAt = true
+                state.saveSettings()
+            }
+            ChoiceChip("不印", !state.showCreatedAt, enabled = state.footerMode != 2) {
+                state.showCreatedAt = false
+                state.saveSettings()
+            }
+        }
+        Spacer(Modifier.height(9.dp))
+        Text(
+            when {
+                state.footerMode == 2 ->
+                    "页脚整条不印：文字、时间、分隔线一起去掉，正文能多吃 26pt（约一行题）。"
+                state.footerMode == 1 && state.footerCustom.isBlank() ->
+                    "还没写内容 —— 现在纸上印的是空白页脚，写一句话或选「默认文字」。"
+                !state.showCreatedAt -> "只印左边你写的那行字，不带时间戳。"
+                else -> "左边是你写的字，右边是生成时间，两者不会撞在一起。"
+            },
+            fontSize = PaperDimens.TinySp,
+            color = PaperColors.OnSurfaceVariant,
+            lineHeight = 15.sp,
+        )
+    }
+
     Spacer(Modifier.height(16.dp))
     SectionLabel("01", "自由组合", "共 ${state.totalQuestions} 题 · 预计 ${state.estimatedPages} 页")
     Spacer(Modifier.height(8.dp))
@@ -1137,56 +1406,8 @@ private fun CreateScreen(state: AppState, scope: CoroutineScope) {
                 color = PaperColors.OnSurfaceVariant,
                 lineHeight = 15.sp,
             )
-            Divider()
-            SettingRow("页脚") {
-                ChoiceChip("默认文字", state.footerMode == 0) {
-                    state.footerMode = 0
-                    state.saveSettings()
-                }
-                ChoiceChip("自定义", state.footerMode == 1) {
-                    state.footerMode = 1
-                    state.saveSettings()
-                }
-                ChoiceChip("不印", state.footerMode == 2) {
-                    state.footerMode = 2
-                    state.saveSettings()
-                }
-            }
-            if (state.footerMode == 1) {
-                Field3(
-                    value = state.footerCustom,
-                    onValueChange = {
-                        state.footerCustom = it
-                        state.saveSettings()
-                    },
-                    placeholder = "例如：三（2）班　周末练习　做完请家长签字",
-                    label = "页脚文字",
-                )
-            }
-            SettingRow("生成时间") {
-                // 页脚整条不印时，这两颗也点不动：时间本来就没地方印
-                ChoiceChip("印在页脚右侧", state.showCreatedAt, enabled = state.footerMode != 2) {
-                    state.showCreatedAt = true
-                    state.saveSettings()
-                }
-                ChoiceChip("不印", !state.showCreatedAt, enabled = state.footerMode != 2) {
-                    state.showCreatedAt = false
-                    state.saveSettings()
-                }
-            }
-            Text(
-                when {
-                    state.footerMode == 2 ->
-                        "页脚整条不印时，左边的文字和右边的生成时间都不印，分隔线也去掉，正文多吃 26pt。"
-                    !state.showCreatedAt ->
-                        "只印左边的文字，不带时间戳。"
-                    else ->
-                        "页脚左边是你写的文字，右边是生成时间，两者不会撞在一起。"
-                },
-                fontSize = PaperDimens.TinySp,
-                color = PaperColors.OnSurfaceVariant,
-                lineHeight = 15.sp,
-            )
+            // 页脚那三组控件（文字 / 生成时间）已经提到上面的独立卡片里，
+            // 这里不再重复放 —— 两处都能改同一份设置，用户会怀疑哪一处才是真的。
             Divider()
             Spacer(Modifier.height(10.dp))
             Field3(
@@ -1634,13 +1855,24 @@ private fun PreviewScreen(
         }
         Spacer(Modifier.height(10.dp))
         if (!isRef) {
+            // v0.18.0：批改入口提到这里。原来只有一句「到题目清单勾错题」的说明文字，
+            // 家长根本不知道该点哪儿；给一颗正式的按钮，点开就是题号表。
+            SecondaryButton("批改记错题", modifier = Modifier.fillMaxWidth()) {
+                state.startGrading()
+            }
             Text(
-                "批改后到「题目清单」勾错题；也可以换题、删题、加题。",
+                "孩子做完后点上面这颗按钮，把错题的题号点一遍（或直接敲 3 7 12-15），" +
+                    "它们就会进错题本；换题、删题、加题在下面的「题目清单」里。",
                 fontSize = PaperDimens.CaptionSp,
                 color = PaperColors.OnSurfaceVariant,
+                lineHeight = 16.sp,
+                modifier = Modifier.padding(top = 7.dp),
             )
+            // 图片导出是另一件事，和上面的批改不是一个话题，隔一条线分开
+            Spacer(Modifier.height(12.dp))
+            Divider()
+            Spacer(Modifier.height(12.dp))
             // 图片导出：奔图云打印小程序、微信里的打印号只收图片不收 PDF
-            Spacer(Modifier.height(9.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 SecondaryButton(
                     if (state.busy) "正在导出…" else "存成图片（每页一张 PNG）",
@@ -1668,7 +1900,7 @@ private fun PreviewScreen(
             )
         }
     } else {
-        CardSection(title = "题目清单", hint = "勾题进错题本 · 可单题换 / 删 / 加") {
+        CardSection(title = "题目清单", hint = "可单题换 / 删 / 加 · 勾完点「加入错题本」") {
             MiniAction("+ 在末尾加一题", enabled = !state.busy) {
                 scope.launch { state.appendQuestion() }
             }
@@ -1900,7 +2132,9 @@ private fun LazyListScope.mistakesScreenItems(state: AppState) {
         item(key = "mistake-${m.id}") {
             CardSection(
                 title = "第 ${m.sourceNo} 题 · ${m.topic}",
-                hint = "${GradeProfiles.gradeLabel(m.grade)} · ${m.type}",
+                // 题型要印中文名：这里原来直接把枚举名吐出来，界面上写的是「三年级 · ORAL」
+                hint = "${GradeProfiles.gradeLabel(m.grade)} · " +
+                    runCatching { QuestionType.valueOf(m.type).label }.getOrDefault(m.type),
             ) {
                 Text(m.stem, fontSize = PaperDimens.BodySp, color = PaperColors.OnSurface, lineHeight = 18.sp)
                 Spacer(Modifier.height(5.dp))
@@ -1920,7 +2154,8 @@ private fun LazyListScope.mistakesScreenItems(state: AppState) {
         item {
             CardSection(title = "还没有错题") {
                 Text(
-                    "打印并批改后，到试卷预览的「题目清单」勾做错的题，就会进这里。",
+                    "批改完回到「试卷库」，点那张卷子的「批改记错题」，把错题号点一遍就会进这里；" +
+                        "也可以从试卷预览页点「批改记错题」。",
                     fontSize = PaperDimens.BodySp,
                     color = PaperColors.OnSurfaceVariant,
                 )
@@ -1955,24 +2190,57 @@ private fun LazyListScope.moreScreenItems(
 
     item { Spacer(Modifier.height(PaperDimens.Gap)) }
     item {
-        CardSection(title = "外观") {
+        CardSection(
+            title = "底部 tab 栏",
+            hint = "关掉的入口会从底部暂时消失，随时能在这里打开",
+        ) {
             ListRow(
-                "半透明玻璃 tab 栏",
-                if (state.dockGlass) {
-                    "已开启：tab 栏半透明，滚动内容会从背后透出来"
-                } else {
-                    "已关闭：不透明实底（默认），文字最清楚"
-                },
+                "半透明玻璃",
+                if (state.dockGlass) "已开启：滚动内容会从 tab 栏背后透出来"
+                else "已关闭：不透明实底（默认），文字最清楚",
                 trailing = if (state.dockGlass) "开" else "关",
             ) { state.updateDockGlass(!state.dockGlass) }
+
+            // 每个页签一行开关；「更多」是这套设置的入口，关了就再也进不来，所以固定住
+            NavTab.entries.forEach { tab ->
+                Divider()
+                val on = tab in state.dockTabs
+                val fixed = tab == NavTab.MORE
+                ListRow(
+                    tab.label,
+                    when {
+                        fixed -> "设置入口，固定显示"
+                        on -> "显示在 tab 栏上"
+                        else -> "已隐藏 · 这个页面暂时进不去"
+                    },
+                    trailing = if (fixed) "固定" else if (on) "显示" else "隐藏",
+                ) {
+                    state.toggleDockTab(tab)?.let { state.toast = it }
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "至少保留两个页签。隐藏不是删除：试卷库、课本里的内容都还在，" +
+                    "重新打开就能看到。",
+                fontSize = PaperDimens.TinySp,
+                color = PaperColors.Muted,
+                lineHeight = 15.sp,
+            )
         }
     }
 
     item { Spacer(Modifier.height(PaperDimens.Gap)) }
     item {
         CardSection(title = "数据") {
-            ListRow("试卷库", "${state.savedPapers.size} 张卷子") { state.screen = Screen.HISTORY }
-            Divider()
+            // 试卷库已经是页签时就别再摆一行重复入口；
+            // 被隐藏时这里补一条，免得数据彻底摸不到
+            if (NavTab.HISTORY !in state.dockTabs) {
+                ListRow("试卷库", "${state.savedPapers.size} 张卷子") {
+                    state.toggleDockTab(NavTab.HISTORY)
+                    state.goTab(NavTab.HISTORY)
+                }
+                Divider()
+            }
             ListRow("分享备份文件", "导出 JSON，含试卷库与错题本") { state.shareBackup() }
             Divider()
             ListRow("从备份恢复", "选择之前导出的 JSON") { onImport() }
@@ -1982,8 +2250,13 @@ private fun LazyListScope.moreScreenItems(
     item { Spacer(Modifier.height(PaperDimens.Gap)) }
     item {
         CardSection(title = "打印与更新") {
-            ListRow("课本", "按单元出卷 · 教材原文在线阅读") { state.screen = Screen.TEXTBOOK }
-            Divider()
+            if (NavTab.TEXTBOOK !in state.dockTabs) {
+                ListRow("课本", "按单元出卷 · 教材原文在线阅读") {
+                    state.toggleDockTab(NavTab.TEXTBOOK)
+                    state.goTab(NavTab.TEXTBOOK)
+                }
+                Divider()
+            }
             ListRow("打印手机里的 PDF", "老师发的卷子 / 自己下的材料，直接打") { onPickPdf() }
             Divider()
             ListRow("打印帮助", "在家 / 远程两种方式") { state.screen = Screen.HELP }
@@ -2387,30 +2660,96 @@ private fun LocalPdfScreen(state: AppState, onPick: () -> Unit) {
     }
 }
 
-@Composable
-private fun HistoryScreen(state: AppState, scope: CoroutineScope, onImport: () -> Unit) {    CardSection {
-        Row(horizontalArrangement = Arrangement.spacedBy(PaperDimens.GapSmall)) {
-            SecondaryButton("分享备份", modifier = Modifier.weight(1f)) { state.shareBackup() }
-            SecondaryButton("从备份恢复", modifier = Modifier.weight(1f)) { onImport() }
+/**
+ * 试卷库（v0.18.0 从「更多」里的子页面提升为独立页签）。
+ *
+ * 每张卷子给三个动作，对应三种真实场景：
+ *  - 打开：原样再看一遍 / 再打印一次（题目就是当时那批）；
+ *  - 改参数：拿它当模板再出一张新的（改了题量、加了题型才有意义）；
+ *  - 批改：孩子做完了，照着一题一题把错号点出来 → 进错题本。
+ * 第三个是这次新加的：原来要「进预览 → 展开题目清单 → 逐题勾 → 点加入」四步，
+ * 现在一点就开面板。
+ */
+private fun LazyListScope.historyScreenItems(
+    state: AppState,
+    scope: CoroutineScope,
+    onImport: () -> Unit,
+) {
+    item {
+        CardSection(title = "备份", hint = "换手机 / 重装前先用它") {
+            Row(horizontalArrangement = Arrangement.spacedBy(PaperDimens.GapSmall)) {
+                SecondaryButton("分享备份", modifier = Modifier.weight(1f)) { state.shareBackup() }
+                SecondaryButton("从备份恢复", modifier = Modifier.weight(1f)) { onImport() }
+            }
         }
     }
-    Spacer(Modifier.height(PaperDimens.Gap))
-    state.savedPapers.forEach { p ->
-        CardSection {
-            ListRow(
-                p.title,
-                "${GradeProfiles.gradeLabel(p.grade)} · ${p.questions.size} 题 · ${p.counts.size} 种题型",
-                trailing = "打开 ›",
-            ) { scope.launch { state.reopen(p) } }
-        }
-        Spacer(Modifier.height(PaperDimens.GapSmall))
-    }
+
     if (state.savedPapers.isEmpty()) {
-        CardSection(title = "还没有生成过卷子") {
-            Text("回「出卷」挑一张卷子，生成后会自动存到这里。", fontSize = PaperDimens.BodySp)
+        item { Spacer(Modifier.height(PaperDimens.Gap)) }
+        item {
+            CardSection(title = "还没有生成过卷子") {
+                Text(
+                    "回「出卷」挑一张卷子，生成后会自动存到这里。",
+                    fontSize = PaperDimens.BodySp,
+                    color = PaperColors.OnSurfaceVariant,
+                )
+            }
+        }
+        return
+    }
+
+    item { Spacer(Modifier.height(PaperDimens.Gap)) }
+    item { SectionLabel("01", "最近的卷子", "${state.savedPapers.size} 张 · 题目快照永久保留") }
+
+    state.savedPapers.forEach { p ->
+        item(key = "paper-${p.id}") {
+            Spacer(Modifier.height(PaperDimens.GapSmall))
+            PaperHistoryCard(
+                paper = p,
+                busy = state.busy,
+                onOpen = { scope.launch { state.reopen(p) } },
+                onEdit = { state.editSaved(p) },
+                onGrade = { state.startGrading(p) },
+            )
         }
     }
 }
+
+@Composable
+private fun PaperHistoryCard(
+    paper: SavedPaper,
+    busy: Boolean,
+    onOpen: () -> Unit,
+    onEdit: () -> Unit,
+    onGrade: () -> Unit,
+) {
+    val subjectLabel = runCatching { Subject.valueOf(paper.subject).label }.getOrDefault(paper.subject)
+    CardSection {
+        Text(
+            paper.title,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = PaperColors.OnSurface,
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "${GradeProfiles.gradeLabel(paper.grade)} · $subjectLabel · ${paper.questions.size} 题 · " +
+                stampOf(paper.createdAt),
+            fontSize = PaperDimens.CaptionSp,
+            color = PaperColors.OnSurfaceVariant,
+        )
+        Spacer(Modifier.height(10.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            MiniAction("打开", enabled = !busy) { onOpen() }
+            MiniAction("改参数", enabled = !busy) { onEdit() }
+            MiniAction("批改记错题", enabled = !busy) { onGrade() }
+        }
+    }
+}
+
+/** 「MM-dd HH:mm」：卷子列表只需要看出是哪天哪会儿出的，不印年份 */
+private fun stampOf(ts: Long): String =
+    java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.CHINA).format(java.util.Date(ts))
 
 // ------------------------------------------------------------------ 打印帮助
 

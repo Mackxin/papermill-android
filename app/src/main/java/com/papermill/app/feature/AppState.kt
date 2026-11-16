@@ -29,6 +29,7 @@ import com.papermill.app.core.store.AppSettings
 import com.papermill.app.core.store.LocalStore
 import com.papermill.app.core.store.MistakeItem
 import com.papermill.app.core.store.SavedPaper
+import com.papermill.app.core.store.SavedQuestion
 import com.papermill.app.core.store.SessionState
 import com.papermill.app.core.update.UpdateChecker
 import com.papermill.app.domain.content.CurricUnit
@@ -79,8 +80,45 @@ data class LocalPdf(
 
 enum class Screen { HOME, CREATE, PREVIEW, MISTAKES, HISTORY, HELP, REFERENCE, MORE, TEXTBOOK, LOCAL_PDF }
 
-/** 底部 4 个固定页签；PREVIEW / CREATE 归到「出卷」，HISTORY / HELP 归到「更多」 */
-enum class NavTab { HOME, REFERENCE, MISTAKES, MORE }
+/**
+ * 底部 dock 的页签。
+ *
+ * v0.18.0 起把「显示文字」和「对应页面」收进枚举本身：
+ * 原来 `Screens.kt` 里有一份 `TAB_ORDER`、`CommonUi.kt` 里又有一份 `DOCK_TABS`，
+ * 两处硬编码靠一句注释「顺序必须一致」维持，一加页签就错位。
+ * 现在唯一的事实来源是这里，加一个页签只改一处。
+ *
+ * 注意：[label] 会直接印在 dock 上，所以保持 2~3 个字，格子窄时也放得下。
+ */
+enum class NavTab(val label: String, val screen: Screen) {
+    HOME("出卷", Screen.HOME),
+    REFERENCE("打印纸", Screen.REFERENCE),
+    MISTAKES("错题本", Screen.MISTAKES),
+    HISTORY("试卷库", Screen.HISTORY),
+    TEXTBOOK("课本", Screen.TEXTBOOK),
+    MORE("更多", Screen.MORE),
+}
+
+/** 默认全部显示；用户可以在「更多 → tab 栏」里关掉用不上的 */
+private val DEFAULT_DOCK_TABS: List<NavTab> = NavTab.entries.toList()
+
+/** 所有「可以出现在 dock 里」的页面 */
+private val ALL_TAB_SCREENS: Set<Screen> = NavTab.entries.map { it.screen }.toSet()
+
+/**
+ * 一次「批改记错题」的现场（v0.18.0）。
+ *
+ * 记的是**题目快照**而不是 paper 对象：从试卷库直接批改时不需要重新渲染 PDF，
+ * 打开面板就是一张题号表，点几下就进错题本了。
+ * 题目少的时候点格子，题目多的时候直接敲「3 7 12-15」，两条路都留着。
+ */
+data class GradingSession(
+    val paperId: String,
+    val title: String,
+    val grade: Int,
+    val subjectCode: String,
+    val items: List<SavedQuestion>,
+)
 
 private data class Built(
     val paper: GeneratedPaper,
@@ -263,6 +301,88 @@ class AppState(private val rawContext: Context) {
     var dockGlass by mutableStateOf(false)
         private set
 
+    // ---------------- v0.18.0 底部 tab 栏可自定义 ----------------
+
+    /**
+     * dock 上显示哪几个页签，顺序即顺序。
+     *
+     * 为什么连顺序也存：页签数量一多，常用的那个总在最右边很难受；
+     * 存成一串名字后，将来做「长按拖动排序」只是改这个列表，不用再动存储格式。
+     */
+    var dockTabs by mutableStateOf(DEFAULT_DOCK_TABS)
+        private set
+
+    /** 打开一个页签；它被隐藏时退到「更多」，不会白屏 */
+    fun isTabScreen(s: Screen): Boolean = dockTabs.any { it.screen == s }
+
+    /**
+     * 开 / 关某个页签。
+     *
+     * 三条护栏，缺一条都会出现「进不去也回不来」的死界面：
+     * ① 「更多」不能关 —— 它是这套开关自己的入口，关掉就再也打不开了；
+     * ② 至少留两个 —— 只剩一个时 pager 的滑动、胶囊动画都没有意义；
+     * ③ 正停留在被关掉的那一页时，先退回「更多」再关，否则当前页会从 pager 里消失。
+     */
+    fun toggleDockTab(tab: NavTab): String? {
+        if (tab == NavTab.MORE) return "「更多」是设置入口，不能隐藏"
+        val on = tab in dockTabs
+        if (on && dockTabs.size <= 2) return "至少保留两个页签"
+        // 加回来时按枚举顺序插回原位：「更多」永远在最后，
+        // 否则关掉再打开的那一格会跑到「更多」右边，看着像被挤出去了
+        dockTabs = if (on) dockTabs - tab else (dockTabs + tab).sortedBy { it.ordinal }
+        if (on && screen == tab.screen) screen = Screen.MORE
+        saveSettings()
+        return null
+    }
+
+    // ---------------- v0.18.0 批改记错题 ----------------
+
+    /** 非 null = 批改面板正开着 */
+    var grading by mutableStateOf<GradingSession?>(null)
+
+    /** 从预览页当前这张卷开始批改 */
+    fun startGrading() {
+        val gp = paper ?: run { toast = "还没有生成卷子"; return }
+        grading = GradingSession(
+            paperId = savedPaperId,
+            title = gp.spec.title,
+            grade = gp.spec.grade,
+            subjectCode = gp.spec.subject.code,
+            items = gp.questions.map {
+                SavedQuestion(it.no, it.stem, it.answer, it.type.name, it.topic)
+            },
+        )
+    }
+
+    /** 从试卷库的历史卷开始批改：不重新排版，直接用题目快照 */
+    fun startGrading(saved: SavedPaper) {
+        grading = GradingSession(
+            paperId = saved.id,
+            title = saved.title,
+            grade = saved.grade,
+            subjectCode = saved.subject,
+            items = saved.questions,
+        )
+    }
+
+    fun finishGrading(numbers: Set<Int>) {
+        val g = grading ?: return
+        if (numbers.isEmpty()) {
+            toast = "没有勾任何题"
+            return
+        }
+        val added = LocalStore.addMistakesForPaper(
+            ctx, g.grade, g.subjectCode, g.paperId, g.items, numbers,
+        )
+        grading = null
+        refreshLists()
+        toast = if (added == numbers.size) {
+            "已加入错题本：${added} 道"
+        } else {
+            "已加入 ${added} 道，另外 ${numbers.size - added} 道之前错过（已重置为待练）"
+        }
+    }
+
     /**
      * 按单元出卷时的知识点白名单（空 = 不限制）。
      *
@@ -307,6 +427,7 @@ class AppState(private val rawContext: Context) {
                     footerCustom = footerCustom,
                     showCreatedAt = showCreatedAt,
                     lineGap = lineGap.name,
+                    dockTabs = dockTabs.joinToString(",") { it.name },
                 ),
             )
         }
@@ -321,6 +442,22 @@ class AppState(private val rawContext: Context) {
         footerCustom = s.footerCustom
         showCreatedAt = s.showCreatedAt
         lineGap = LineGap.of(s.lineGap)
+        dockTabs = parseDockTabs(s.dockTabs)
+    }
+
+    /**
+     * 解析存下来的页签串。
+     *
+     * 三个必须兜住的情况：枚举改名（旧名字直接丢掉）、手改过文件（出现脏值）、
+     * 全部解析失败或被清空（回落到默认全集，绝不留一个空 dock 让用户无路可走）。
+     * 「更多」一定要在：它是这套开关的入口。
+     */
+    private fun parseDockTabs(raw: String): List<NavTab> {
+        val parsed = raw.split(',').mapNotNull { name ->
+            NavTab.entries.firstOrNull { it.name == name.trim() }
+        }.distinct().filter { it != NavTab.MORE }
+        val withMore = (parsed + NavTab.MORE).distinct()
+        return if (withMore.size < 2) DEFAULT_DOCK_TABS else withMore
     }
 
     // ---------------------------------------------------------------- 上次位置
@@ -416,6 +553,7 @@ class AppState(private val rawContext: Context) {
         Screen.MORE.name -> Screen.MORE
         Screen.CREATE.name -> Screen.CREATE
         Screen.HISTORY.name -> Screen.HISTORY
+        Screen.TEXTBOOK.name -> Screen.TEXTBOOK
         Screen.HELP.name -> Screen.HELP
         else -> Screen.HOME
     }
@@ -436,12 +574,13 @@ class AppState(private val rawContext: Context) {
 
 
     val navTab: NavTab
-        get() = when (screen) {
-            Screen.REFERENCE -> NavTab.REFERENCE
-            Screen.MISTAKES -> NavTab.MISTAKES
-            Screen.MORE, Screen.HISTORY, Screen.HELP -> NavTab.MORE
-            Screen.PREVIEW -> if (isReference) NavTab.REFERENCE else NavTab.HOME
-            else -> NavTab.HOME
+        get() {
+            // 预览页不属于任何一个页签：速查表预览算「打印纸」，试卷预览算「出卷」
+            if (screen == Screen.PREVIEW) return if (isReference) NavTab.REFERENCE else NavTab.HOME
+            // 子页面一律高亮它所属的页签，否则顶栏有返回键、dock 一个都不亮（像丢了）
+            if (screen == Screen.CREATE) return NavTab.HOME
+            if (screen == Screen.HELP) return NavTab.MORE
+            return NavTab.entries.firstOrNull { it.screen == screen } ?: NavTab.HOME
         }
 
     /**
@@ -456,19 +595,26 @@ class AppState(private val rawContext: Context) {
         toast = ""
         return when (screen) {
             Screen.PREVIEW -> {
-                screen = previewOrigin
+                // 来时的那一页也可能在这期间被用户藏进 tab 栏了，藏了就退回首页
+                screen = if (isTabScreen(previewOrigin) || previewOrigin == Screen.CREATE) {
+                    previewOrigin
+                } else {
+                    Screen.HOME
+                }
                 true
             }
             Screen.CREATE -> {
                 screen = Screen.HOME
                 true
             }
-            // 课本 / 本地 PDF 都是从「更多」进来的子页面，退回去还是「更多」
-            Screen.HISTORY, Screen.HELP, Screen.TEXTBOOK, Screen.LOCAL_PDF -> {
+            // 打印帮助是从「更多」点进来的子页面，退回去还是「更多」
+            Screen.HELP, Screen.LOCAL_PDF -> {
                 screen = Screen.MORE
                 true
             }
-            Screen.REFERENCE, Screen.MISTAKES, Screen.MORE -> {
+            // 页签页：返回键先回首页，首页再按才退出 App
+            Screen.REFERENCE, Screen.MISTAKES, Screen.HISTORY, Screen.TEXTBOOK,
+            Screen.MORE -> {
                 screen = Screen.HOME
                 true
             }
@@ -478,12 +624,9 @@ class AppState(private val rawContext: Context) {
 
     fun goTab(tab: NavTab) {
         toast = ""
-        screen = when (tab) {
-            NavTab.HOME -> Screen.HOME
-            NavTab.REFERENCE -> Screen.REFERENCE
-            NavTab.MISTAKES -> Screen.MISTAKES
-            NavTab.MORE -> Screen.MORE
-        }
+        // 页签被隐藏时它不在 pager 里，直接跳过去会落到空白页
+        if (tab !in dockTabs) return
+        screen = tab.screen
         // 这里原来同步调 refreshLists()（两次 JSON 磁盘读取 + 解析）。
         // 滑到「更多」页的那一帧正好是 pager settle 收尾，主线程一堵就是明显掉帧。
         // 现在交给 MoreScreen 进页时异步刷，见 refreshListsAsync()。
@@ -552,6 +695,9 @@ class AppState(private val rawContext: Context) {
         // 卷面样式（姓名栏 / 一行标题 / 页脚 / 行距）跟着设置一起读回来，
         // 用户上次调好的版式下次开 App 还是那样
         applySettings(LocalStore.loadSettings(ctx))
+        // 上次停在「试卷库」或「课本」，这次那个页签被关掉了 —— 落到首页，
+        // 否则会渲染一个既不在 pager 里、又不是子页面的空白界面
+        if (screen in ALL_TAB_SCREENS && !isTabScreen(screen)) screen = Screen.HOME
         val t5 = android.os.SystemClock.elapsedRealtime()
         counts = PaperComposer.defaultSpec(grade, subjects, tilt, purpose).counts
         val t6 = android.os.SystemClock.elapsedRealtime()
@@ -1136,6 +1282,55 @@ class AppState(private val rawContext: Context) {
     }
 
     /** 试卷库里点一张历史卷：同一种子会生成同一套题 */
+    /**
+     * 「再次编辑」：把一张历史卷的**参数**搬回参数页（v0.18.0）。
+     *
+     * 和 [reopen] 的区别要讲清楚：
+     *  - reopen = 原样再看一遍这张纸（题目是当时生成的那批，参数不重要）；
+     *  - editSaved = 拿这张卷当模板，改题量/加题型/换年级再出一张新的。
+     *
+     * 所以这里必须把 counts 从卷子里读回来 —— 不能像 reopen 那样用
+     * `defaultSpec` 的默认配比，否则用户看到的题量和卷子上印的完全不是一回事。
+     */
+    fun editSaved(saved: SavedPaper) {
+        val s = runCatching { Subject.valueOf(saved.subject) }.getOrDefault(Subject.MATH)
+        grade = saved.grade
+        subject = s
+        subjects = listOf(s)
+        val restored = LinkedHashMap<QuestionType, Int>()
+        saved.counts.forEach { (k, v) ->
+            runCatching { QuestionType.valueOf(k) }.getOrNull()?.let { restored[it] = v }
+        }
+        // 卷里一种题型都读不出来（老版本的备份）时退回默认配比，别给一张空卷
+        counts = if (restored.isEmpty()) {
+            PaperComposer.defaultSpec(grade, subjects, tilt, purpose).counts
+        } else {
+            restored
+        }
+        titleOverride = stripCopyLabel(saved.title)
+        // 换一个新种子再出卷：否则「编辑」出来的和原卷一模一样，看着像没生效
+        previewSeed = System.currentTimeMillis()
+        clearUnitFilter()
+        showAdvanced = false
+        screen = Screen.CREATE
+        toast = "已载入「${saved.title}」的参数，改完再点生成"
+    }
+
+    /**
+     * 去掉标题末尾的「　A 卷 / 　B 卷」。
+     *
+     * 存进试卷库的标题是**已经拼过后缀**的成品（卷头要印），
+     * 拿它当「再次编辑」的模板标题、再走一遍 `currentSpec` 拼后缀，
+     * 就会印出「…数学练习　A 卷　A 卷」。这里只剥后缀，标题正文照旧留用。
+     */
+    private fun stripCopyLabel(title: String): String {
+        COPY_LABELS.forEach { label ->
+            val suffix = "\u3000$label"
+            if (title.endsWith(suffix)) return title.removeSuffix(suffix).trim()
+        }
+        return title
+    }
+
     suspend fun reopen(saved: SavedPaper) {
         grade = saved.grade
         subject = runCatching { Subject.valueOf(saved.subject) }.getOrDefault(Subject.MATH)
