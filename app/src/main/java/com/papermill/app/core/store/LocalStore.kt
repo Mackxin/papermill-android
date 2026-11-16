@@ -51,7 +51,13 @@ data class AppSettings(
     val footerCustom: String = "",
     val showCreatedAt: Boolean = true,
     /** LineGap 的枚举名；存字符串而不是序号，将来加档位不会错位 */
-    val lineGap: String = "NORMAL",
+    val lineGap: String = "COMPACT",
+    /** 行距选「自定义」时的具体 pt 值 */
+    val lineGapCustom: Float = 8f,
+    /** 页脚右侧印「第 N/M 页」 */
+    val showPageNo: Boolean = true,
+    /** 页脚高度档位：SHORT / NORMAL / TALL */
+    val footerSize: String = "NORMAL",
     /**
      * 底部 tab 栏显示哪几个页签（v0.18.0）。
      *
@@ -60,6 +66,16 @@ data class AppSettings(
      * 顺序即展示顺序 —— 用户想「错题本放第一格」也在这一串里表达。
      */
     val dockTabs: String = "HOME,REFERENCE,MISTAKES,HISTORY,TEXTBOOK,MORE",
+    /**
+     * 卷面排版口径的版本号（v0.18.1）。
+     *
+     * 为什么需要它：v0.18.0 及以前行距默认是 NORMAL（撑开上限 34pt），
+     * 用户的原话是「行与行之间间距不要那么宽」。只改代码里的默认值没用 ——
+     * 老用户磁盘上早存了一份 NORMAL，升级后读回来的还是宽行距，
+     * 看起来就像这次改动根本没生效。所以要有个「这份设置是按老口径存的」标记，
+     * 读到 0 就一次性迁移到新默认值。
+     */
+    val layoutVersion: Int = 0,
 )
 
 /**
@@ -136,8 +152,12 @@ object LocalStore {
                 footerMode = o.optInt("footerMode", 0),
                 footerCustom = o.optString("footerCustom", ""),
                 showCreatedAt = o.optBoolean("showCreatedAt", true),
-                lineGap = o.optString("lineGap", "NORMAL"),
+                lineGap = o.optString("lineGap", "COMPACT"),
+                lineGapCustom = o.optDouble("lineGapCustom", 8.0).toFloat(),
+                showPageNo = o.optBoolean("showPageNo", true),
+                footerSize = o.optString("footerSize", "NORMAL"),
                 dockTabs = o.optString("dockTabs", "HOME,REFERENCE,MISTAKES,HISTORY,TEXTBOOK,MORE"),
+                layoutVersion = o.optInt("layoutVersion", 0),
             )
         }.getOrDefault(AppSettings())
     }
@@ -153,7 +173,11 @@ object LocalStore {
                     .put("footerCustom", settings.footerCustom)
                     .put("showCreatedAt", settings.showCreatedAt)
                     .put("lineGap", settings.lineGap)
+                    .put("lineGapCustom", settings.lineGapCustom.toDouble())
+                    .put("showPageNo", settings.showPageNo)
+                    .put("footerSize", settings.footerSize)
                     .put("dockTabs", settings.dockTabs)
+                    .put("layoutVersion", settings.layoutVersion)
                     .toString(2)
             )
         }

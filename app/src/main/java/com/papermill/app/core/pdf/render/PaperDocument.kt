@@ -1,6 +1,7 @@
 package com.papermill.app.core.pdf.render
 
 import com.papermill.app.domain.generate.FigureSpec
+import com.papermill.app.domain.generate.FooterSize
 import com.papermill.app.domain.generate.LineGap
 import com.papermill.app.domain.generate.PageOrientation
 
@@ -59,14 +60,39 @@ data class PaperDocument(
     val footerText: String? = DEFAULT_FOOTER,
     /** 页脚右侧的生成时间（已格式化好的字符串，空串 = 不印） */
     val footerStamp: String = "",
+    /** 页脚右侧再印「第 N / M 页」：每页都印，第一页也有（页眉只有第 2 页起才有） */
+    val showPageNo: Boolean = true,
+    /** 页脚高度档位：这个高度直接从正文可用高度里扣 */
+    val footerSize: FooterSize = FooterSize.NORMAL,
     /** 题间行距档位：紧凑能多塞题，宽松更好写字（见 [LineGap]） */
     val lineGap: LineGap = LineGap.NORMAL,
+    /** 行距选「自定义」时用的具体 pt 值 */
+    val lineGapCustom: Float = 8f,
     /** 竖版 / 横版：决定 PdfDocument 页面宽高，并随结果传给打印框架 */
     val orientation: PageOrientation = PageOrientation.PORTRAIT,
 ) {
-    /** 有没有东西要印在页脚：两样都空时连分隔线一起省掉，正文能多吃 26pt */
+    /**
+     * 题间距下界（撑开算法的起点）。
+     *
+     * 自定义档的 base 与 max 取同一个值：用户说「我就要 8pt」，
+     * 就不该被二分撑开悄悄拉到 20pt —— 那正是「行与行之间太宽」的来源。
+     */
+    val gapBase: Float
+        get() = if (lineGap == LineGap.CUSTOM) lineGapCustom else lineGap.base
+
+    /** 题间距上界（撑开算法的终点）。自定义档不再撑开 */
+    val gapMax: Float
+        get() = if (lineGap == LineGap.CUSTOM) lineGapCustom else lineGap.max
+
+    /**
+     * 有没有东西要印在页脚。
+     *
+     * 三样都空时连分隔线一起省掉，正文能多吃一整条页脚的高度。
+     * 页码默认是开的，所以「整条不印」这个诉求靠 footerText = "" + footerStamp = ""
+     * + showPageNo = false 三者同时成立来表达（见 AppState.footerTextForSpec）。
+     */
     val hasFooter: Boolean
-        get() = (footerText?.isNotEmpty() == true) || footerStamp.isNotEmpty()
+        get() = (footerText?.isNotEmpty() == true) || footerStamp.isNotEmpty() || showPageNo
 
     /** 真正要印的文字：null 走默认文案 */
     val footerResolved: String

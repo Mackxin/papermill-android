@@ -68,7 +68,11 @@ object PaperAssembler {
             footerStamp = if (spec.showCreatedAt && spec.footerText?.isEmpty() != true) {
                 "生成 " + SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.CHINA).format(Date(paper.createdAt))
             } else "",
+            // 页码同理：整条页脚关掉时它也一起不印，否则「不印页脚」等于白说
+            showPageNo = spec.showPageNo && spec.footerText?.isEmpty() != true,
+            footerSize = spec.footerSize,
             lineGap = spec.lineGap,
+            lineGapCustom = spec.lineGapCustom,
             orientation = spec.orientation,
         )
     }

@@ -351,13 +351,45 @@ data class GeneratedSection(
  * 才够用的区间，具体落点由 PaperRenderer 二分试排决定，不是固定步长。
  */
 enum class LineGap(val label: String, val base: Float, val max: Float) {
-    COMPACT("紧凑", 2f, 32f),
-    NORMAL("标准", 4f, 26f),
-    LOOSE("宽松", 7f, 34f),
+    // v0.18.1：max（撑开上限）整体压下来。
+    // 原来 26~34pt 意味着「为了填满一页，题与题之间能拉开一个半行」，
+    // 用户看到的就是「行与行之间太宽」。压到 5~26 之后，
+    // 纸没满时优先靠**多补几道题**去填，而不是把行距撑开。
+    TIGHT("极窄", 0f, 5f),
+    COMPACT("紧凑", 1.5f, 9f),
+    NORMAL("标准", 3.5f, 15f),
+    LOOSE("宽松", 7f, 26f),
+
+    /**
+     * 自定义：用 [PaperSpec.lineGapCustom] 里的具体 pt 值。
+     *
+     * base 与 max 取同一个数 —— 「自定义 = 我就要这么宽」，不该再被撑开算法
+     * 偷偷拉大。想让它参与撑开的人用上面三档去调。
+     */
+    CUSTOM("自定义", 0f, 0f),
     ;
 
     companion object {
         fun of(name: String?): LineGap = values().firstOrNull { it.name == name } ?: NORMAL
+    }
+}
+
+/**
+ * 页脚高度档位（v0.18.1）。
+ *
+ * 用户说「高度可以自定义」—— 页脚那一条占多少纸面高度是可以调的：
+ * 想要更紧凑就选「矮」，正文多吃 6pt；觉得那行小字看不清就选「高」，
+ * 字号从 7.5 提到 9pt。**这个高度直接决定正文可用高度**，
+ * 所以它是一个排版参数，而不只是外观。
+ */
+enum class FooterSize(val label: String, val height: Float, val fontSize: Float) {
+    SHORT("矮", 20f, 6.5f),
+    NORMAL("标准", 26f, 7.5f),
+    TALL("高", 32f, 9f),
+    ;
+
+    companion object {
+        fun of(name: String?): FooterSize = values().firstOrNull { it.name == name } ?: NORMAL
     }
 }
 
@@ -409,8 +441,14 @@ data class PaperSpec(
     val footerText: String? = null,
     /** 页脚右侧印生成时间（家长要能看出这是哪天的卷子） */
     val showCreatedAt: Boolean = true,
+    /** 页脚右侧印「第 N / M 页」：每一页都印，包括第一页 */
+    val showPageNo: Boolean = true,
+    /** 页脚高度档位：直接决定正文可用高度 */
+    val footerSize: FooterSize = FooterSize.NORMAL,
     /** 题间行距档位 */
     val lineGap: LineGap = LineGap.NORMAL,
+    /** 行距选「自定义」时用的具体 pt 值（0~24） */
+    val lineGapCustom: Float = 8f,
 )
 
 data class GeneratedPaper(

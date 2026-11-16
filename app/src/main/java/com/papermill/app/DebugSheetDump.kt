@@ -11,6 +11,7 @@ import com.papermill.app.core.pdf.render.PracticeRenderer
 import com.papermill.app.core.pdf.render.ReferenceRenderer
 import com.papermill.app.domain.content.CurriculumBank
 import com.papermill.app.domain.content.ScienceBank
+import com.papermill.app.domain.generate.FooterSize
 import com.papermill.app.domain.generate.GenContext
 import com.papermill.app.domain.generate.LineGap
 import com.papermill.app.domain.generate.PaperComposer
@@ -194,7 +195,7 @@ object DebugSheetDump {
                 ).copy(headerOneLine = true),
                 "no-footer" to PaperComposer.specWith(
                     3, Subject.MATH, mapOf(QuestionType.ORAL to 52),
-                ).copy(footerText = "", showCreatedAt = false),
+                ).copy(footerText = "", showCreatedAt = false, showPageNo = false),
                 "all-tight" to PaperComposer.specWith(
                     3, Subject.MATH, mapOf(QuestionType.ORAL to 52),
                 ).copy(
@@ -203,7 +204,45 @@ object DebugSheetDump {
                     showNameRow = false,
                     footerText = "",
                     showCreatedAt = false,
+                    showPageNo = false,
                 ),
+                // v0.18.1：行距自定义 + 页脚高度两档，看「到底能省多少纸」
+                "gap-tight" to PaperComposer.specWith(
+                    3, Subject.MATH, mapOf(QuestionType.ORAL to 52),
+                ).copy(lineGap = LineGap.TIGHT),
+                "gap-custom6" to PaperComposer.specWith(
+                    3, Subject.MATH, mapOf(QuestionType.ORAL to 52),
+                ).copy(lineGap = LineGap.CUSTOM, lineGapCustom = 6f),
+                "gap-custom12" to PaperComposer.specWith(
+                    3, Subject.MATH, mapOf(QuestionType.ORAL to 52),
+                ).copy(lineGap = LineGap.CUSTOM, lineGapCustom = 12f),
+                "footer-short" to PaperComposer.specWith(
+                    3, Subject.MATH, mapOf(QuestionType.ORAL to 52),
+                ).copy(footerSize = FooterSize.SHORT),
+                "footer-tall" to PaperComposer.specWith(
+                    3, Subject.MATH, mapOf(QuestionType.ORAL to 52),
+                ).copy(footerSize = FooterSize.TALL),
+                // v0.18.1 用户实际那张卷：四个大题、题面长短差得极远。
+                // 「4米26厘米=（ ）厘米」这类长题面会决定整卷统一栏数的上限 ——
+                // 之前用 80 分位算，单位换算被塞进 3 栏，「厘米」单独折到下一行。
+                "unit36-g3" to PaperComposer.specWith(
+                    3, Subject.MATH,
+                    mapOf(
+                        QuestionType.FILL_BLANK to 8,
+                        QuestionType.CHAIN_CALC to 6,
+                        QuestionType.TWO_DIGIT to 5,
+                        QuestionType.UNIT_CONVERT to 17,
+                    ),
+                ),
+                "unit36-tight" to PaperComposer.specWith(
+                    3, Subject.MATH,
+                    mapOf(
+                        QuestionType.FILL_BLANK to 8,
+                        QuestionType.CHAIN_CALC to 6,
+                        QuestionType.TWO_DIGIT to 5,
+                        QuestionType.UNIT_CONVERT to 17,
+                    ),
+                ).copy(lineGap = LineGap.TIGHT),
             )
 
             val report = StringBuilder("名称\t页数\t各页页尾空白(pt)\n")

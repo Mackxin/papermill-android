@@ -23,11 +23,16 @@ object GridPainter {
         grid: PaperGrid,
         g: PageGeometry,
         top: Float,
+        /**
+         * 页脚占的高度（v0.18.1）：用户可以把页脚调矮/调高，
+         * 格子底部必须跟着让，否则「高」档会把格子压到那行小字上。
+         */
+        footerH: Float = 26f,
     ) {
         val left = g.margin
         val right = g.pageW - g.margin
         val width = right - left
-        val bottom = g.contentBottomSafe
+        val bottom = g.contentBottom - footerH
         val cell = if (grid.cell > 0f) grid.cell else grid.style.defaultCell
 
         val frame = tp.rulePaint(0.7f, 0xFF8A8A8A.toInt())
@@ -147,7 +152,7 @@ object GridPainter {
             }
 
             // v0.5.0：主题识字卡走自己的绘制器，hint 已在上面统一扣掉高度
-            GridStyle.THEME_CARD -> ThemeCardPainter.draw(b, tp, grid, g, y0)
+            GridStyle.THEME_CARD -> ThemeCardPainter.draw(b, tp, grid, g, y0, footerH)
 
             // v0.8.0：迷宫纸
             GridStyle.MAZE -> drawMaze(b, tp, left, right, y0, bottom, cell, grid.mazeSeed)

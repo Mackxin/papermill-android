@@ -78,6 +78,7 @@ import com.papermill.app.domain.content.CurriculumBank
 import com.papermill.app.domain.content.TextbookCatalog
 import com.papermill.app.domain.generate.AnswerMode
 import com.papermill.app.domain.generate.GeneratorRegistry
+import com.papermill.app.domain.generate.FooterSize
 import com.papermill.app.domain.generate.GradeProfiles
 import com.papermill.app.domain.generate.LineGap
 import com.papermill.app.domain.generate.PageOrientation
@@ -962,6 +963,10 @@ private fun CreateScreen(state: AppState, scope: CoroutineScope) {
         append(state.headerOneLine).append('|').append(state.showCreatedAt).append('|')
         append(state.footerMode).append('|').append(state.footerCustom).append('|')
         append(state.lineGap.name).append('|')
+        // v0.18.1 的三个新字段也必须进签名，否则调了页码 / 页脚高度 / 自定义行距，
+        // 上面的缩略图还是上一张
+        append(state.lineGapCustom).append('|')
+        append(state.showPageNo).append('|').append(state.footerSize.name).append('|')
         append(state.titleOverride).append('|').append(state.previewSeed)
     }
     LaunchedEffect(signature) {
@@ -1018,6 +1023,13 @@ private fun CreateScreen(state: AppState, scope: CoroutineScope) {
                         fontSize = PaperDimens.CaptionSp,
                         color = PaperColors.Accent,
                         lineHeight = 16.sp,
+                    )
+                    // 还没试排完（fill 仍是 0）：别急着报「已经排满」——
+                    // 用户会看到「最后一页正文 0%」和「已经排满」两句自相矛盾的话
+                    fill <= 0 -> Text(
+                        "正在试排，稍等一下…",
+                        fontSize = PaperDimens.CaptionSp,
+                        color = PaperColors.Muted,
                     )
                     state.autoFillPage -> Text(
                         "自动补满已开启，当前题量已经排满，不需要再加。",
@@ -1090,19 +1102,55 @@ private fun CreateScreen(state: AppState, scope: CoroutineScope) {
             }
         }
         Spacer(Modifier.height(9.dp))
+        // v0.18.1：页码。以前只有「第 2 页起」的页眉里有页码，第一页没有 ——
+        // 一张两页的卷子打印完分开放，首页根本看不出是第几页。
+        SettingRow("页码") {
+            ChoiceChip("第 N/M 页", state.showPageNo, enabled = state.footerMode != 2) {
+                state.showPageNo = true
+                state.saveSettings()
+            }
+            ChoiceChip("不印", !state.showPageNo, enabled = state.footerMode != 2) {
+                state.showPageNo = false
+                state.saveSettings()
+            }
+        }
+        Spacer(Modifier.height(9.dp))
+        // 页脚高度：直接换正文可用高度，所以它不只是外观参数
+        SettingRow("页脚高度") {
+            FooterSize.entries.forEach { size ->
+                ChoiceChip(size.label, state.footerSize == size, enabled = state.footerMode != 2) {
+                    state.footerSize = size
+                    state.saveSettings()
+                }
+            }
+        }
+        Spacer(Modifier.height(9.dp))
         Text(
             when {
                 state.footerMode == 2 ->
-                    "页脚整条不印：文字、时间、分隔线一起去掉，正文能多吃 26pt（约一行题）。"
+                    "页脚整条不印：文字、时间、页码、分隔线一起去掉，正文能多吃 26pt（约一行题）。"
                 state.footerMode == 1 && state.footerCustom.isBlank() ->
                     "还没写内容 —— 现在纸上印的是空白页脚，写一句话或选「默认文字」。"
-                !state.showCreatedAt -> "只印左边你写的那行字，不带时间戳。"
-                else -> "左边是你写的字，右边是生成时间，两者不会撞在一起。"
+                else -> "左边是你写的字，右边依次是生成时间和页码（第 N/M 页），每页都印。"
             },
             fontSize = PaperDimens.TinySp,
             color = PaperColors.OnSurfaceVariant,
             lineHeight = 15.sp,
         )
+        if (state.footerMode != 2) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "页脚高度「${state.footerSize.label}」：占 ${state.footerSize.height}pt 纸面，正文就少这么多。" +
+                    when (state.footerSize) {
+                        FooterSize.SHORT -> "想让正文多排一行就选它。"
+                        FooterSize.NORMAL -> "常规高度，小字清楚又不抢位置。"
+                        FooterSize.TALL -> "字更大更好认，但正文少约半行。"
+                    },
+                fontSize = PaperDimens.TinySp,
+                color = PaperColors.Muted,
+                lineHeight = 15.sp,
+            )
+        }
     }
 
     Spacer(Modifier.height(16.dp))
@@ -1389,18 +1437,56 @@ private fun CreateScreen(state: AppState, scope: CoroutineScope) {
             )
             Divider()
             SettingRow("题间行距") {
-                LineGap.values().forEach { g ->
+                LineGap.entries.forEach { g ->
                     ChoiceChip(g.label, state.lineGap == g) {
                         state.lineGap = g
                         state.saveSettings()
                     }
                 }
             }
+            // 自定义行距：±1pt 微调。用户的原话是「不要那么宽，再窄一点，
+            // 或者后台可以自定义」——三档预设总有一档不对味，就直接给数字。
+            if (state.lineGap == LineGap.CUSTOM) {
+                Spacer(Modifier.height(8.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "题与题之间空 ${state.lineGapCustom.toInt()} pt",
+                        fontSize = PaperDimens.CaptionSp,
+                        color = PaperColors.OnSurface,
+                        modifier = Modifier.weight(1f),
+                    )
+                    MiniAction("−5", enabled = state.lineGapCustom > 0f) {
+                        state.lineGapCustom = (state.lineGapCustom - 5f).coerceIn(0f, 24f)
+                        state.saveSettings()
+                    }
+                    MiniAction("−1", enabled = state.lineGapCustom > 0f) {
+                        state.lineGapCustom = (state.lineGapCustom - 1f).coerceIn(0f, 24f)
+                        state.saveSettings()
+                    }
+                    MiniAction("+1", enabled = state.lineGapCustom < 24f) {
+                        state.lineGapCustom = (state.lineGapCustom + 1f).coerceIn(0f, 24f)
+                        state.saveSettings()
+                    }
+                    MiniAction("+5", enabled = state.lineGapCustom < 24f) {
+                        state.lineGapCustom = (state.lineGapCustom + 5f).coerceIn(0f, 24f)
+                        state.saveSettings()
+                    }
+                }
+            }
             Text(
+                // 数字直接读枚举，别写死 —— 上次调窄了上限，文案还留着旧数字，
+                // 界面说「最多 11pt」而实际是 9pt，对不上账
                 when (state.lineGap) {
-                    LineGap.COMPACT -> "先尽量多塞题（页数最少），再把剩下的空档摊开铺满 —— 最省纸。"
-                    LineGap.NORMAL -> "常规间距，排版后仍会把页尾空白摊平。"
-                    LineGap.LOOSE -> "题与题之间留得更开，方便圈画和写过程；页数可能多一张。"
+                    LineGap.TIGHT ->
+                        "题与题几乎贴着排（0~${LineGap.TIGHT.max.toInt()}pt），只留够分行的缝 —— 最省纸，适合纯口算。"
+                    LineGap.COMPACT ->
+                        "默认档。挤一点，页尾的空档会摊开补到行距上，最多到 ${LineGap.COMPACT.max.toInt()}pt。"
+                    LineGap.NORMAL ->
+                        "常规间距，页尾有空档时会撑开到 ${LineGap.NORMAL.max.toInt()}pt 铺满整页。"
+                    LineGap.LOOSE ->
+                        "题与题留得更开（最多 ${LineGap.LOOSE.max.toInt()}pt），方便圈画和写过程；页数可能多一张。"
+                    LineGap.CUSTOM ->
+                        "严格按你定的间距排，不再自动撑开 —— 选它就一定是你看到的那个宽度。"
                 },
                 fontSize = PaperDimens.TinySp,
                 color = PaperColors.OnSurfaceVariant,

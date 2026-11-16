@@ -42,6 +42,7 @@ import com.papermill.app.domain.generate.GenContext
 import com.papermill.app.domain.generate.GeneratedPaper
 import com.papermill.app.domain.generate.GeneratedQuestion
 import com.papermill.app.domain.generate.GeneratedSection
+import com.papermill.app.domain.generate.FooterSize
 import com.papermill.app.domain.generate.GeneratorRegistry
 import com.papermill.app.domain.generate.GradeProfiles
 import com.papermill.app.domain.generate.LineGap
@@ -152,6 +153,14 @@ private const val COPY_SEED_STEP = 7919L
 /** 导出图片的渲染倍率：A4 竖版 595×842pt × 2.2 ≈ 1309×1852px，放微信里看/打印都清楚 */
 private const val EXPORT_IMAGE_SCALE = 2.2f
 
+/**
+ * 卷面排版口径的版本（v0.18.1）。
+ *
+ * 每次「改了默认样式、且老用户的旧设置必须跟着变」就 +1，并在 [AppState.applySettings]
+ * 里写对应的迁移。只改字段默认值对老用户是无效的 —— 他磁盘上那份设置会被原样读回来。
+ */
+private const val LAYOUT_VERSION = 1
+
 class AppState(private val rawContext: Context) {
 
     private val ctx = rawContext.applicationContext
@@ -214,8 +223,29 @@ class AppState(private val rawContext: Context) {
     /** 页脚右侧印生成时间 */
     var showCreatedAt by mutableStateOf(true)
 
-    /** 题间行距档位 */
-    var lineGap by mutableStateOf(LineGap.NORMAL)
+    /** 页脚右侧印「第 N/M 页」（v0.18.1；第一页也有，页眉只有第 2 页起才有） */
+    var showPageNo by mutableStateOf(true)
+
+    /** 页脚高度档位：矮 / 标准 / 高，直接决定正文可用高度 */
+    var footerSize by mutableStateOf(FooterSize.NORMAL)
+
+    /**
+     * 题间行距档位。
+     *
+     * v0.18.1 默认从「标准」改成「紧凑」：用户的原话是「行与行之间不要那么宽，
+     * 再窄一点」。想要更松的自己往上选，别让所有人一起忍受宽行距。
+     */
+    var lineGap by mutableStateOf(LineGap.COMPACT)
+
+    /**
+     * 行距选「自定义」时用的具体 pt 值（v0.18.1）。
+     *
+     * 用户的原话是「行与行之间不要那么宽，再窄一点，或者后台可以自定义」——
+     * 原来只有三档预设，而且**撑开算法会把题间距拉到 26~34pt**（为了填满纸），
+     * 三档之间的差别被吃掉大半。现在自定义值同时作为撑开的上界，
+     * 选了它就严格按这个间距排，不再偷偷拉开。
+     */
+    var lineGapCustom by mutableStateOf(8f)
 
     /** 页脚最终要印的文字：null 走默认，"" 表示不印 */
     private fun footerTextForSpec(): String? = when (footerMode) {
@@ -427,7 +457,11 @@ class AppState(private val rawContext: Context) {
                     footerCustom = footerCustom,
                     showCreatedAt = showCreatedAt,
                     lineGap = lineGap.name,
+                    lineGapCustom = lineGapCustom,
+                    showPageNo = showPageNo,
+                    footerSize = footerSize.name,
                     dockTabs = dockTabs.joinToString(",") { it.name },
+                    layoutVersion = LAYOUT_VERSION,
                 ),
             )
         }
@@ -442,7 +476,19 @@ class AppState(private val rawContext: Context) {
         footerCustom = s.footerCustom
         showCreatedAt = s.showCreatedAt
         lineGap = LineGap.of(s.lineGap)
+        lineGapCustom = s.lineGapCustom.coerceIn(0f, 24f)
+        showPageNo = s.showPageNo
+        footerSize = FooterSize.of(s.footerSize)
         dockTabs = parseDockTabs(s.dockTabs)
+
+        // v0.18.1 一次性迁移：老版本行距默认 NORMAL，用户反馈「行与行之间太宽」。
+        // 只改默认值不够 —— 磁盘上存的还是 NORMAL，升级后读回来照样宽。
+        // 这里把「没自己动过、还是老默认值」的换成 COMPACT；
+        // 选过 TIGHT / LOOSE / CUSTOM 的一律不动，那是用户明确的意图。
+        if (s.layoutVersion < LAYOUT_VERSION) {
+            if (LineGap.of(s.lineGap) == LineGap.NORMAL) lineGap = LineGap.COMPACT
+            saveSettings()
+        }
     }
 
     /**
@@ -1065,7 +1111,10 @@ class AppState(private val rawContext: Context) {
             headerOneLine = headerOneLine,
             footerText = footerTextForSpec(),
             showCreatedAt = showCreatedAt,
+            showPageNo = showPageNo,
+            footerSize = footerSize,
             lineGap = lineGap,
+            lineGapCustom = lineGapCustom,
         )
     }
 
@@ -1331,6 +1380,24 @@ class AppState(private val rawContext: Context) {
         return title
     }
 
+    /**
+     * 把「当前的卷面样式」套到一份 spec 上（v0.18.1）。
+     *
+     * 重开历史卷原来只搬了标题和种子，页脚 / 行距 / 姓名栏全走 `PaperSpec` 的默认值 ——
+     * 用户明明调好了页脚、选了「极窄」，从试卷库点开一张旧卷，印出来又是默认样式，
+     * 像是设置丢了。卷面样式是「全局偏好」而不是「这张卷的属性」，所以统一在这里盖。
+     */
+    private fun PaperSpec.withCurrentLayout(): PaperSpec = copy(
+        showNameRow = showNameRow,
+        headerOneLine = headerOneLine,
+        footerText = footerTextForSpec(),
+        showCreatedAt = showCreatedAt,
+        showPageNo = showPageNo,
+        footerSize = footerSize,
+        lineGap = lineGap,
+        lineGapCustom = lineGapCustom,
+    )
+
     suspend fun reopen(saved: SavedPaper) {
         grade = saved.grade
         subject = runCatching { Subject.valueOf(saved.subject) }.getOrDefault(Subject.MATH)
@@ -1340,7 +1407,9 @@ class AppState(private val rawContext: Context) {
         busy = true
         try {
             val built = withContext(Dispatchers.IO) {
-                val spec = LocalStore.toSpec(saved).copy(title = saved.title, seed = saved.createdAt)
+                val spec = LocalStore.toSpec(saved)
+                    .copy(title = saved.title, seed = saved.createdAt)
+                    .withCurrentLayout()
                 val gp = PaperComposer.compose(spec)
                 val rendered = PaperRenderer.render(PaperAssembler.build(gp))
                 Built(gp, rendered, PdfPreviewRenderer.render(ctx, rendered.bytes), saved.id)

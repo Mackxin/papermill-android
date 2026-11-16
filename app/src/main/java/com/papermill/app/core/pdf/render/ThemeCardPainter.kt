@@ -30,13 +30,14 @@ object ThemeCardPainter {
         grid: PaperGrid,
         g: PageGeometry,
         top: Float,
+        footerH: Float = 26f,
     ) {
         val cards = grid.themeCards
         if (cards.isEmpty()) return
 
         val left = g.margin
         val width = g.contentW
-        val bottom = g.contentBottomSafe
+        val bottom = g.contentBottom - footerH
         val availH = bottom - top
         if (availH <= 40f) return
 
