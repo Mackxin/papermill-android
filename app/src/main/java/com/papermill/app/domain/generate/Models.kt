@@ -463,6 +463,21 @@ data class PaperSpec(
     val lineGap: LineGap = LineGap.NORMAL,
     /** 行距选「自定义」时用的具体 pt 值（0~24） */
     val lineGapCustom: Float = 8f,
+
+    // ---------------- v0.18.3 页数控制 ----------------
+
+    /**
+     * 正文页数上限。0 = 不限制，按题量自然分页。
+     *
+     * 用户的原话是「可以选择试卷生成几页，这样的话题目可以根据试卷自动压缩
+     * 显示的内容大小」—— 意思是「我只准这张卷印两页，题多你自己压缩塞进去」。
+     *
+     * 语义是**上限**不是定值：题少时自然少页，不硬撑到 N 页（硬撑只能靠放大字号
+     * 或拉行距，两种都会让卷子看起来像排版出错）。答案页不计入这个上限。
+     *
+     * 实现在 PaperRenderer：拿不到就二分缩小正文字号，下限 [MIN_TYPE_SCALE]。
+     */
+    val targetPages: Int = 0,
 )
 
 data class GeneratedPaper(

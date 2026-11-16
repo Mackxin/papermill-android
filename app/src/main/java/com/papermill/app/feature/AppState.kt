@@ -247,6 +247,17 @@ class AppState(private val rawContext: Context) {
      */
     var lineGapCustom by mutableStateOf(8f)
 
+    /**
+     * 正文页数上限（v0.18.3）。0 = 不限制。
+     *
+     * 用户的原话是「可以选择试卷生成几页，这样的话题目可以根据试卷自动压缩
+     * 显示的内容大小」。渲染器拿到的题量如果超出这个数，会二分缩小正文字号
+     * 硬压进去（下限 0.72 倍）；压不进就老实多印一页，不印看不清的卷子。
+     *
+     * 只约束正文，答案页另算。
+     */
+    var targetPages by mutableStateOf(0)
+
     /** 页脚最终要印的文字：null 走默认，"" 表示不印 */
     private fun footerTextForSpec(): String? = when (footerMode) {
         1 -> footerCustom.trim()
@@ -291,6 +302,63 @@ class AppState(private val rawContext: Context) {
     }
     var wrongNumbers by mutableStateOf<Set<Int>>(emptySet())
     var showQuestionList by mutableStateOf(false)
+
+    /**
+     * 题目清单的「批量删题」模式（v0.18.3）。
+     *
+     * 为什么单开一个模式而不是复用错题勾选：那个 checkbox 是「这道做错了」，
+     * 勾完是点「加入错题本」；如果同一套勾选还能一键删除，家长勾好错题、
+     * 手滑点到旁边的删除，半张卷子就没了。两个动作共用一份选择，迟早出事。
+     */
+    var batchSelect by mutableStateOf(false)
+        private set
+
+    /** 批量删题模式下已选中的题号 */
+    var selectedNos by mutableStateOf<Set<Int>>(emptySet())
+        private set
+
+    fun enterBatchSelect() {
+        batchSelect = true
+        selectedNos = emptySet()
+    }
+
+    fun exitBatchSelect() {
+        batchSelect = false
+        selectedNos = emptySet()
+    }
+
+    fun toggleSelect(no: Int) {
+        selectedNos = if (no in selectedNos) selectedNos - no else selectedNos + no
+    }
+
+    fun selectAllQuestions() {
+        selectedNos = paper?.questions?.map { it.no }?.toSet() ?: emptySet()
+    }
+
+    fun clearSelection() {
+        selectedNos = emptySet()
+    }
+
+    /**
+     * 按题号表达式选中，如「3 7 12-15」。
+     *
+     * 复用判分面板那套解析口径：空格/逗号/顿号分隔，`-~～` 都算区间。
+     * 题多的卷子（60 道口算）逐格点太累，敲一串数字快得多。
+     *
+     * @return 实际命中的题数（用户敲了卷里没有的题号时不吭声，只按命中的算）
+     */
+    fun selectByExpr(raw: String): Int {
+        val valid = paper?.questions?.map { it.no }?.toSet() ?: emptySet()
+        val hit = parseNumberList(raw, valid)
+        if (hit.isEmpty()) {
+            // 敲了卷里没有的号：不静默 —— 用户会以为输入框坏了
+            toast = "这些题号不在卷里（卷子共 ${valid.size} 题）"
+            return 0
+        }
+        selectedNos = selectedNos + hit
+        toast = "已选中 ${selectedNos.size} 题"
+        return hit.size
+    }
 
     /**
      * 「加一题」选题型的面板开没开（v0.18.2）。
@@ -470,6 +538,7 @@ class AppState(private val rawContext: Context) {
                     showPageNo = showPageNo,
                     footerSize = footerSize.name,
                     dockTabs = dockTabs.joinToString(",") { it.name },
+                    targetPages = targetPages,
                     layoutVersion = LAYOUT_VERSION,
                 ),
             )
@@ -489,6 +558,7 @@ class AppState(private val rawContext: Context) {
         showPageNo = s.showPageNo
         footerSize = FooterSize.of(s.footerSize)
         dockTabs = parseDockTabs(s.dockTabs)
+        targetPages = s.targetPages.coerceIn(0, 8)
 
         // v0.18.1 一次性迁移：老版本行距默认 NORMAL，用户反馈「行与行之间太宽」。
         // 只改默认值不够 —— 磁盘上存的还是 NORMAL，升级后读回来照样宽。
@@ -1098,7 +1168,12 @@ class AppState(private val rawContext: Context) {
             else ->
                 "${GradeProfiles.stageLabel(grade)} · ${GradeProfiles.gradeLabel(grade)} · ${subject.label}练习"
         }
-        val baseTitle = titleOverride?.takeIf { it.isNotBlank() } ?: autoTitle
+        val current = titleOverride?.takeIf { it.isNotBlank() } ?: autoTitle
+        // titleOverride 可能是「…数学练习　A 卷」（从试卷库改参数、或上一轮生成 A 卷
+        // 时存下来的成品标题）。再拼一次后缀就印成「A 卷　A 卷」——
+        // 截图里已经出现过。只在真的要加后缀时剥旧后缀，用户自己写的
+        // 「…A 卷」在单张卷模式下原样保留。
+        val baseTitle = if (copySuffix.isEmpty()) current else stripCopyLabel(current)
         return PaperSpec(
             grade = grade,
             subject = subject,
@@ -1124,6 +1199,7 @@ class AppState(private val rawContext: Context) {
             footerSize = footerSize,
             lineGap = lineGap,
             lineGapCustom = lineGapCustom,
+            targetPages = targetPages,
         )
     }
 
@@ -1405,6 +1481,7 @@ class AppState(private val rawContext: Context) {
         footerSize = footerSize,
         lineGap = lineGap,
         lineGapCustom = lineGapCustom,
+        targetPages = targetPages,
     )
 
     suspend fun reopen(saved: SavedPaper) {
@@ -1674,6 +1751,46 @@ class AppState(private val rawContext: Context) {
         }
     }
 
+    /**
+     * 删题后重建大题（v0.18.3）：题号连续、标题重印、删空的大题整段去掉。
+     *
+     * 之前只有「加题」会重算标题，删题不会 —— 删掉 3 道口算，标题还印着
+     * 「共 60 分」，底下只剩 27 道；某道大题被删空后，序号还会从「一」跳到「三」。
+     * 这些在纸上一眼就能看出来，属于「程序算的和印的对不上」那类硬伤。
+     */
+    private fun rebuildSections(
+        sections: List<GeneratedSection>,
+        spec: PaperSpec,
+    ): List<GeneratedSection> {
+        var no = 0
+        return sections.filter { it.questions.isNotEmpty() }.mapIndexed { i, s ->
+            val qs = s.questions.map { q -> q.copy(no = ++no) }
+            s.copy(
+                index = i + 1,
+                questions = qs,
+                title = PaperComposer.sectionTitle(
+                    type = s.type,
+                    count = qs.size,
+                    ordinal = i + 1,
+                    prefix = PaperComposer.subjectPrefixFor(spec, s.type),
+                ),
+            )
+        }
+    }
+
+    /** 删掉一组题并重排（单题删除与批量删除共用，两条路的纸上结果必须一致） */
+    private suspend fun commitRemoval(gp: GeneratedPaper, nos: Set<Int>) {
+        val stripped = gp.sections.map { s ->
+            s.copy(questions = s.questions.filter { it.no !in nos })
+        }
+        val sections = rebuildSections(stripped, gp.spec)
+        reRender(gp.copy(sections = sections, questions = sections.flatMap { it.questions }))
+        // 题号整体重排后，之前勾的「第 5 题做错了」已经指向另一道题了 ——
+        // 留着比清掉危险得多：用户点「加入错题本」，进错题本的会是别的题。
+        // 删题属于「整理卷子」阶段，勾错题属于「批改」阶段，清掉不算打断他。
+        wrongNumbers = emptySet()
+    }
+
     /** 换一题：只重出这一道，其它题不动 */
     suspend fun replaceQuestion(no: Int) {
         val gp = paper ?: return
@@ -1705,10 +1822,39 @@ class AppState(private val rawContext: Context) {
         }
         busy = true
         try {
-            val stripped = gp.sections.map { s -> s.copy(questions = s.questions.filter { it.no != no }) }
-            val sections = renumber(stripped)
-            reRender(gp.copy(sections = sections, questions = sections.flatMap { it.questions }))
+            commitRemoval(gp, setOf(no))
             toast = "已删除第 $no 题，题号已顺延"
+        } catch (t: Throwable) {
+            toast = "删除失败：${t.message}"
+        }
+        busy = false
+    }
+
+    /**
+     * 批量删题（v0.18.3）。
+     *
+     * 用户的原话是「题目清单的支持批量删除」—— 一张 60 题的口算卷要删掉中间
+     * 十来道重复的，一题一题点「删这题」要点十几下，而且每删一次整卷重排、
+     * 题号重编，点着点着眼花。这里一次删完、一次重排。
+     *
+     * 两条护栏：「至少留一道题」（跟单题删除一致）；删空的大题整段去掉 ——
+     * 只剩个标题底下一道题都没有，印出来像漏印。
+     */
+    suspend fun removeQuestions(nos: Set<Int>) {
+        val gp = paper ?: return
+        if (nos.isEmpty()) {
+            toast = "先勾选要删的题"
+            return
+        }
+        if (nos.size >= gp.questions.size) {
+            toast = "至少留一道题，不能全删"
+            return
+        }
+        busy = true
+        try {
+            commitRemoval(gp, nos)
+            selectedNos = emptySet()
+            toast = "已删 ${nos.size} 题，还剩 ${gp.questions.size - nos.size} 题"
         } catch (t: Throwable) {
             toast = "删除失败：${t.message}"
         }

@@ -91,6 +91,18 @@ object PaperComposer {
      * [prefix] 由调用方给：出卷时它是「数学·」这种科目前缀（多学科交叉时才加），
      * 加题时按同一规则现算。
      */
+    /**
+     * 大题标题：「一、口算（每题 2 分，共 60 分）」。
+     *
+     * 抽出来的原因（v0.18.3）：预览页删题后标题里的「共 N 分」和中文序号都要重印，
+     * 否则纸上会出现「共 60 分」底下排着 27 道题、序号从「一」跳到「三」。
+     * 加题 / 删题 / 出卷三处必须共用同一份格式。
+     */
+    fun sectionTitle(type: QuestionType, count: Int, ordinal: Int, prefix: String): String =
+        "${CN_NUM.getOrElse(ordinal - 1) { ordinal.toString() }}、" +
+            "$prefix${type.label}" +
+            "（每题 $POINTS_PER_QUESTION 分，共 ${count * POINTS_PER_QUESTION} 分）"
+
     fun sectionOf(
         spec: PaperSpec,
         type: QuestionType,
@@ -100,9 +112,7 @@ object PaperComposer {
         prefix: String = "",
     ): GeneratedSection = GeneratedSection(
         index = ordinal,
-        title = "${CN_NUM.getOrElse(ordinal - 1) { ordinal.toString() }}、" +
-            "$prefix${type.label}" +
-            "（每题 $POINTS_PER_QUESTION 分，共 ${questions.size * POINTS_PER_QUESTION} 分）",
+        title = sectionTitle(type, questions.size, ordinal, prefix),
         type = type,
         questions = questions,
         // 栏数：题型推荐的栏数与用户选的全局栏数取较大者。

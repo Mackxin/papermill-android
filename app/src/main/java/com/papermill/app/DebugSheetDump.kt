@@ -249,21 +249,61 @@ object DebugSheetDump {
                 "word6-g4" to PaperComposer.specWith(
                     4, Subject.MATH, mapOf(QuestionType.WORD_PROBLEM to 6),
                 ),
+                // v0.18.3 页数控制。注意 targetPages 约束的是**正文**，
+                // 答案页另算 —— 所以样本必须让正文本身超过 1 页，否则压根不触发。
+                "free-oral80" to PaperComposer.specWith(
+                    3, Subject.MATH, mapOf(QuestionType.ORAL to 80),
+                ),
+                "limit1-oral80" to PaperComposer.specWith(
+                    3, Subject.MATH, mapOf(QuestionType.ORAL to 80),
+                ).copy(targetPages = 1),
+                "free-unit36x2" to PaperComposer.specWith(
+                    3, Subject.MATH,
+                    mapOf(
+                        QuestionType.FILL_BLANK to 16,
+                        QuestionType.CHAIN_CALC to 12,
+                        QuestionType.TWO_DIGIT to 10,
+                        QuestionType.UNIT_CONVERT to 34,
+                    ),
+                ),
+                "limit1-unit36x2" to PaperComposer.specWith(
+                    3, Subject.MATH,
+                    mapOf(
+                        QuestionType.FILL_BLANK to 16,
+                        QuestionType.CHAIN_CALC to 12,
+                        QuestionType.TWO_DIGIT to 10,
+                        QuestionType.UNIT_CONVERT to 34,
+                    ),
+                ).copy(targetPages = 1),
+                // 竖式每题 3 条答题线，一道占一大块：40 道正常要 4~5 页。
+                // 压 2 页是「真压缩」（期望缩到 0.8 上下），压 1 页必然失败 ——
+                // 正好把「压不进就老实多印一页」这条路也验了
+                "free-vert40" to PaperComposer.specWith(
+                    4, Subject.MATH, mapOf(QuestionType.VERTICAL to 40),
+                ),
+                "limit2-vert40" to PaperComposer.specWith(
+                    4, Subject.MATH, mapOf(QuestionType.VERTICAL to 40),
+                ).copy(targetPages = 2),
+                "limit1-vert40" to PaperComposer.specWith(
+                    4, Subject.MATH, mapOf(QuestionType.VERTICAL to 40),
+                ).copy(targetPages = 1),
             )
 
-            val report = StringBuilder("名称\t页数\t各页页尾空白(pt)\n")
+            val report = StringBuilder("名称\t正文页/总页\t字号缩放\t各页页尾空白(pt)\n")
             cases.forEach { (name, spec) ->
                 try {
                     val paper = PaperComposer.compose(spec)
-                    val bytes = PaperRenderer.render(PaperAssembler.build(paper)).bytes
-                    val pages = PdfPreviewRenderer.render(ctx, bytes, SCALE)
+                    val rendered = PaperRenderer.render(PaperAssembler.build(paper))
+                    val pages = PdfPreviewRenderer.render(ctx, rendered.bytes, SCALE)
                     val blanks = ArrayList<String>()
                     pages.forEachIndexed { i, image ->
                         val bmp = image.asAndroidBitmap()
                         save(dir, "$name-p${i + 1}.png", bmp)
                         blanks.add("%.0f".format(blankAtBottom(bmp)))
                     }
-                    val line = "$name\t${pages.size}\t${blanks.joinToString(" / ")}"
+                    val line = "$name\t${rendered.contentPageCount}/${pages.size}\t" +
+                        "${"%.3f".format(rendered.typeScale)}\t" +
+                        blanks.joinToString(" / ")
                     report.append(line).append('\n')
                     Log.i(TAG, line)
                 } catch (t: Throwable) {

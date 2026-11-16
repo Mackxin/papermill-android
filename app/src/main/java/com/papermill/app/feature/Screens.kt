@@ -753,8 +753,11 @@ private fun AddQuestionDialog(
  * 家长多半是照着自己卷子上用笔标的号念，标点是什么随手就来。
  * 区间只认横杠（半角、全角、波浪号都收），越界的号直接丢掉而不是报错：
  * 敲错一个号不该让整次输入白费。
+ *
+ * v0.18.3 起是 internal：「批量删题」也用这套口径。两处各写一份，
+ * 迟早出现「判分认 12-15、删题不认」。
  */
-private fun parseNumberList(raw: String, valid: Set<Int>): Set<Int> {
+internal fun parseNumberList(raw: String, valid: Set<Int>): Set<Int> {
     val out = mutableSetOf<Int>()
     raw.split(' ', ',', '，', '、', ';', '；', '\n', '\t').filter { it.isNotBlank() }.forEach { token ->
         val m = Regex("^(\\d+)\\s*[-~～－—]\\s*(\\d+)$").find(token.trim())
@@ -1085,6 +1088,8 @@ private fun CreateScreen(state: AppState, scope: CoroutineScope) {
         // 上面的缩略图还是上一张
         append(state.lineGapCustom).append('|')
         append(state.showPageNo).append('|').append(state.footerSize.name).append('|')
+        // v0.18.3：页数上限会改变正文压缩比，缩略图必须跟着重排
+        append(state.targetPages).append('|')
         append(state.titleOverride).append('|').append(state.previewSeed)
     }
     LaunchedEffect(signature) {
@@ -1487,6 +1492,30 @@ private fun CreateScreen(state: AppState, scope: CoroutineScope) {
                 color = PaperColors.OnSurfaceVariant,
             )
             Divider()
+            // v0.18.3：用户的原话是「可以选择试卷生成几页，这样的话题目可以根据
+            // 试卷自动压缩显示的内容大小」。这是**上限**不是定值 —— 题少就自然少页，
+            // 硬撑到 N 页只能靠放大字号或拉行距，两种都像排版出错。
+            SettingRow("正文最多几页") {
+                ChoiceChip("不限", state.targetPages == 0) {
+                    state.targetPages = 0
+                    state.saveSettings()
+                }
+                listOf(1, 2, 3, 4).forEach { n ->
+                    ChoiceChip("$n 页", state.targetPages == n) {
+                        state.targetPages = n
+                        state.saveSettings()
+                    }
+                }
+            }
+            Text(
+                "题多到超过这个页数时，App 会整体缩小字号把内容压进去（最多缩到七成）；" +
+                    "压不进去就老实多印一页 —— 印一张看不清的卷子比多印一张纸糟。" +
+                    "只约束正文，答案页另计。",
+                fontSize = PaperDimens.TinySp,
+                color = PaperColors.OnSurfaceVariant,
+                lineHeight = 15.sp,
+            )
+            Divider()
             SettingRow("生成张数") {
                 ChoiceChip("1 张", state.copies == 1) { state.copies = 1 }
                 ChoiceChip("2 张（A / B 卷）", state.copies == 2) { state.copies = 2 }
@@ -1840,6 +1869,28 @@ private fun PreviewScreen(
                     fontSize = PaperDimens.CaptionSp,
                     color = PaperColors.OnSurfaceVariant,
                 )
+                // v0.18.3：为了压进指定页数缩过字号，必须说清楚 ——
+                // 不说的话用户只会觉得「这版字怎么变小了」，像个 bug
+                val shrink = pdf?.typeScale ?: 1f
+                if (!isRef && shrink < 0.995f) {
+                    Spacer(Modifier.height(3.dp))
+                    Text(
+                        "为压进 ${state.targetPages} 页，正文字号缩到 ${(shrink * 100).toInt()}%",
+                        fontSize = PaperDimens.TinySp,
+                        color = PaperColors.Accent,
+                    )
+                } else if (!isRef && state.targetPages > 0 &&
+                    (pdf?.contentPageCount ?: 0) > state.targetPages
+                ) {
+                    // 压不进就把话说透：用户设了 2 页却拿到 3 页，不解释等于「这个设置坏了」
+                    Spacer(Modifier.height(3.dp))
+                    Text(
+                        "题量太多，缩到最小也塞不进 ${state.targetPages} 页，已按原字号排" +
+                            "${pdf?.contentPageCount} 页",
+                        fontSize = PaperDimens.TinySp,
+                        color = PaperColors.Accent,
+                    )
+                }
             }
             if (!isRef) {
                 StatChip(
@@ -2104,19 +2155,81 @@ private fun PreviewScreen(
             )
         }
     } else {
-        CardSection(title = "题目清单", hint = "可单题换 / 删 / 加 · 勾完点「加入错题本」") {
+        CardSection(
+            title = "题目清单",
+            hint = if (state.batchSelect) {
+                "勾选要删的题 · 也可以直接敲题号"
+            } else {
+                "可单题换 / 删 / 加 · 勾完点「加入错题本」"
+            },
+        ) {
             // v0.18.2：原来只有「+ 在末尾加一题」，加进来的必然是最后一题的题型 ——
             // 想补两道应用题、卷子末尾是口算，就只能回参数页重来。
             // 现在点开能选题型，卷里没有这道大题就新起一道。
-            MiniAction("＋ 加一题", enabled = !state.busy) { state.addingQuestion = true }
+            //
+            // v0.18.3：加「批量删题」。60 题的口算卷要删掉中间十来道重复的，
+            // 一题一点「删这题」太累 —— 而且每删一次整卷重排、题号重编，点着点着眼花。
+            var expr by remember { mutableStateOf("") }
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(PaperDimens.GapSmall),
+            ) {
+                if (state.batchSelect) {
+                    MiniAction("全选", enabled = !state.busy) { state.selectAllQuestions() }
+                    MiniAction("清空选择") { state.clearSelection() }
+                    MiniAction("完成") { state.exitBatchSelect() }
+                } else {
+                    MiniAction("＋ 加一题", enabled = !state.busy) { state.addingQuestion = true }
+                    MiniAction("批量删题", color = PaperColors.Error, enabled = !state.busy) {
+                        state.enterBatchSelect()
+                    }
+                }
+            }
+            if (state.batchSelect) {
+                Spacer(Modifier.height(8.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.weight(1f)) {
+                        Field3(
+                            value = expr,
+                            onValueChange = { expr = it },
+                            placeholder = "敲题号批量选，如 3 7 12-15",
+                        )
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    MiniAction("选中", enabled = expr.isNotBlank()) {
+                        if (state.selectByExpr(expr) > 0) expr = ""
+                    }
+                }
+            }
             Spacer(Modifier.height(8.dp))
             Divider()
             gp?.questions?.forEach { q ->
-                Column(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+                // 同一个 checkbox 两种语义：平时勾「这道做错了」，批量模式下勾「要删掉」。
+                // 分两个模式是刻意的 —— 勾好错题手滑点到删除，半张卷子就没了。
+                val picked =
+                    if (state.batchSelect) q.no in state.selectedNos else q.no in state.wrongNumbers
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .then(
+                            if (state.batchSelect && picked) {
+                                Modifier.background(
+                                    PaperColors.Error.copy(alpha = 0.06f),
+                                    RoundedCornerShape(10.dp),
+                                )
+                            } else {
+                                Modifier
+                            }
+                        )
+                        .padding(vertical = 6.dp),
+                ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Checkbox(
-                            checked = q.no in state.wrongNumbers,
-                            onCheckedChange = { state.toggleWrong(q.no) },
+                            checked = picked,
+                            onCheckedChange = {
+                                if (state.batchSelect) state.toggleSelect(q.no) else state.toggleWrong(q.no)
+                            },
                         )
                         Column(Modifier.weight(1f)) {
                             Text(
@@ -2132,18 +2245,22 @@ private fun PreviewScreen(
                             )
                         }
                     }
-                    Row(
-                        Modifier.padding(start = 46.dp),
-                        horizontalArrangement = Arrangement.spacedBy(PaperDimens.GapSmall),
-                    ) {
-                        MiniAction("换一题", enabled = !state.busy) {
-                            scope.launch { state.replaceQuestion(q.no) }
+                    // 批量模式下不给单题按钮：一行一个「删这题」，用户会分不清
+                    // 到底哪条路才是「我刚勾的那些」
+                    if (!state.batchSelect) {
+                        Row(
+                            Modifier.padding(start = 46.dp),
+                            horizontalArrangement = Arrangement.spacedBy(PaperDimens.GapSmall),
+                        ) {
+                            MiniAction("换一题", enabled = !state.busy) {
+                                scope.launch { state.replaceQuestion(q.no) }
+                            }
+                            MiniAction(
+                                "删这题",
+                                color = PaperColors.Error,
+                                enabled = !state.busy,
+                            ) { scope.launch { state.removeQuestion(q.no) } }
                         }
-                        MiniAction(
-                            "删这题",
-                            color = PaperColors.Error,
-                            enabled = !state.busy,
-                        ) { scope.launch { state.removeQuestion(q.no) } }
                     }
                 }
                 Divider()
@@ -2154,12 +2271,24 @@ private fun PreviewScreen(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    "已勾 ${state.wrongNumbers.size} 题",
+                    if (state.batchSelect) {
+                        "已选 ${state.selectedNos.size} 题"
+                    } else {
+                        "已勾 ${state.wrongNumbers.size} 题"
+                    },
                     fontSize = PaperDimens.CaptionSp,
                     color = PaperColors.OnSurfaceVariant,
                     modifier = Modifier.weight(1f),
                 )
-                MiniAction("加入错题本") { state.addWrongToMistakes() }
+                if (state.batchSelect) {
+                    MiniAction(
+                        "删除选中",
+                        color = PaperColors.Error,
+                        enabled = state.selectedNos.isNotEmpty() && !state.busy,
+                    ) { scope.launch { state.removeQuestions(state.selectedNos) } }
+                } else {
+                    MiniAction("加入错题本") { state.addWrongToMistakes() }
+                }
             }
         }
     }

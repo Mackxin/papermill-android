@@ -50,6 +50,27 @@ object PaperRenderer {
     /** 正文最多分几栏：再多每栏只剩 80pt，两位数算式也要折行 */
     private const val MAX_BODY_COLUMNS = 6
 
+    /** 正文字号（pt）：题号与题干用这个，压缩时整体乘系数 */
+    private const val BODY_SIZE = 11f
+
+    /** 大题标题字号 */
+    private const val SECTION_SIZE = 11.5f
+
+    /** 大题说明字号 */
+    private const val NOTE_SIZE = 9f
+
+    /**
+     * 指定页数时，正文字号最多缩到原来的多少（v0.18.3）。
+     *
+     * 11pt × 0.72 ≈ 7.9pt，A4 上的中文字高约 2.8mm —— 还读得清（小学练习册的
+     * 小字注释差不多就是这个大小）。再往下就成微缩印刷了：家长拿去打印，
+     * 第一反应是「这卷子看不清」，那还不如老实多印一页。
+     *
+     * 换句话说：用户设「2 页」是上限而不是铁律 —— 压不到 2 页就 3 页，
+     * 并且要让用户知道是被题量顶出去的，而不是悄悄印一张糊掉的卷子。
+     */
+    private const val MIN_TYPE_SCALE = 0.72f
+
     /**
      * 选答案栏数的及格线：撑满后至少占满这么多页面，才认这一档。
      *
@@ -183,12 +204,17 @@ object PaperRenderer {
          * [extraLines] 是「余量转答题线」的额外条数（v0.17.1）：题量少、纸尾空一大块时，
          * 与其把行距拉到夸张，不如把空出来的高度变成孩子真正要用的书写空间。
          * 只作用于本来就有答题线的大题 —— 口算题没有书写区，给它加线没有意义。
+         *
+         * [typeScale] 是 v0.18.3 的「页数控制」：整体缩小正文字号，把题压进指定页数。
+         * 只缩正文（大题标题 / 说明 / 题号 / 题干），**卷头与页眉页脚不缩** ——
+         * 那是版式骨架，跟着缩会出现「卷子标题比题干还小」这种怪事。
          */
         fun buildBody(
             scale: Float,
             itemGap: Float = doc.gapBase,
             extraLines: Int = 0,
             forceColumns: Int = 0,
+            typeScale: Float = 1f,
         ): List<Block> {
             val out = ArrayList<Block>()
             var firstHint = 0
@@ -212,7 +238,9 @@ object PaperRenderer {
                     else -> {
                     fitColumns(
                         widths = section.questions.map {
-                            QuestionBlock(no = it.no, stem = it.stem).singleLineWidth(tp)
+                            QuestionBlock(
+                                no = it.no, stem = it.stem, size = BODY_SIZE * typeScale,
+                            ).singleLineWidth(tp)
                         },
                         contentW = g.contentW,
                         gap = COLUMN_GAP,
@@ -232,10 +260,18 @@ object PaperRenderer {
                     }
                 }
                 if (firstHint == 0 && hint > 0) firstHint = hint
-                out.add(SectionHeaderBlock(section.title, columnHint = hint))
+                out.add(
+                    SectionHeaderBlock(
+                        section.title,
+                        size = SECTION_SIZE * typeScale,
+                        columnHint = hint,
+                    )
+                )
                 // 做题指令只印一次：以前「用竖式计算：」是拼在每道题题干里的，
                 // 一页 20 道题就重复 20 遍
-                if (section.instruction.isNotBlank()) out.add(NoteBlock(section.instruction))
+                if (section.instruction.isNotBlank()) {
+                    out.add(NoteBlock(section.instruction, size = NOTE_SIZE * typeScale))
+                }
                 val table = section.table
                 if (table != null) {
                     // 整张表一个块：跨页由 FlowLayout + TableBlock.split 按剩余高度自己切，
@@ -260,6 +296,7 @@ object PaperRenderer {
                             } else {
                                 0
                             },
+                            size = BODY_SIZE * typeScale,
                             itemGap = itemGap,
                             // 看图题带图；答案页那一路不传（答案不需要再印一遍图）
                             figure = q.figure,
@@ -309,6 +346,36 @@ object PaperRenderer {
                 val taller = layoutBody(buildBody(scale))
                 // 拉高后必须还是一页；否则说明本来就在溢出边缘，保持原样重排
                 if (taller.size == 1) pages = taller
+            }
+        }
+
+        // ---- 页数控制：题太多就整体缩字号压进去（v0.18.3）----
+        // 用户设「2 页」的意思不是「必须正好 2 页」，而是「最多 2 页，题多你自己看着办」。
+        // 唯一能同时守住「不删题」和「不超页」的旋钮是字号 —— 行距已经压到极限（紧凑档 9pt），
+        // 再压就没有分行缝了；栏数已经按题面宽度定死，再拆就把题干折成两行。
+        // 二分 6 次，误差 (1 - 0.72) / 64 ≈ 0.004，肉眼分不出两档差别。
+        var typeScale = 1f
+        if (doc.targetPages > 0 && pages.size > doc.targetPages) {
+            var lo = MIN_TYPE_SCALE
+            var hi = 1f
+            var best: ArrayList<FlowLayout.Page>? = null
+            var bestScale = 1f
+            repeat(6) {
+                val mid = (lo + hi) / 2f
+                val trial = layoutBody(buildBody(1f, doc.gapBase, 0, 0, mid))
+                if (trial.size <= doc.targetPages) {
+                    best = trial
+                    bestScale = mid
+                    lo = mid
+                } else {
+                    hi = mid
+                }
+            }
+            // best 为 null 说明缩到 0.72 还塞不下：保持原字号、老实多印一页。
+            // 印一张看不清的卷子，比多印一张纸糟得多。
+            if (best != null) {
+                pages = best!!
+                typeScale = bestScale
             }
         }
 
@@ -364,7 +431,7 @@ object PaperRenderer {
             var lines = 0
             // 最多加 3 条：竖式 3 条 → 6 条刚好铺满一页
             while (lines < 3) {
-                val trial = layoutBody(buildBody(1f, doc.gapBase, lines + 1, cols))
+                val trial = layoutBody(buildBody(1f, doc.gapBase, lines + 1, cols, typeScale))
                 // 加线不许把正文顶成两页：那就成了「省半张纸」换「多一张纸」
                 if (trial.size != from.size) break
                 best = trial
@@ -396,7 +463,9 @@ object PaperRenderer {
                 .minOfOrNull { section ->
                     fitColumns(
                         widths = section.questions.map {
-                            QuestionBlock(no = it.no, stem = it.stem).singleLineWidth(tp)
+                            QuestionBlock(
+                                no = it.no, stem = it.stem, size = BODY_SIZE * typeScale,
+                            ).singleLineWidth(tp)
                         },
                         contentW = g.contentW,
                         gap = COLUMN_GAP,
@@ -416,7 +485,7 @@ object PaperRenderer {
             val lo = minOf(minCols, hi)
             for (cols in lo..hi) {
                 if (cols == bodyColumns) continue
-                val trial = layoutBody(buildBody(1f, doc.gapBase, 0, cols))
+                val trial = layoutBody(buildBody(1f, doc.gapBase, 0, cols, typeScale))
                 if (trial.size != 1) continue
                 val score = bodyFillOf(trial)
                 if (score > bestScore) {
@@ -438,7 +507,7 @@ object PaperRenderer {
         // 自定义行距（gapBase == gapMax）时不撑开：用户要的就是那个固定值
         if (bodyFillOf(pages) < BODY_FILL_TARGET && doc.gapMax > doc.gapBase) {
             pages = stretchGap(pages, doc.gapBase, doc.gapMax, ::worstFillOf) { gap ->
-                layoutBody(buildBody(1f, gap, 0, chosenColumns))
+                layoutBody(buildBody(1f, gap, 0, chosenColumns, typeScale))
             }
         }
 
@@ -575,6 +644,7 @@ object PaperRenderer {
             pageFillRatios = fillRatios,
             contentPageCount = firstAnswerPage.takeIf { it > 0 } ?: total,
             orientation = doc.orientation,
+            typeScale = typeScale,
         )
     }
 

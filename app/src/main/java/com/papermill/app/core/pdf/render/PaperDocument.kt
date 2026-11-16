@@ -78,6 +78,13 @@ data class PaperDocument(
     val lineGapCustom: Float = 8f,
     /** 竖版 / 横版：决定 PdfDocument 页面宽高，并随结果传给打印框架 */
     val orientation: PageOrientation = PageOrientation.PORTRAIT,
+    /**
+     * 正文页数上限（v0.18.3）。0 = 不限制。
+     *
+     * 题多到超过这个数时，渲染器会整体缩小正文字号把内容压进去 —— 见
+     * [com.papermill.app.core.pdf.render.PaperRenderer]。只约束正文，答案页另计。
+     */
+    val targetPages: Int = 0,
 ) {
     /**
      * 题间距下界（撑开算法的起点）。
@@ -125,4 +132,11 @@ class RenderedPdf(
     val contentPageCount: Int = pageCount,
     /** 打印时按这个方向选 MediaSize，竖版走 ISO_A4，横版走 ISO_A4.asLandscape() */
     val orientation: PageOrientation = PageOrientation.PORTRAIT,
+    /**
+     * 为了压进 targetPages，正文字号被缩到了原来的多少（v0.18.3）。
+     *
+     * 1.0 = 没缩。界面拿它说清「这张卷为了塞进 2 页缩到了 86%」——
+     * 不告诉用户的话，他会以为「这版字怎么突然变小了」是 bug。
+     */
+    val typeScale: Float = 1f,
 )

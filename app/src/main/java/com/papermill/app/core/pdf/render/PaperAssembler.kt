@@ -77,6 +77,7 @@ object PaperAssembler {
             lineGap = spec.lineGap,
             lineGapCustom = spec.lineGapCustom,
             orientation = spec.orientation,
+            targetPages = spec.targetPages,
         )
     }
 }

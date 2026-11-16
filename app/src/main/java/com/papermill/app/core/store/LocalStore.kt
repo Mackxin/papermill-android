@@ -66,6 +66,8 @@ data class AppSettings(
      * 顺序即展示顺序 —— 用户想「错题本放第一格」也在这一串里表达。
      */
     val dockTabs: String = "HOME,REFERENCE,MISTAKES,HISTORY,TEXTBOOK,MORE",
+    /** 正文页数上限（v0.18.3）：0 = 不限制；>0 时渲染器缩字号把内容压进去 */
+    val targetPages: Int = 0,
     /**
      * 卷面排版口径的版本号（v0.18.1）。
      *
@@ -157,6 +159,7 @@ object LocalStore {
                 showPageNo = o.optBoolean("showPageNo", true),
                 footerSize = o.optString("footerSize", "NORMAL"),
                 dockTabs = o.optString("dockTabs", "HOME,REFERENCE,MISTAKES,HISTORY,TEXTBOOK,MORE"),
+                targetPages = o.optInt("targetPages", 0),
                 layoutVersion = o.optInt("layoutVersion", 0),
             )
         }.getOrDefault(AppSettings())
@@ -177,6 +180,7 @@ object LocalStore {
                     .put("showPageNo", settings.showPageNo)
                     .put("footerSize", settings.footerSize)
                     .put("dockTabs", settings.dockTabs)
+                    .put("targetPages", settings.targetPages)
                     .put("layoutVersion", settings.layoutVersion)
                     .toString(2)
             )
