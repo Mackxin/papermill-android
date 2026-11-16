@@ -8,7 +8,12 @@ import android.app.Activity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.AnimationVector1D
+import androidx.compose.animation.core.FastOutLinearInEasing
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -64,6 +69,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.LineBreak
@@ -90,10 +96,11 @@ import com.papermill.app.domain.generate.Tilt
 import com.papermill.app.domain.reference.PracticeData
 import com.papermill.app.domain.reference.ReferenceData
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
-import kotlin.math.abs
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculatePan
@@ -136,6 +143,42 @@ private val STICKY_BAR_SCREENS = setOf(
     Screen.HOME, Screen.CREATE, Screen.PREVIEW, Screen.LOCAL_PDF, Screen.MISTAKES,
 )
 
+/**
+ * 页签切换的「淡出 → 换页 → 淡入」（Material 3 的 fade-through）—— v0.18.4。
+ *
+ * 用户原话：「点击 tab 栏的按钮的时候，页面不要一下子就出来，要有平滑的过渡效果」。
+ * 改之前点 dock 是两种硬切：
+ *  - 跨页（首页 → 更多）：直接 `scrollToPage`，一帧之内整页换掉，就是「刷一下就出来」；
+ *  - 相邻页：`animateScrollToPage` 扫过 240ms，但那是**整页横移**，中途三页同时在场、
+ *    几十张带阴影的卡片要现场量测+栅格化，反而更容易掉帧，看着像「闪一下」。
+ *
+ * 现在统一走 fade-through，三段各自有活干：
+ *  1. 淡出 [outMs] 90ms —— 旧页真的「退场」，眼睛知道发生了什么；
+ *  2. [swap] 在 **alpha = 0 的那一帧**执行 —— 新页就在这段全透明的时间里完成组合和
+ *     首帧栅格化，硬切被彻底藏起来（这也是它能顶掉「扫过中间页」的原因）；
+ *  3. 淡入 [inMs] 220ms，同时从下方 10dp 归位 —— 只淡不变位会显得「浮」，加一点位移
+ *     就有了「新的一页升上来」的空间感。
+ *
+ * 手指横滑**不走这里**：那条路要跟手，pager 原生滑动才是对的。
+ */
+private suspend fun fadeThrough(
+    alpha: Animatable<Float, AnimationVector1D>,
+    rise: Animatable<Float, AnimationVector1D>,
+    risePx: Float,
+    outMs: Int = 90,
+    inMs: Int = 220,
+    swap: suspend () -> Unit,
+) {
+    alpha.animateTo(0f, tween(outMs, easing = FastOutLinearInEasing))
+    // 换页动作必须落在 alpha = 0 上：漏在这一步之前，用户就会看见一次硬切
+    swap()
+    rise.snapTo(risePx)
+    coroutineScope {
+        launch { rise.animateTo(0f, tween(inMs, easing = FastOutSlowInEasing)) }
+        launch { alpha.animateTo(1f, tween(inMs, easing = LinearOutSlowInEasing)) }
+    }
+}
+
 @Composable
 fun PaperMillRoot(state: AppState) {
     val context = LocalContext.current
@@ -151,20 +194,8 @@ fun PaperMillRoot(state: AppState) {
 
     // 返回键：先 App 内逐层退（预览 → 来时的页面 → 首页），最后在首页再按一次才退出。
     // 旧版没接管返回键，在预览页按一下就直接回桌面，卷子和浏览位置全丢。
-    BackHandler {
-        if (!state.back()) {
-            if (state.exitArmed) {
-                activity?.finish()
-            } else {
-                state.exitArmed = true
-                state.toast = "再按一次返回即退出"
-                scope.launch {
-                    delay(2000)
-                    state.exitArmed = false
-                }
-            }
-        }
-    }
+    // 具体处理在下面的 goBack 里（要等过渡用的 Animatable 建好；v0.18.4 起
+    // 返回也走同一套淡入淡出，只给页签做、返回还是硬切，两套节奏看着就散）。
 
     // 提示条自动收起：切页后不再挂着上一条「已生成 N 题」的旧消息
     LaunchedEffect(state.toast) {
@@ -192,6 +223,50 @@ fun PaperMillRoot(state: AppState) {
             initialPage = tabs.indexOf(state.navTab).coerceAtLeast(0),
         ) { tabs.size }
     }
+
+    // ============================================================
+    // 页面切换的过渡（v0.18.4）
+    // ============================================================
+    // alpha 作用在「内容 + 顶栏 + 底部操作条」这一整块上，dock 不参与 ——
+    // dock 是常驻导航，它跟着晃反而像整屏在闪。
+    // 用 Animatable 而不是 animateFloatAsState：这里要**先淡出、换页、再淡入**，
+    // 得能手动推进，声明式的 animateFloatAsState 排不出这个顺序。
+    val contentAlpha = remember { Animatable(1f) }
+    val contentRise = remember { Animatable(0f) }
+    val risePx = with(LocalDensity.current) { 10.dp.toPx() }
+    // 连点保护：上一段过渡还没走完又点了一个页签，先取消旧的再开新的，
+    // 否则两个协程抢同一个 Animatable，先启动的那个会被取消在半路，
+    // alpha 停在小数上 —— 整页半透明，像卡死了。
+    var tabJob by remember { mutableStateOf<Job?>(null) }
+
+    /**
+     * 返回（返回键 / 顶栏圆形按钮共用一份）。
+     *
+     * 首页按返回仍是「再按一次退出」的老逻辑，而且**不淡出**：
+     * 那是退出确认，画面闪一下再亮回来反而像误触。
+     * 其余页面退回时走同一套 fade-through，跟点 dock 换页签一个节奏。
+     */
+    val goBack: () -> Unit = {
+        if (state.screen == Screen.HOME) {
+            if (state.exitArmed) {
+                activity?.finish()
+            } else {
+                state.exitArmed = true
+                state.toast = "再按一次返回即退出"
+                scope.launch {
+                    delay(2000)
+                    state.exitArmed = false
+                }
+            }
+        } else {
+            // 正在切页签时又按返回：让新的这段接管（旧协程被取消，alpha 从当前值接着走）
+            tabJob?.cancel()
+            tabJob = scope.launch {
+                fadeThrough(contentAlpha, contentRise, risePx) { state.back() }
+            }
+        }
+    }
+    BackHandler { goBack() }
 
     // ============================================================
     // 记住上次看到哪儿
@@ -255,46 +330,48 @@ fun PaperMillRoot(state: AppState) {
 
     // ① 手指拖动时高亮立刻跟随（滑过半页就切），这就是用户要的「跟着一起动」。
     // key 用 pager：页签集合变化会重建 pager，旧实例上的监听必须跟着换掉
+    //
+    // ⚠️ ① ② 里都不许用外面那个 `isTabScreen`：本 effect 只在 pager 重建时重启，
+    // 捕获的值会一直停在启动那一刻。从「参数页 / 打印帮助」冷启动进来时它是 false，
+    // 之后横滑页签，① ② 会全部命中 false 的早退 —— 顶栏标题不跟着变、navTab 不更新，
+    // 只有内容在滑。判断放在收集时做，拿的是当下这一帧的真实值。
     LaunchedEffect(pager) {
         snapshotFlow { pager.currentPage }.collect { page ->
-            if (pager.isScrollInProgress && isTabScreen) {
-                val target = tabs[page]
+            val onTab = state.dockTabs.any { it.screen == state.screen }
+            if (pager.isScrollInProgress && onTab) {
+                val target = tabs.getOrNull(page) ?: return@collect
                 if (state.navTab != target) state.goTab(target)
             }
         }
     }
 
-    // ② 落页后校正一次：程序动画途中被 ① 改掉的 navTab，在停下来时对齐到真实页
+    // ② 落页后校正一次：手指滑到位、或程序跳页落地时，把 navTab 对齐到真实页
     LaunchedEffect(pager) {
         snapshotFlow { pager.settledPage }.collect { page ->
-            if (isTabScreen) {
-                val target = tabs[page]
+            val onTab = state.dockTabs.any { it.screen == state.screen }
+            if (onTab) {
+                val target = tabs.getOrNull(page) ?: return@collect
                 if (state.navTab != target) state.goTab(target)
             }
         }
     }
 
-    // ③ 点 dock / 从子页面回来时把 pager 挪过去。
+    // ③ 兜底对齐：navTab 变了就把 pager 挪到对应页（静默瞬切，不做动画）。
+    // 点 dock 那条路已经在点击处自己做完过渡并挪好 pager（见 fadeThrough），
+    // 真正会走到这里的是「子页面 → 页签」：那时 pager 这一帧才重新进入组合，
+    // 点击处不硬来，交给这里对齐 —— 反正此时 alpha ≈ 0，看不见这次跳页。
     // 手指正在滑的时候不发指令，否则松手那刻 settle 还没走完就被抢走。
     LaunchedEffect(pager) {
         snapshotFlow { state.navTab }.collect { tab ->
-            if (!isTabScreen || pager.isScrollInProgress) return@collect
+            // 这里**不能**用外面捕获的 isTabScreen：本 effect 只在 pager 重建时重启，
+            // 捕获值会一直停在启动那一刻。从「参数页」冷启动进来时它是 false，
+            // 之后点 dock 会永远命中下面这个 return —— 顶栏标题变了、内容还是首页，
+            // pager 一动不动，用户看到的就是「点了没反应」。
+            if (pager.isScrollInProgress) return@collect
+            if (tabs.none { it.screen == state.screen }) return@collect
             val idx = tabs.indexOf(tab)
             if (idx < 0 || pager.currentPage == idx) return@collect
-            // 相邻页滑过去（手感连续、能看到内容跟手）；
-            // **跨页直接瞬切**，不扫过中间页。
-            // 原来一律用 animateScrollToPage：从首页点「错题本」时，中间那一页
-            // 会被整页拖着在屏幕上过一遍 —— 用户看到的就是「闪一下」。
-            // 而且那 240ms 里三页同时在场：中间页要现场组合、几十张带阴影的卡片
-            // 要逐个栅格化，量测+绘制挤在半秒不到的动画里，必然掉帧。
-            if (abs(idx - pager.currentPage) <= 1) {
-                pager.animateScrollToPage(
-                    page = idx,
-                    animationSpec = tween(durationMillis = 240, easing = FastOutSlowInEasing),
-                )
-            } else {
-                pager.scrollToPage(idx)
-            }
+            pager.scrollToPage(idx)
         }
     }
 
@@ -306,20 +383,37 @@ fun PaperMillRoot(state: AppState) {
 
     val (title, subtitle) = screenTitle(state)
     // 页签页不显示返回箭头（现代 App 惯例），子页面才显示
-    val onBack: (() -> Unit)? = if (isTabScreen) null else ({ state.back() })
+    val onBack: (() -> Unit)? = if (isTabScreen) null else goBack
 
     Box(Modifier.fillMaxSize().background(PaperColors.Background)) {
         // 内容层一路铺到屏幕底部：滚动内容会从 dock 背后穿过去，玻璃质感才透得出来
         Column(Modifier.fillMaxSize()) {
-            AppTopBar(
-                title = title,
-                subtitle = subtitle,
-                onBack = onBack,
-                // 只有首页（无返回键）标题居中 + 主色；有返回键的页面居中会和圆形按钮撞
-                centered = state.screen == Screen.HOME,
-            )
+            // 顶栏跟着一起过渡，但**不淡到全透明**：留 15% 让标题始终在那儿，
+            // 只压低存在感。全灭会在屏幕上开一个洞，反而显得突兀。
+            Box(
+                Modifier.graphicsLayer {
+                    alpha = 0.15f + 0.85f * contentAlpha.value
+                }
+            ) {
+                AppTopBar(
+                    title = title,
+                    subtitle = subtitle,
+                    onBack = onBack,
+                    // 只有首页（无返回键）标题居中 + 主色；有返回键的页面居中会和圆形按钮撞
+                    centered = state.screen == Screen.HOME,
+                )
+            }
 
-            Box(Modifier.weight(1f)) {
+            Box(
+                Modifier
+                    .weight(1f)
+                    // 逐帧读 alpha / 位移（lambda 版 graphicsLayer 只重跑绘制，不重组内容）：
+                    // 36 张卡的列表在重组一次就是几毫秒，绝不能挂在动画帧上
+                    .graphicsLayer {
+                        alpha = contentAlpha.value
+                        translationY = contentRise.value
+                    }
+            ) {
                 if (isTabScreen) {
                     HorizontalPager(
                         state = pager,
@@ -380,9 +474,21 @@ fun PaperMillRoot(state: AppState) {
                             if (state.screen == Screen.CREATE) state.noteCreateScroll(it)
                         }
                     }
+                    // 子页面入场也淡一下（v0.18.4）：点「自定义」「打印帮助」一样是整页换，
+                    // 页签平滑了、这里还是硬切，两套节奏看着就散。
+                    // 从 35% 淡上来而不是 0 —— 0 会露出白底，像加载失败；
+                    // 起始值就是**首帧**的值（不是动画起点），所以不会有「先满后空」的闪。
+                    var entered by remember(state.screen) { mutableStateOf(false) }
+                    val enterAlpha by animateFloatAsState(
+                        targetValue = if (entered) 1f else 0.35f,
+                        animationSpec = tween(200, easing = LinearOutSlowInEasing),
+                        label = "subPageEnter",
+                    )
+                    LaunchedEffect(state.screen) { entered = true }
                     Column(
                         Modifier
                             .fillMaxSize()
+                            .graphicsLayer { alpha = enterAlpha }
                             .verticalScroll(scroll)
                             .padding(horizontal = PaperDimens.ScreenPad)
                     ) {
@@ -405,7 +511,14 @@ fun PaperMillRoot(state: AppState) {
         // 浮层：操作条固定在 dock 上方，dock 本身贴底。
         // 提示条**不在**这个 Column 里（见下面）：它一出现就把按钮整体顶上去，是「抖一下」的来源。
         Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth()) {
-            Column(Modifier.fillMaxWidth()) {
+            // 操作条也跟着过渡：首页有「自定义 / 直接出卷」，切到页签页整条会消失，
+            // 不跟着淡掉就是一次硬切 —— 上下两头同时跳，过渡就白做了。
+            // 只给这一条 Column 上 alpha，提示条是它的兄弟节点，不受影响。
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .graphicsLayer { alpha = contentAlpha.value }
+            ) {
             when (state.screen) {
                 Screen.HOME -> StickyBar {
                     SecondaryButton(
@@ -490,7 +603,26 @@ fun PaperMillRoot(state: AppState) {
             position = {
                 pager.currentPage + pager.currentPageOffsetFraction
             },
-        ) { tab -> state.goTab(tab) }
+        ) { tab ->
+            // 点的是当前页签：什么都不做。连淡出都不能有 —— 否则原地闪一下，
+            // 用户会以为「点了出错了」。
+            if (isTabScreen && tab == state.navTab) return@FloatingDock
+            // 连点：取消上一段（新的这段从当前 alpha 接着走，视觉上是连续的）
+            tabJob?.cancel()
+            tabJob = scope.launch {
+                fadeThrough(contentAlpha, contentRise, risePx) {
+                    // 换页本身：state 先变（顶栏标题、操作条、内容一起换），
+                    // 再把 pager 挪到对应页。这一步在 alpha = 0 里执行，看不见。
+                    state.goTab(tab)
+                    // 子页面 → 页签时 pager 这一帧才重新进入组合，直接 scrollToPage
+                    // 有可能撞上「还没测量」，交给 ③ 的兜底对齐更稳。
+                    if (isTabScreen) {
+                        val idx = tabs.indexOf(tab)
+                        if (idx >= 0 && pager.currentPage != idx) pager.scrollToPage(idx)
+                    }
+                }
+            }
+        }
 
         // 批改面板压在整棵界面上（v0.18.0）：预览页和试卷库都要能开它，
         // 所以放在根节点只挂一份，不在两个页面各写一遍

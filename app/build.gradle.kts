@@ -13,8 +13,8 @@ android {
         applicationId = "com.papermill.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 30
-        versionName = "0.18.3"
+        versionCode = 31
+        versionName = "0.18.4"
         vectorDrawables.useSupportLibrary = true
     }
 
