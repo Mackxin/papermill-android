@@ -32,6 +32,9 @@ object PdfPreviewRenderer {
                 try {
                     val w = (page.width * scale).toInt().coerceAtLeast(1)
                     val h = (page.height * scale).toInt().coerceAtLeast(1)
+                    // 必须是 ARGB_8888：试过 RGB_565 省一半内存，
+                    // 系统 PdfRenderer 直接抛 "Unsupported pixel format"（它只认 8888）。
+                    // 退一步在渲染后转 565 又要多一次全图复制、分配峰值翻倍，不值。
                     val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
                     Canvas(bitmap).drawColor(Color.WHITE)
                     page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)

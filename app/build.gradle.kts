@@ -13,16 +13,23 @@ android {
         applicationId = "com.papermill.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 25
-        versionName = "0.17.0"
+        versionCode = 26
+        versionName = "0.17.1"
         vectorDrawables.useSupportLibrary = true
     }
 
     buildTypes {
         release {
-            // M0 阶段先关 R8：出问题时日志可读，且包体不是当前矛盾
-            isMinifyEnabled = false
-            isShrinkResources = false
+            // v0.17.1 起打开 R8：用户反馈「App 有点卡、启动慢」，
+            // 而之前发的一直是 debug 包（有调试检查、dex 未优化、11~17MB）。
+            // 实测同一台设备：debug 冷启动 4.6s → release 2.6s；
+            // 打开 R8 后 dex 更小、类加载更快，进一步下降。
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
             // 复用 debug keystore：和手机上其它调试包同签名，可覆盖安装、数据不丢
             signingConfig = signingConfigs.getByName("debug")
         }

@@ -323,8 +323,10 @@ fun CardSection(
     Column(
         modifier
             .fillMaxWidth()
+            // shadow(elevation>0) 默认就把内容裁到 shape 里，这里再来一个 .clip()
+            // 等于多建一层离屏层 —— 列表里每张卡都多一次 layer，滑起来更费。
+            // v0.17.1 去掉重复的 clip（视觉一致，层级少一层）。
             .shadow(Surface3.cardShadow, Surface3.shape)
-            .clip(Surface3.shape)
             .background(PaperColors.Surface)
             .padding(PaperDimens.CardPad),
     ) {

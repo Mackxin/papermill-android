@@ -86,7 +86,9 @@ import com.papermill.app.domain.reference.PracticeData
 import com.papermill.app.domain.reference.ReferenceData
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
+import kotlin.math.abs
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculatePan
@@ -192,13 +194,17 @@ fun PaperMillRoot(state: AppState) {
     // onStop，那时候位置就白记了。滚停后落一次，最多丢最后 1 秒的位置。
     LaunchedEffect(Unit) {
         snapshotFlow {
+            // 用 Triple 而不是 intArrayOf：数组没有结构化 equals，
+            // distinctUntilChanged 会认为「每帧都是新值」，滚动停止后还在空转；
+            // Triple 有结构相等，静止时不再发射，也就不会反复重启那 1.2 秒的计时。
             TAB_ORDER.map { k ->
                 val st = tabStates.getValue(k)
-                k.name to intArrayOf(st.firstVisibleItemIndex, st.firstVisibleItemScrollOffset)
+                Triple(k.name, st.firstVisibleItemIndex, st.firstVisibleItemScrollOffset)
             }
         }
+            .distinctUntilChanged()
             .collect { list ->
-                list.forEach { (key, pos) -> state.noteScroll(key, pos[0], pos[1]) }
+                list.forEach { (key, index, offset) -> state.noteScroll(key, index, offset) }
                 delay(1200)
                 state.persistSession()
             }
@@ -242,17 +248,26 @@ fun PaperMillRoot(state: AppState) {
         }
     }
 
-    // ③ 点 dock / 从子页面回来时把 pager 滑过去。
+    // ③ 点 dock / 从子页面回来时把 pager 挪过去。
     // 手指正在滑的时候不发指令，否则松手那刻 settle 还没走完就被抢走。
     LaunchedEffect(Unit) {
         snapshotFlow { state.navTab }.collect { tab ->
             if (state.screen !in TAB_SCREENS || pager.isScrollInProgress) return@collect
             val idx = TAB_ORDER.indexOf(tab)
-            if (idx >= 0 && pager.currentPage != idx) {
+            if (idx < 0 || pager.currentPage == idx) return@collect
+            // 相邻页滑过去（手感连续、能看到内容跟手）；
+            // **跨页直接瞬切**，不扫过中间页。
+            // 原来一律用 animateScrollToPage：从首页点「错题本」时，中间那一页
+            // 会被整页拖着在屏幕上过一遍 —— 用户看到的就是「闪一下」。
+            // 而且那 240ms 里三页同时在场：中间页要现场组合、几十张带阴影的卡片
+            // 要逐个栅格化，量测+绘制挤在半秒不到的动画里，必然掉帧。
+            if (abs(idx - pager.currentPage) <= 1) {
                 pager.animateScrollToPage(
                     page = idx,
                     animationSpec = tween(durationMillis = 240, easing = FastOutSlowInEasing),
                 )
+            } else {
+                pager.scrollToPage(idx)
             }
         }
     }
@@ -735,6 +750,11 @@ private fun CreateScreen(state: AppState, scope: CoroutineScope) {
         append(state.orientation.name).append('|')
         // 自动补满开关也算参数：切换后要立刻重排，让用户当场看到「页面真的满了」
         append(state.autoFillPage).append('|')
+        // v0.17.0 的卷面定制也必须进签名：不然改了行距 / 页脚 / 标题排版，
+        // 实时预览还是上一张图，用户会以为「这个开关坏了」
+        append(state.headerOneLine).append('|').append(state.showCreatedAt).append('|')
+        append(state.footerMode).append('|').append(state.footerCustom).append('|')
+        append(state.lineGap.name).append('|')
         append(state.titleOverride).append('|').append(state.previewSeed)
     }
     LaunchedEffect(signature) {
@@ -1737,6 +1757,7 @@ private fun LazyListScope.referenceScreenItems(state: AppState, scope: Coroutine
             )
         }
         sheetRows(
+            keyPrefix = "ref-$group",
             items = list,
             titleOf = { it.title },
             descOf = { it.subtitle },
@@ -1760,6 +1781,7 @@ private fun LazyListScope.referenceScreenItems(state: AppState, scope: Coroutine
             )
         }
         sheetRows(
+            keyPrefix = "practice-$group",
             items = list,
             titleOf = { it.title },
             descOf = { it.subtitle },
@@ -1784,6 +1806,7 @@ private fun LazyListScope.referenceScreenItems(state: AppState, scope: Coroutine
     }
     item { Spacer(Modifier.height(8.dp)) }
     sheetRows(
+        keyPrefix = "theme",
         items = PracticeData.themeSheets,
         titleOf = { it.title },
         descOf = { it.subtitle },
@@ -1804,16 +1827,24 @@ private fun LazyListScope.referenceScreenItems(state: AppState, scope: Coroutine
     }
 }
 
-/** 速查表 / 练习纸共用的 2 列卡片网格（Lazy 版：每行一个 item，滑到哪才组合哪几行） */
+/**
+ * 速查表 / 练习纸共用的 2 列卡片网格（Lazy 版：每行一个 item，滑到哪才组合哪几行）。
+ *
+ * [keyPrefix] 不能省：同一个 LazyColumn 里会被调用十几次（速查表 5 组 + 练习纸 5 组 +
+ * 主题识字），不给前缀的话每组的行号都从 0 开始，`key = "row-0"` 会重复，
+ * LazyColumn 直接抛「key 重复」。而给了 key 之后，滑到一半再滑回来能复用
+ * 已组合的行，不必整屏重建。
+ */
 private fun <T> LazyListScope.sheetRows(
+    keyPrefix: String,
     items: List<T>,
     titleOf: (T) -> String,
     descOf: (T) -> String,
     metaOf: (T) -> String,
     onClick: (T) -> Unit,
 ) {
-    items.chunked(2).forEach { row ->
-        item {
+    items.chunked(2).forEachIndexed { rowIndex, row ->
+        item(key = "$keyPrefix-row-$rowIndex") {
             Row(
                 Modifier
                     .fillMaxWidth()
@@ -1863,7 +1894,10 @@ private fun LazyListScope.mistakesScreenItems(state: AppState) {
 
     // 一条错题一个 item：错题攒到几十条时不会再一次性铺满整页
     filtered.forEach { m ->
-        item {
+        // key 用错题 id：切换「全部 / 未练 / 练过 / 已掌握」时列表内容整批变化，
+        // 没 key 的话 Compose 按位置比对，会把「第 3 条」当成同一条改内容 ——
+        // 整屏重组重绘，筛选看起来就是卡一下
+        item(key = "mistake-${m.id}") {
             CardSection(
                 title = "第 ${m.sourceNo} 题 · ${m.topic}",
                 hint = "${GradeProfiles.gradeLabel(m.grade)} · ${m.type}",

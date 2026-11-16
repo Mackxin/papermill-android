@@ -168,8 +168,19 @@ object PaperRenderer {
         // 标题 / 需要书写过程的题用整宽块占满一行，段与段在同一页里上下相接。
         var bodyColumns = 2
 
-        /** 正文块（[scale] 只作用于表格行高，见下面「单页速查表铺满」） */
-        fun buildBody(scale: Float, itemGap: Float = doc.lineGap.base): List<Block> {
+        /**
+         * 正文块（[scale] 只作用于表格行高，见下面「单页速查表铺满」）。
+         *
+         * [extraLines] 是「余量转答题线」的额外条数（v0.17.1）：题量少、纸尾空一大块时，
+         * 与其把行距拉到夸张，不如把空出来的高度变成孩子真正要用的书写空间。
+         * 只作用于本来就有答题线的大题 —— 口算题没有书写区，给它加线没有意义。
+         */
+        fun buildBody(
+            scale: Float,
+            itemGap: Float = doc.lineGap.base,
+            extraLines: Int = 0,
+            forceColumns: Int = 0,
+        ): List<Block> {
             val out = ArrayList<Block>()
             var firstHint = 0
             doc.sections.filter { !it.isAnswer }.forEach { section ->
@@ -177,8 +188,13 @@ object PaperRenderer {
                 // 声明这一点。注意**不再**按 answerLines > 0 强制整宽 ——
                 // 竖式计算要留横线，但横线只在栏内就够，一栏一题会把半张纸浪费掉。
                 val forceFullWidth = section.columns <= 1
-                // 这道大题自己该排几栏：按实际题面宽度算，不再让整卷共用一个数
-                val hint = if (forceFullWidth || section.questions.isEmpty()) 0 else {
+                // 这道大题自己该排几栏：按实际题面宽度算，不再让整卷共用一个数。
+                // forceColumns > 0 时统一用它：栏数试排（见下面「按高度挑栏数」）要
+                // 把整卷当成一个整体换栏，不能一段一段换。
+                val hint = when {
+                    forceFullWidth || section.questions.isEmpty() -> 0
+                    forceColumns > 0 -> forceColumns
+                    else -> {
                     fitColumns(
                         widths = section.questions.map {
                             QuestionBlock(no = it.no, stem = it.stem).singleLineWidth(tp)
@@ -188,6 +204,7 @@ object PaperRenderer {
                         floor = maxOf(1, section.columns),
                         ceiling = MAX_BODY_COLUMNS,
                     )
+                    }
                 }
                 if (firstHint == 0 && hint > 0) firstHint = hint
                 out.add(SectionHeaderBlock(section.title, columnHint = hint))
@@ -210,7 +227,11 @@ object PaperRenderer {
                         val qb = QuestionBlock(
                             no = q.no,
                             stem = q.stem,
-                            answerLines = section.answerLines,
+                            answerLines = if (section.answerLines > 0) {
+                                section.answerLines + extraLines
+                            } else {
+                                0
+                            },
                             itemGap = itemGap,
                             // 看图题带图；答案页那一路不传（答案不需要再印一遍图）
                             figure = q.figure,
@@ -223,7 +244,9 @@ object PaperRenderer {
                 }
             }
             // 整条流的初始栏数：取第一个非整宽大题的栏数，避免第一段用了错的值
-            if (firstHint > 0) bodyColumns = firstHint
+            // forceColumns 时全局栏数以它为准：不能一段用试排的栏数、
+            // 下一段又回到按宽度算出来的值 —— 同一张卷两个栏数，视觉上是断的
+            if (firstHint > 0) bodyColumns = if (forceColumns > 0) forceColumns else firstHint
             return out
         }
 
@@ -286,9 +309,80 @@ object PaperRenderer {
             }
             return worst
         }
+        /**
+         * 余量转答题线（v0.17.1）。
+         *
+         * 题目少的时候纸尾会空掉一大块：9 道竖式只占半张、纸尾白扔 237pt，
+         * 15 道单词拼装空 380pt。单靠「拉大行距」治不了 —— 拉到每题之间一条大峡谷，
+         * 反而不像一张卷子。这里改成把余量变成**答题横线**：
+         * 多给一两条，孩子写竖式 / 写过程有地方下笔，纸也用满了。
+         *
+         * 只在「正文刚好一页」时做：多页时每页情况不同，加线会把页数顶乱，
+         * 而且分页边界一动，前面几页的留白反而会更难看。
+         */
+        fun fillWithAnswerLines(
+            from: ArrayList<FlowLayout.Page>,
+            cols: Int,
+        ): ArrayList<FlowLayout.Page> {
+            if (from.size != 1) return from
+            // 只有「本来就要写一大片」的大题才值得加线：竖式 3 条起、应用题 4 条。
+            // 一律加会出事 —— 单词拼装只要写一个词，加 3 条横线既浪费又让
+            // 栏与栏的高度拉开（题干折一行的题和没折的题错开半行，整页像拼错的）。
+            if (doc.sections.none { !it.isAnswer && it.answerLines >= 2 }) return from
+            if (bodyFillOf(from) >= 0.90f) return from
+            var best = from
+            var lines = 0
+            while (lines < 3) {
+                val trial = layoutBody(buildBody(1f, doc.lineGap.base, lines + 1, cols))
+                // 加线不许把正文顶成两页：那就成了「省半张纸」换「多一张纸」
+                if (trial.size != from.size) break
+                best = trial
+                lines++
+                if (bodyFillOf(trial) >= BODY_FILL_TARGET) break
+            }
+            return best
+        }
+
+        // ---- 按高度挑栏数（v0.17.1）----
+        // 栏数一直只按「题面有多宽」定：15 道单词拼装题干都不长 → 分 3 栏，
+        // 结果纵向只占半张纸、纸尾空 305pt。多栏只把**宽度**用上了，没管高度。
+        // 这里在「正文刚好一页」时把 1..6 栏都试一遍，取填充率最高的：
+        // 约束是不增页，所以 52 道口算不会被塞成 1 栏（那样会变两页）。
+        var chosenColumns = 0
+        if (pages.size == 1) {
+            // 下界取「题型自己声明的最低栏数」：竖式声明 3 栏是因为一道竖式要够宽才写得开，
+            // 不能为了填满纸把它压成 2 栏（每题变宽但**排得下的题数**没变，只是看着怪）。
+            // 单词拼装声明 2 栏，试排就能在 2~6 之间挑。
+            val minCols = doc.sections
+                .filter { !it.isAnswer && it.columns > 1 && it.questions.isNotEmpty() }
+                .maxOfOrNull { it.columns } ?: 1
+            var bestCols = 0
+            var bestScore = bodyFillOf(pages)
+            var bestPages = pages
+            for (cols in minCols..MAX_BODY_COLUMNS) {
+                if (cols == bodyColumns) continue
+                val trial = layoutBody(buildBody(1f, doc.lineGap.base, 0, cols))
+                if (trial.size != 1) continue
+                val score = bodyFillOf(trial)
+                if (score > bestScore) {
+                    bestScore = score
+                    bestCols = cols
+                    bestPages = trial
+                }
+            }
+            if (bestCols > 0) {
+                chosenColumns = bestCols
+                pages = bestPages
+            }
+        }
+
+        // 先加答题线，再微调行距：加线后块更高，行距能拉的范围也跟着变，
+        // 反过来做会把好不容易填满的页又撑出去
+        pages = fillWithAnswerLines(pages, chosenColumns)
+
         if (bodyFillOf(pages) < BODY_FILL_TARGET) {
             pages = stretchGap(pages, doc.lineGap, ::worstFillOf) { gap ->
-                layoutBody(buildBody(1f, gap))
+                layoutBody(buildBody(1f, gap, 0, chosenColumns))
             }
         }
 

@@ -54,7 +54,10 @@ import com.papermill.app.domain.generate.Tilt
 import com.papermill.app.domain.generate.stableHash
 import com.papermill.app.domain.reference.PracticeSheet
 import com.papermill.app.domain.reference.ReferenceSheet
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
@@ -114,6 +117,16 @@ private const val EXPORT_IMAGE_SCALE = 2.2f
 class AppState(private val rawContext: Context) {
 
     private val ctx = rawContext.applicationContext
+
+    /**
+     * 落盘用的后台协程域（v0.17.1）。
+     *
+     * 「记住上次看到哪儿」原来是在主线程直接写 JSON 文件：滚停 1.2 秒后整份
+     * session 序列化 + 写盘，正好卡在手指刚离开屏幕、用户以为要响应的那一刻。
+     * 一次写 1~2KB 看着不大，但 SharedPreferences 之外的文件写要过一遍
+     * fsync，落在一帧里就是 8~20ms 的卡顿 —— 滑动时最容易被察觉。
+     */
+    private val ioScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     /**
      * 开机就去读「上次停在哪儿」，而不是等界面挂起来再读。
@@ -353,19 +366,20 @@ class AppState(private val rawContext: Context) {
 
     /** 退出 / 切后台时把当前状态写盘。失败不打扰用户：丢了只是下次回到顶部 */
     fun persistSession() {
-        runCatching {
-            LocalStore.saveSession(
-                ctx,
-                SessionState(
-                    tab = navTab.name,
-                    screen = screen.name,
-                    previewPage = previewPage,
-                    // 只在预览页记卷 id：其他页面上 savedPaperId 可能是上一次的残留
-                    paperId = if (screen == Screen.PREVIEW) savedPaperId else "",
-                    createScroll = createScrollPx,
-                    scrolls = liveScrolls.toMap(),
-                ),
-            )
+        // 快照在主线程取（读 Compose 状态必须在主线程），序列化与写盘丢到 IO。
+        // 先取快照再切线程：反过来在 IO 线程读 mutableStateOf 会撞上快照系统的
+        // 「只能在一个线程改状态」检查。
+        val snapshot = SessionState(
+            tab = navTab.name,
+            screen = screen.name,
+            previewPage = previewPage,
+            // 只在预览页记卷 id：其他页面上 savedPaperId 可能是上一次的残留
+            paperId = if (screen == Screen.PREVIEW) savedPaperId else "",
+            createScroll = createScrollPx,
+            scrolls = liveScrolls.toMap(),
+        )
+        ioScope.launch {
+            runCatching { LocalStore.saveSession(ctx, snapshot) }
         }
     }
 
@@ -524,17 +538,32 @@ class AppState(private val rawContext: Context) {
     fun clearToast() { toast = "" }
 
     init {
+        val t0 = android.os.SystemClock.elapsedRealtime()
         bankSize = BankQuestionSource.loadFromAssets(ctx)
+        val t1 = android.os.SystemClock.elapsedRealtime()
         // 课标题库必须先 init：题型可用性判断要读 index.json 的题量统计，
         // 没初始化时 countOf 一律返回 0，那两个题型会静默消失
         CurriculumBank.init(ctx)
+        val t2 = android.os.SystemClock.elapsedRealtime()
         ScienceBank.init(ctx)
+        val t3 = android.os.SystemClock.elapsedRealtime()
         TextbookCatalog.init(ctx)
+        val t4 = android.os.SystemClock.elapsedRealtime()
         // 卷面样式（姓名栏 / 一行标题 / 页脚 / 行距）跟着设置一起读回来，
         // 用户上次调好的版式下次开 App 还是那样
         applySettings(LocalStore.loadSettings(ctx))
+        val t5 = android.os.SystemClock.elapsedRealtime()
         counts = PaperComposer.defaultSpec(grade, subjects, tilt, purpose).counts
+        val t6 = android.os.SystemClock.elapsedRealtime()
         refreshLists()
+        val t7 = android.os.SystemClock.elapsedRealtime()
+        if (BuildConfig.DEBUG) {
+            android.util.Log.i(
+                "Boot",
+                "题库 ${t1 - t0} · 课标 ${t2 - t1} · 科学 ${t3 - t2} · 教材 ${t4 - t3} · " +
+                    "设置 ${t5 - t4} · defaultSpec ${t6 - t5} · 列表 ${t7 - t6} = 合计 ${t7 - t0}ms",
+            )
+        }
     }
 
     fun refreshLists() {

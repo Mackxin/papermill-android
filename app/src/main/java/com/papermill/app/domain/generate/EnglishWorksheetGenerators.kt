@@ -146,9 +146,11 @@ object WordScrambleGenerator : BaseGenerator() {
         // 「重排字母组成单词：」「字母被打乱了：」这两种说法以前每道题都印一遍，
         // 一页十道就是十句一模一样的废话。做法改成：指令进大题说明（说一次），
         // 题干只留字母；只有「给出中文意思」的变式把中文留着 —— 那是已知条件，不是重复。
+        // 答案位从括号改成书写横线（见 QuestionType.WORD_SCRAMBLE 的 answerLines）：
+        // 一个完整的单词至少要小半行宽度，挤在「（　　）」里根本写不下
         return when (ctx.rng.nextInt(3)) {
-            0, 1 -> "$display →（　　）" to w.en
-            else -> "「${w.zh}」$display（　　）" to w.en
+            0, 1 -> "$display →" to w.en
+            else -> "「${w.zh}」$display →" to w.en
         }
     }
 }
