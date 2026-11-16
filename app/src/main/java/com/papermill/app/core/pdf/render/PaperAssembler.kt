@@ -30,6 +30,9 @@ object PaperAssembler {
                     },
                     columns = s.columns,
                     answerLines = s.answerLines,
+                    // 纸尾空白要不要转成更多答题线，由题型自己决定（v0.18.2）：
+                    // 竖式该加（多一条就多写一道），应用题不该加（会变成满页空横线）
+                    padWithLines = s.type.padWithLines,
                     instruction = s.instruction,
                 )
             )

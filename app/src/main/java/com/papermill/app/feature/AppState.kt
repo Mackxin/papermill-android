@@ -291,6 +291,15 @@ class AppState(private val rawContext: Context) {
     }
     var wrongNumbers by mutableStateOf<Set<Int>>(emptySet())
     var showQuestionList by mutableStateOf(false)
+
+    /**
+     * 「加一题」选题型的面板开没开（v0.18.2）。
+     *
+     * 放在 state 里而不是 Composable 的 remember：面板挂在预览页的 LazyColumn 内部，
+     * 滚出屏幕那段 item 会整块销毁，remember 里的 true 跟着没了 ——
+     * 用户滚一下面板就自己关掉。
+     */
+    var addingQuestion by mutableStateOf(false)
     var isReference by mutableStateOf(false)
 
     // 预览页改成「一次只看一页」，不再把 3 页 A4 竖着铺满整个屏幕
@@ -1707,27 +1716,68 @@ class AppState(private val rawContext: Context) {
     }
 
     /** 加一题：跟最后一道题同题型，追加到对应大题末尾并整卷重新编号 */
-    suspend fun appendQuestion() {
+    /**
+     * 在末尾加一题。
+     *
+     * [type] 为 null 时沿用「最后一题的题型」（老行为，点一下就加）；
+     * 指定题型时，卷里已有这道大题就并进去，没有就**新起一道大题** ——
+     * 用户的原话是「生成的卷子可以自定义删减添加」，光能删不能挑着加不够用。
+     */
+    suspend fun appendQuestion(type: QuestionType? = null) {
         val gp = paper ?: return
-        val lastType = gp.questions.lastOrNull()?.type ?: return
+        val target = type ?: gp.questions.lastOrNull()?.type ?: return
         busy = true
         try {
-            val fresh = withContext(Dispatchers.IO) { freshQuestion(gp, lastType) }
+            val fresh = withContext(Dispatchers.IO) { freshQuestion(gp, target) }
             if (fresh == null) {
-                toast = "这类题暂时抽不出新题了，可回参数页换题型"
+                toast = "「${target.label}」暂时抽不出新题了，换一种题型试试"
             } else {
                 val mutable = gp.sections.toMutableList()
-                val target = mutable.indexOfLast { it.type == lastType }.takeIf { it >= 0 }
-                    ?: mutable.lastIndex
-                mutable[target] = mutable[target].copy(questions = mutable[target].questions + fresh)
+                val prefix = PaperComposer.subjectPrefixFor(gp.spec, target)
+                val at = mutable.indexOfLast { it.type == target }
+                if (at >= 0) {
+                    // 并进已有的大题：标题里的「共 N 分」得跟着题数重算，
+                    // 否则纸上会出现「共 6 分」底下排着 4 道题
+                    val merged = mutable[at].questions + fresh
+                    mutable[at] = PaperComposer.sectionOf(
+                        spec = gp.spec,
+                        type = target,
+                        questions = merged,
+                        ordinal = at + 1,
+                        instruction = mutable[at].instruction,
+                        prefix = prefix,
+                    )
+                } else {
+                    mutable.add(
+                        PaperComposer.sectionOf(
+                            spec = gp.spec,
+                            type = target,
+                            questions = listOf(fresh),
+                            ordinal = mutable.size + 1,
+                            prefix = prefix,
+                        )
+                    )
+                }
                 val sections = renumber(mutable)
                 reRender(gp.copy(sections = sections, questions = sections.flatMap { it.questions }))
-                toast = "已在末尾加 1 题，共 ${sections.flatMap { it.questions }.size} 题"
+                toast = "已加 1 道${target.label}，共 ${sections.flatMap { it.questions }.size} 题"
             }
         } catch (t: Throwable) {
             toast = "加题失败：${t.message}"
         }
         busy = false
+    }
+
+    /**
+     * 这张卷现在还能加哪些题型。
+     *
+     * 只列「当前年级 + 已选科目能真正出题」的，跟参数页的题型库同一套判断 ——
+     * 列出来点了却抽不出题，比不给这个入口更糟。
+     */
+    fun addableTypes(): List<QuestionType> {
+        // 没有在看的卷子就没有「加题」这回事，直接空列表（面板只在预览页开）
+        val spec = paper?.spec ?: return emptyList()
+        return GeneratorRegistry.availableFor(spec.grade, spec.effectiveSubjectsForState())
     }
 
     private suspend fun reRender(gp: GeneratedPaper) {

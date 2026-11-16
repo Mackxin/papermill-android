@@ -55,21 +55,16 @@ object PaperComposer {
             val (hoisted, trimmed) = hoistInstruction(questions)
 
             sections.add(
-                GeneratedSection(
-                    index = sections.size + 1,
-                    title = "${CN_NUM.getOrElse(sections.size) { (sections.size + 1).toString() }}、" +
-                        "$prefix${type.label}（每题 2 分，共 ${questions.size * 2} 分）",
+                sectionOf(
+                    spec = spec,
                     type = type,
                     questions = trimmed,
-                    // 栏数：题型推荐的栏数与用户选的全局栏数取较大者。
-                    // v0.11.2 之前这里只判断 `type.columns <= 1`，等于题型自己的栏数
-                    // 从来没生效过 —— 竖式计算声明了 1 栏，就永远一栏一题、白占半张纸。
-                    columns = if (type.columns <= 1) 1 else maxOf(type.columns, spec.columns),
-                    answerLines = type.answerLines,
+                    ordinal = sections.size + 1,
                     instruction = listOfNotNull(
                         type.instruction.takeIf { it.isNotBlank() },
                         hoisted,
                     ).joinToString("　"),
+                    prefix = prefix,
                 )
             )
         }
@@ -80,6 +75,57 @@ object PaperComposer {
             questions = sections.flatMap { it.questions },
             createdAt = System.currentTimeMillis(),
         )
+    }
+
+    /** 每题的固定分值。标题里印的「每题 N 分，共 M 分」就是它算出来的 */
+    private const val POINTS_PER_QUESTION = 2
+
+    /**
+     * 用一组现成题目拼出一道大题：序号、标题、栏数、答题线、说明全按题型规则来。
+     *
+     * 为什么抽出来：预览页「加一题」时，如果加的题型这张卷里还没有，得现场
+     * 造一道大题 —— 标题格式、分值算法、栏数规则必须跟出卷时**一模一样**。
+     * 两处各写一遍，改一处忘另一处，纸上就会出现「应用题（每题 2 分，共 6 分）」
+     * 底下印着 4 道题这种对不上账的东西。
+     *
+     * [prefix] 由调用方给：出卷时它是「数学·」这种科目前缀（多学科交叉时才加），
+     * 加题时按同一规则现算。
+     */
+    fun sectionOf(
+        spec: PaperSpec,
+        type: QuestionType,
+        questions: List<GeneratedQuestion>,
+        ordinal: Int,
+        instruction: String = type.instruction,
+        prefix: String = "",
+    ): GeneratedSection = GeneratedSection(
+        index = ordinal,
+        title = "${CN_NUM.getOrElse(ordinal - 1) { ordinal.toString() }}、" +
+            "$prefix${type.label}" +
+            "（每题 $POINTS_PER_QUESTION 分，共 ${questions.size * POINTS_PER_QUESTION} 分）",
+        type = type,
+        questions = questions,
+        // 栏数：题型推荐的栏数与用户选的全局栏数取较大者。
+        // v0.11.2 之前只判断 `type.columns <= 1`，等于题型自己的栏数从来没生效过 ——
+        // 竖式计算声明了 1 栏，就永远一栏一题、白占半张纸。
+        // v0.18.2：带答题线的题型**不跟全局栏数走**。用户选 4 栏时应用题跟着变 4 栏，
+        // 就成了一行半句话、答题线短得写不下算式 —— 线是给孩子手写的，
+        // 栏越窄越没法用，这跟口算求「塞得下就行」不是一回事。
+        columns = when {
+            type.columns <= 1 -> 1
+            type.answerLines > 0 -> type.columns
+            else -> maxOf(type.columns, spec.columns)
+        },
+        answerLines = type.answerLines,
+        instruction = instruction,
+    )
+
+    /** 多学科交叉时大题标题的科目前缀；跨科题型（题库混装）不加，见 [compose] */
+    fun subjectPrefixFor(spec: PaperSpec, type: QuestionType): String {
+        if (spec.effectiveSubjects().size <= 1) return ""
+        val generator = GeneratorRegistry.of(type, spec.grade)
+        if (generator?.crossSubject == true) return ""
+        return GeneratorRegistry.subjectOf(type)?.let { "${it.label}·" } ?: ""
     }
 
     /**

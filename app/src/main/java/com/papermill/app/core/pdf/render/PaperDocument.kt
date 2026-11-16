@@ -47,6 +47,14 @@ data class PaperSection(
     val grid: PaperGrid? = null,
     /** 答案页标记：统计「最后一页正文用了多少」时不把它算进去 */
     val isAnswer: Boolean = false,
+    /**
+     * 纸尾有空白时，允许给这一节多画几条答题横线来填满（v0.18.2）。
+     *
+     * 竖式 / 脱式这类「题干就一个算式」的题型打开它是有益的：多一条线就多写一道。
+     * 应用题关掉 —— 题干占掉大半行，底下再排 5 条空横线，整页像草稿本，
+     * 用户的原话就是「不用空那么多行」。
+     */
+    val padWithLines: Boolean = true,
 )
 
 data class PaperDocument(

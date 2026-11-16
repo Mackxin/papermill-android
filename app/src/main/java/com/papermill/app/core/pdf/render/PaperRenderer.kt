@@ -202,7 +202,13 @@ object PaperRenderer {
                 // 把整卷当成一个整体换栏，不能一段一段换。
                 val hint = when {
                     forceFullWidth || section.questions.isEmpty() -> 0
-                    forceColumns > 0 -> forceColumns
+                    // 带答题线的题型**不跟整卷试排走**（v0.18.2）。
+                    // 试排是按「填充率最高」挑栏数的：6 道应用题排 1 栏能占 500 多 pt、
+                    // 排 2 栏只占 250pt —— 算法当然选 1 栏，可那样就成了
+                    // 「一行一道题、半张纸空着」，正是用户要改的那张图。
+                    // 这类题型的栏数由题型自己声明（应用题 2、竖式 3），不参与试排。
+                    forceColumns > 0 ->
+                        if (section.answerLines > 0) section.columns else forceColumns
                     else -> {
                     fitColumns(
                         widths = section.questions.map {
@@ -211,7 +217,17 @@ object PaperRenderer {
                         contentW = g.contentW,
                         gap = COLUMN_GAP,
                         floor = maxOf(1, section.columns),
-                        ceiling = MAX_BODY_COLUMNS,
+                        // 带答题线的题型（应用题 / 竖式 / 解方程）栏数**不往上加**，
+                        // 只认题型自己声明的值（v0.18.2）。
+                        // 起因：应用题从 1 栏改成 2 栏后，`PaperComposer` 那边算的是
+                        // maxOf(type.columns, spec.columns) —— 用户在参数页选 4 栏，
+                        // 应用题就被排成 4 栏，一行只够印半句话，答题线也短得写不下。
+                        // 线是给人写的，栏越窄越没法用，跟口算完全不同。
+                        ceiling = if (section.answerLines > 0) {
+                            maxOf(section.columns, 2).coerceAtMost(MAX_BODY_COLUMNS)
+                        } else {
+                            MAX_BODY_COLUMNS
+                        },
                     )
                     }
                 }
@@ -237,7 +253,10 @@ object PaperRenderer {
                             no = q.no,
                             stem = q.stem,
                             answerLines = if (section.answerLines > 0) {
-                                section.answerLines + extraLines
+                                // 拒绝加线的大题（应用题）只给题型自己声明的条数：
+                                // extraLines 是整卷统一算出来的，不能见谁给谁
+                                section.answerLines +
+                                    if (section.padWithLines) extraLines else 0
                             } else {
                                 0
                             },
@@ -334,13 +353,16 @@ object PaperRenderer {
             cols: Int,
         ): ArrayList<FlowLayout.Page> {
             if (from.size != 1) return from
-            // 只有「本来就要写一大片」的大题才值得加线：竖式 3 条起、应用题 4 条。
+            // 只有「本来就要写一大片」的大题才值得加线。
             // 一律加会出事 —— 单词拼装只要写一个词，加 3 条横线既浪费又让
             // 栏与栏的高度拉开（题干折一行的题和没折的题错开半行，整页像拼错的）。
-            if (doc.sections.none { !it.isAnswer && it.answerLines >= 2 }) return from
+            // 题型自己也可以拒绝（[padWithLines]）：应用题题干占掉大半行，
+            // 底下再排 5 条空横线，整页就像草稿本 —— 用户原话「不用空那么多行」。
+            if (doc.sections.none { !it.isAnswer && it.answerLines > 0 && it.padWithLines }) return from
             if (bodyFillOf(from) >= 0.90f) return from
             var best = from
             var lines = 0
+            // 最多加 3 条：竖式 3 条 → 6 条刚好铺满一页
             while (lines < 3) {
                 val trial = layoutBody(buildBody(1f, doc.gapBase, lines + 1, cols))
                 // 加线不许把正文顶成两页：那就成了「省半张纸」换「多一张纸」

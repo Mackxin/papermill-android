@@ -243,6 +243,12 @@ object DebugSheetDump {
                         QuestionType.UNIT_CONVERT to 17,
                     ),
                 ).copy(lineGap = LineGap.TIGHT),
+                // v0.18.2 应用题排版：单栏 4 线 → 两栏 3 线。
+                // 用户截图上是 5 道应用题占满整页、每题 4 条横线拉得很开。
+                // 这里用 6 题看两栏能省多少、题干会不会折行。
+                "word6-g4" to PaperComposer.specWith(
+                    4, Subject.MATH, mapOf(QuestionType.WORD_PROBLEM to 6),
+                ),
             )
 
             val report = StringBuilder("名称\t页数\t各页页尾空白(pt)\n")

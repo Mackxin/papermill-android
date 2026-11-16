@@ -501,6 +501,23 @@ fun PaperMillRoot(state: AppState) {
                 onConfirm = { state.finishGrading(it) },
             )
         }
+
+        // 加题选题型的面板（v0.18.2）。和批改面板一样挂在根节点 ——
+        // 触发按钮在预览页的 LazyColumn 里，挂在那儿会随 item 滚出屏幕而销毁
+        if (state.addingQuestion) {
+            AddQuestionDialog(
+                types = state.addableTypes(),
+                existing = state.paper?.sections
+                    ?.associate { it.type to it.questions.size }
+                    .orEmpty(),
+                busy = state.busy,
+                onDismiss = { state.addingQuestion = false },
+                onPick = { type ->
+                    state.addingQuestion = false
+                    scope.launch { state.appendQuestion(type) }
+                },
+            )
+        }
     }
 }
 
@@ -624,6 +641,107 @@ private fun GradingDialog(
                     lineHeight = 15.sp,
                 )
             }
+        }
+    }
+}
+
+/**
+ * 「加一题」选题型面板（v0.18.2）。
+ *
+ * 用户的原话是「生成的卷子可以自定义删减添加」—— 删和换原来就有，
+ * 「加」却只能加最后一题那种题型。想给数学卷补两道应用题、而卷子末尾是口算，
+ * 就只能回参数页重来。
+ *
+ * 这里只列当前年级 + 科目**真能出题**的题型（跟参数页同一套判断），
+ * 并且标出「卷里已有 N 题」：加进已有的大题还是新起一道，用户点之前就该知道。
+ */
+@Composable
+private fun AddQuestionDialog(
+    types: List<QuestionType>,
+    existing: Map<QuestionType, Int>,
+    busy: Boolean,
+    onDismiss: () -> Unit,
+    onPick: (QuestionType) -> Unit,
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(20.dp))
+                .background(PaperColors.Surface)
+                .padding(18.dp),
+        ) {
+            Text(
+                "加一题",
+                fontSize = 18.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = PaperColors.OnSurface,
+            )
+            Spacer(Modifier.height(3.dp))
+            Text(
+                "选一种题型。卷里已有这道大题就并进去，没有就新起一道排在最后。",
+                fontSize = PaperDimens.CaptionSp,
+                color = PaperColors.OnSurfaceVariant,
+                lineHeight = 17.sp,
+            )
+            Spacer(Modifier.height(12.dp))
+
+            if (types.isEmpty()) {
+                Text(
+                    "当前年级和科目下没有可加的题型，回参数页换个年级试试。",
+                    fontSize = PaperDimens.CaptionSp,
+                    color = PaperColors.OnSurfaceVariant,
+                )
+            } else {
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 330.dp)
+                        .verticalScroll(rememberScrollState()),
+                ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        types.forEach { type ->
+                            val had = existing[type] ?: 0
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(PaperColors.SurfaceAlt)
+                                    .clickable(enabled = !busy) { onPick(type) }
+                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(
+                                        type.label,
+                                        fontSize = PaperDimens.BodySp,
+                                        fontWeight = FontWeight.Medium,
+                                        color = PaperColors.OnSurface,
+                                    )
+                                    Text(
+                                        when {
+                                            had > 0 -> "卷里已有 $had 题 · 再加 1 题"
+                                            type.answerLines > 0 -> "需书写过程 · 新起一道大题"
+                                            else -> "新起一道大题"
+                                        },
+                                        fontSize = PaperDimens.TinySp,
+                                        color = PaperColors.OnSurfaceVariant,
+                                    )
+                                }
+                                Text(
+                                    "＋1",
+                                    fontSize = PaperDimens.LabelSp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = PaperColors.Primary,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(14.dp))
+            SecondaryButton("取消", modifier = Modifier.fillMaxWidth()) { onDismiss() }
         }
     }
 }
@@ -1987,9 +2105,10 @@ private fun PreviewScreen(
         }
     } else {
         CardSection(title = "题目清单", hint = "可单题换 / 删 / 加 · 勾完点「加入错题本」") {
-            MiniAction("+ 在末尾加一题", enabled = !state.busy) {
-                scope.launch { state.appendQuestion() }
-            }
+            // v0.18.2：原来只有「+ 在末尾加一题」，加进来的必然是最后一题的题型 ——
+            // 想补两道应用题、卷子末尾是口算，就只能回参数页重来。
+            // 现在点开能选题型，卷里没有这道大题就新起一道。
+            MiniAction("＋ 加一题", enabled = !state.busy) { state.addingQuestion = true }
             Spacer(Modifier.height(8.dp))
             Divider()
             gp?.questions?.forEach { q ->
