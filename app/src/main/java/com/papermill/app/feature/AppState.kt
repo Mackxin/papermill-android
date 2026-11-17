@@ -38,6 +38,7 @@ import com.papermill.app.domain.content.ScienceBank
 import com.papermill.app.domain.content.TextbookCatalog
 import com.papermill.app.domain.generate.AnswerMode
 import com.papermill.app.domain.generate.BankQuestionSource
+import com.papermill.app.domain.generate.CustomSheet
 import com.papermill.app.domain.generate.GenContext
 import com.papermill.app.domain.generate.GeneratedPaper
 import com.papermill.app.domain.generate.GeneratedQuestion
@@ -52,8 +53,11 @@ import com.papermill.app.domain.generate.PaperSpec
 import com.papermill.app.domain.generate.PageOrientation
 import com.papermill.app.domain.generate.QuestionType
 import com.papermill.app.domain.generate.Subject
+import com.papermill.app.domain.generate.Term
 import com.papermill.app.domain.generate.Tilt
 import com.papermill.app.domain.generate.stableHash
+import com.papermill.app.domain.profile.Gender
+import com.papermill.app.domain.profile.Student
 import com.papermill.app.domain.reference.PracticeSheet
 import com.papermill.app.domain.reference.ReferenceSheet
 import kotlinx.coroutines.CoroutineScope
@@ -79,7 +83,7 @@ data class LocalPdf(
     val landscape: Boolean,
 )
 
-enum class Screen { HOME, CREATE, PREVIEW, MISTAKES, HISTORY, HELP, REFERENCE, MORE, TEXTBOOK, LOCAL_PDF }
+enum class Screen { HOME, CREATE, PREVIEW, MISTAKES, HISTORY, HELP, REFERENCE, MORE, TEXTBOOK, LOCAL_PDF, STUDENTS }
 
 /**
  * 底部 dock 的页签。
@@ -257,6 +261,31 @@ class AppState(private val rawContext: Context) {
      * 只约束正文，答案页另算。
      */
     var targetPages by mutableStateOf(0)
+
+    // ---------------- v0.19.0 学生档案 / 学期 / 自编题 ----------------
+
+    /**
+     * 学生档案。点名字 = 年级 + 学期 + 科目一次就位，直接出卷。
+     *
+     * 数据只在本机 `students.json`，不联网、不上传；只收姓名 / 年级 / 学期 / 性别 / 科目。
+     */
+    var students by mutableStateOf(emptyList<Student>())
+        private set
+    var activeStudentId by mutableStateOf("")
+    /** 学期：0 全学年 / 1 上册 / 2 下册。只影响真带学期数据的资源（课标题库 / 课本目录） */
+    var term by mutableStateOf(Term.FIRST)
+    /** 自编题：用户自己写的题，按学生归属 */
+    var customSheets by mutableStateOf(emptyList<CustomSheet>())
+        private set
+
+    val activeStudent: Student? get() = students.firstOrNull { it.id == activeStudentId }
+
+    /** 当前学生能用的自编题：共用（studentId 空）+ 他自己的 */
+    val visibleCustomSheets: List<CustomSheet>
+        get() = customSheets.filter { it.studentId.isEmpty() || it.studentId == activeStudentId }
+
+    /** 自编题一共会印几道（去重 + 去无效行之后） */
+    val customQuestionCount: Int get() = visibleCustomSheets.sumOf { CustomSheet.validCount(it) }
 
     /** 页脚最终要印的文字：null 走默认，"" 表示不印 */
     private fun footerTextForSpec(): String? = when (footerMode) {
@@ -540,6 +569,8 @@ class AppState(private val rawContext: Context) {
                     dockTabs = dockTabs.joinToString(",") { it.name },
                     targetPages = targetPages,
                     layoutVersion = LAYOUT_VERSION,
+                    activeStudentId = activeStudentId,
+                    term = term,
                 ),
             )
         }
@@ -559,6 +590,8 @@ class AppState(private val rawContext: Context) {
         footerSize = FooterSize.of(s.footerSize)
         dockTabs = parseDockTabs(s.dockTabs)
         targetPages = s.targetPages.coerceIn(0, 8)
+        activeStudentId = s.activeStudentId
+        term = s.term.coerceIn(0, 2)
 
         // v0.18.1 一次性迁移：老版本行距默认 NORMAL，用户反馈「行与行之间太宽」。
         // 只改默认值不够 —— 磁盘上存的还是 NORMAL，升级后读回来照样宽。
@@ -569,6 +602,94 @@ class AppState(private val rawContext: Context) {
             saveSettings()
         }
     }
+
+    // ---------------------------------------------------------------- 学生档案
+
+    /** 把档案里的年级 / 学期 / 科目搬到参数上（不动题型配比） */
+    private fun applyProfile(s: Student) {
+        grade = s.grade.coerceIn(1, 9)
+        term = s.term.coerceIn(0, 2)
+        subjects = s.subjects.filter { it.availableFor(grade) }.ifEmpty { listOf(Subject.MATH) }
+        subject = subjects.first()
+        normalizeTilt()
+    }
+
+    /**
+     * 点学生名字：档案就位 + 直接出卷。
+     *
+     * 用户的原话是「点击名字自动选择对应的教学资源来生成卷子」，所以这里不只是切参数，
+     * 还会立刻排一张新卷。**年级/科目真的变了才重算题量** —— 同一个人连点两下，
+     * 题量不该被他上次的手动调整冲掉。
+     */
+    suspend fun useStudent(id: String) {
+        val s = students.firstOrNull { it.id == id } ?: return
+        val changed = grade != s.grade || subjects.toSet() != s.subjects.toSet() || term != s.term
+        activeStudentId = id
+        applyProfile(s)
+        titleOverride = null
+        clearUnitFilter()
+        if (changed || counts.isEmpty()) {
+            counts = PaperComposer.defaultSpec(grade, subjects, tilt, purpose).counts
+        }
+        saveSettings()
+        if (totalQuestions <= 0) {
+            toast = "「${s.name}」的配置出不了题，去参数页挑一下题型"
+            return
+        }
+        generate()
+    }
+
+    fun upsertStudent(s: Student) {
+        val prev = students.firstOrNull { it.id == s.id }
+        val exists = prev != null
+        students = if (exists) students.map { if (it.id == s.id) s else it } else students + s
+        LocalStore.saveStudents(ctx, students)
+        // 新增第一个学生、或改的正好是当前学生：参数跟着变，省得再去点一次名字
+        if (!exists || s.id == activeStudentId) {
+            // 改了年级 / 科目要重算配比 —— 否则留着「初一物理」那套题型去出三年级的卷，
+            // 那些题型在三年级根本不存在，会静默消失（纸上少一整道大题）
+            val recollect = prev == null || prev.grade != s.grade ||
+                prev.subjects.toSet() != s.subjects.toSet()
+            activeStudentId = s.id
+            applyProfile(s)
+            if (recollect) counts = PaperComposer.defaultSpec(grade, subjects, tilt, purpose).counts
+        }
+        saveSettings()
+    }
+
+    fun deleteStudent(id: String) {
+        val name = students.firstOrNull { it.id == id }?.name.orEmpty()
+        students = students.filterNot { it.id == id }
+        // 学生没了，挂在他名下的自编题也没意义了 —— 留着只会在别的孩子卷上冒出来
+        customSheets = customSheets.filterNot { it.studentId == id }
+        LocalStore.saveStudents(ctx, students)
+        LocalStore.saveCustomSheets(ctx, customSheets)
+        if (activeStudentId == id) {
+            activeStudentId = ""
+            saveSettings()
+        }
+        toast = "已删除「$name」的档案"
+    }
+
+    /** 新建档案的空壳 id：时间戳 36 进制，够唯一又不重复 */
+    fun newStudentId(): String = "s" + System.currentTimeMillis().toString(36)
+
+    // ---------------------------------------------------------------- 自编题
+
+    fun upsertCustomSheet(sheet: CustomSheet) {
+        val exists = customSheets.any { it.id == sheet.id }
+        customSheets = if (exists) {
+            customSheets.map { if (it.id == sheet.id) sheet else it }
+        } else customSheets + sheet
+        LocalStore.saveCustomSheets(ctx, customSheets)
+    }
+
+    fun deleteCustomSheet(id: String) {
+        customSheets = customSheets.filterNot { it.id == id }
+        LocalStore.saveCustomSheets(ctx, customSheets)
+    }
+
+    fun newCustomId(): String = "c" + System.currentTimeMillis().toString(36)
 
     /**
      * 解析存下来的页签串。
@@ -704,6 +825,7 @@ class AppState(private val rawContext: Context) {
             if (screen == Screen.PREVIEW) return if (isReference) NavTab.REFERENCE else NavTab.HOME
             // 子页面一律高亮它所属的页签，否则顶栏有返回键、dock 一个都不亮（像丢了）
             if (screen == Screen.CREATE) return NavTab.HOME
+            if (screen == Screen.STUDENTS) return NavTab.HOME
             if (screen == Screen.HELP) return NavTab.MORE
             return NavTab.entries.firstOrNull { it.screen == screen } ?: NavTab.HOME
         }
@@ -739,7 +861,7 @@ class AppState(private val rawContext: Context) {
             }
             // 页签页：返回键先回首页，首页再按才退出 App
             Screen.REFERENCE, Screen.MISTAKES, Screen.HISTORY, Screen.TEXTBOOK,
-            Screen.MORE -> {
+            Screen.MORE, Screen.STUDENTS -> {
                 screen = Screen.HOME
                 true
             }
@@ -820,6 +942,12 @@ class AppState(private val rawContext: Context) {
         // 卷面样式（姓名栏 / 一行标题 / 页脚 / 行距）跟着设置一起读回来，
         // 用户上次调好的版式下次开 App 还是那样
         applySettings(LocalStore.loadSettings(ctx))
+        // 学生档案与自编题：小文件，开机一次读完就够（加起来几 KB）
+        students = LocalStore.loadStudents(ctx)
+        customSheets = LocalStore.loadCustomSheets(ctx)
+        // 上次选中的学生还在：把年级 / 学期 / 科目带回来，但**不**自动出卷 ——
+        // 冷启动直接弹一张卷子会让人以为「我只想看看错题本，怎么给我印卷子」。
+        activeStudent?.let { applyProfile(it) }
         // 上次停在「试卷库」或「课本」，这次那个页签被关掉了 —— 落到首页，
         // 否则会渲染一个既不在 pager 里、又不是子页面的空白界面
         if (screen in ALL_TAB_SCREENS && !isTabScreen(screen)) screen = Screen.HOME
@@ -943,6 +1071,22 @@ class AppState(private val rawContext: Context) {
         previewSeed = System.currentTimeMillis()
     }
 
+    /**
+     * 换学期（v0.19.0）。
+     *
+     * 只影响**真带学期数据**的资源：课标题库的知识点、课本目录。
+     * 口算/字词按年级分段，选上册不会变少 —— 所以换学期只换种子，不重算题量，
+     * 免得用户以为「换了学期题量怎么变了」，其实那只是配比重算的副作用。
+     */
+    fun selectTerm(t: Int) {
+        val next = t.coerceIn(0, 2)
+        if (term == next) return
+        term = next
+        saveSettings()
+        previewSeed = System.currentTimeMillis()
+        toast = "已切到${GradeProfiles.gradeLabel(grade)}${Term.label(next)}"
+    }
+
     /** 多学科交叉：点一下加进来，再点一下取消（至少留一科） */
     fun toggleSubject(s: Subject) {
         if (!s.availableFor(grade)) return
@@ -1045,7 +1189,13 @@ class AppState(private val rawContext: Context) {
         toast = "已按 ${map.size} 种题型智能配比，共 ${map.values.sum()} 题"
     }
 
-    val totalQuestions: Int get() = counts.values.sum()
+    /**
+     * 这张卷一共几道题。
+     *
+     * v0.19.0 起把自编题也算进来 —— 原来只数 counts，用户写 20 个词进卷子，
+     * 首页还显示「0 题」，点「直接出卷」直接被 `totalQuestions > 0` 挡掉。
+     */
+    val totalQuestions: Int get() = counts.values.sum() + customQuestionCount
 
     val estimatedPages: Int
         get() {
@@ -1060,6 +1210,13 @@ class AppState(private val rawContext: Context) {
             counts.forEach { (t, n) ->
                 val cols = if (t.columns <= 1) 1 else maxOf(t.columns, columns)
                 val h = TYPICAL_QUESTION_H + t.answerLines * TYPICAL_ANSWER_LINE_H
+                used += n * h / cols
+            }
+            // 自编题也占纸：按各自栏数 / 答题线估一个高度，否则首页会少报一页
+            visibleCustomSheets.forEach { sheet ->
+                val n = CustomSheet.validCount(sheet)
+                val cols = sheet.columns.coerceIn(1, 4)
+                val h = TYPICAL_QUESTION_H + sheet.answerLines * TYPICAL_ANSWER_LINE_H
                 used += n * h / cols
             }
             var pages = 1 + (used / contentH).toInt()
@@ -1160,13 +1317,16 @@ class AppState(private val rawContext: Context) {
         copySuffix: String = "",
     ): PaperSpec {
         val total = useCounts.values.sum()
+        // 「三年级上册」这种写法家长最熟：只写「三年级」分不出这学期学的是哪册
+        val gradeText = GradeProfiles.gradeLabel(grade) +
+            if (term == Term.BOTH) "" else Term.label(term)
         val autoTitle = when {
             // 按单元出卷：标题直接写单元名，家长一眼知道这张卷考的是哪一课
-            unitTitle.isNotEmpty() -> "${GradeProfiles.gradeLabel(grade)} · $unitTitle"
+            unitTitle.isNotEmpty() -> "$gradeText · $unitTitle"
             subjects.size > 1 ->
-                "${GradeProfiles.stageLabel(grade)} · ${GradeProfiles.gradeLabel(grade)} · 综合练习"
+                "${GradeProfiles.stageLabel(grade)} · $gradeText · 综合练习"
             else ->
-                "${GradeProfiles.stageLabel(grade)} · ${GradeProfiles.gradeLabel(grade)} · ${subject.label}练习"
+                "${GradeProfiles.stageLabel(grade)} · $gradeText · ${subject.label}练习"
         }
         val current = titleOverride?.takeIf { it.isNotBlank() } ?: autoTitle
         // titleOverride 可能是「…数学练习　A 卷」（从试卷库改参数、或上一轮生成 A 卷
@@ -1200,6 +1360,10 @@ class AppState(private val rawContext: Context) {
             lineGap = lineGap,
             lineGapCustom = lineGapCustom,
             targetPages = targetPages,
+            // v0.19.0：学期 / 卷头姓名 / 自编题
+            term = term,
+            studentName = activeStudent?.name.orEmpty(),
+            customSheets = visibleCustomSheets,
         )
     }
 
@@ -1768,11 +1932,15 @@ class AppState(private val rawContext: Context) {
             s.copy(
                 index = i + 1,
                 questions = qs,
-                title = PaperComposer.sectionTitle(
-                    type = s.type,
+                // 用 s.name / s.points 重印，而不是按 type 重算：
+                // 自编题的名字是用户起的，按类型重算会变回「自编题」、分值也回到 2
+                title = PaperComposer.titleFor(
+                    name = s.name.ifBlank {
+                        PaperComposer.subjectPrefixFor(spec, s.type) + s.type.label
+                    },
+                    points = s.points,
                     count = qs.size,
                     ordinal = i + 1,
-                    prefix = PaperComposer.subjectPrefixFor(spec, s.type),
                 ),
             )
         }

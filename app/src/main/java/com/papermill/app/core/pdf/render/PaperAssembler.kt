@@ -62,6 +62,7 @@ object PaperAssembler {
             subtitle = subtitle,
             subtitleInline = spec.headerOneLine,
             showNameRow = spec.showNameRow,
+            studentName = spec.studentName,
             sections = sections,
             footerText = spec.footerText,
             // 生成时间印在页脚右侧：家长要能看出这是哪天的卷子，

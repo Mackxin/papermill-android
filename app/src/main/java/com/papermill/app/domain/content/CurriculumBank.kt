@@ -214,16 +214,34 @@ object CurriculumBank {
         difficulty: Int,
         choice: Boolean?,
         topicIds: Set<String> = emptySet(),
+        /** 学期：0 不限 / 1 上册 / 2 下册（v0.19.0 学生档案带过来的） */
+        term: Int = 0,
     ): List<CurricQuestion> {
         val targets = if (subjects.isEmpty()) Subject.entries else subjects.toList()
+        val wantedSemester = when (term) {
+            1 -> "上"
+            2 -> "下"
+            else -> ""
+        }
         val collected = ArrayList<CurricQuestion>()
         for (s in targets) {
             for (q in data(s).questions) {
                 if (topicIds.isNotEmpty() && q.topicId !in topicIds) continue
                 if (q.grade > grade) continue
                 if (choice != null && q.choice != choice) continue
+                // 空 / 「全」表示这册不分上下（物理有不少这样的知识点），
+                // 选上册时它们应该照常出现，不能被筛掉
+                if (wantedSemester.isNotEmpty()) {
+                    val sem = semesterOf(s, q.topicId)
+                    if (sem.isNotEmpty() && sem != "全" && sem != wantedSemester) continue
+                }
                 collected.add(q)
             }
+        }
+        // 学期筛选把池子筛空时退回不限学期：宁可混进下册的题，
+        // 也不能出现「选了上册就一道题都出不来」这种明显是坏了的卷子。
+        if (collected.isEmpty() && wantedSemester.isNotEmpty()) {
+            return pool(subjects, grade, difficulty, choice, topicIds, term = 0)
         }
         if (collected.isEmpty()) return collected
         if (topicIds.isNotEmpty()) return byDifficulty(collected, difficulty)
@@ -235,6 +253,16 @@ object CurriculumBank {
         if (nearby.size >= MIN_POOL) return byDifficulty(nearby, difficulty)
 
         return byDifficulty(collected, difficulty)
+    }
+
+    /** 知识点 id → 上/下。按科目缓存一份，出卷时每题查一次不能每次都遍历题目列表 */
+    private val semesterCache = HashMap<String, Map<String, String>>()
+
+    private fun semesterOf(subject: Subject, topicId: String): String {
+        val map = semesterCache.getOrPut(keyOf(subject)) {
+            data(subject).topics.associate { it.id to it.semester }
+        }
+        return map[topicId].orEmpty()
     }
 
     /** 某个单元（或知识点集合）里有多少道题 —— 单元卡片上要显示「N 道」，出卷时也按它封顶 */

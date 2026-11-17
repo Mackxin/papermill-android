@@ -2,11 +2,15 @@ package com.papermill.app.core.store
 
 import android.content.Context
 import com.papermill.app.domain.generate.AnswerMode
+import com.papermill.app.domain.generate.CustomMode
+import com.papermill.app.domain.generate.CustomSheet
 import com.papermill.app.domain.generate.GeneratedPaper
 import com.papermill.app.domain.generate.PaperSpec
 import com.papermill.app.domain.generate.QuestionType
 import com.papermill.app.domain.generate.Subject
 import com.papermill.app.domain.generate.stableHash
+import com.papermill.app.domain.profile.Gender
+import com.papermill.app.domain.profile.Student
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -78,6 +82,10 @@ data class AppSettings(
      * 读到 0 就一次性迁移到新默认值。
      */
     val layoutVersion: Int = 0,
+    /** 当前选中的学生档案 id；空 = 没选（按参数页的年级科目出卷） */
+    val activeStudentId: String = "",
+    /** 学期：0 全学年 / 1 上册 / 2 下册（没选学生档案时也记住） */
+    val term: Int = 1,
 )
 
 /**
@@ -127,6 +135,8 @@ object LocalStore {
     private const val FILE_MISTAKES = "mistakes.json"
     private const val FILE_SETTINGS = "settings.json"
     private const val FILE_SESSION = "session.json"
+    private const val FILE_STUDENTS = "students.json"
+    private const val FILE_CUSTOM = "custom.json"
 
     private fun f(ctx: Context, name: String) = File(ctx.filesDir, name)
 
@@ -161,6 +171,8 @@ object LocalStore {
                 dockTabs = o.optString("dockTabs", "HOME,REFERENCE,MISTAKES,HISTORY,TEXTBOOK,MORE"),
                 targetPages = o.optInt("targetPages", 0),
                 layoutVersion = o.optInt("layoutVersion", 0),
+                activeStudentId = o.optString("activeStudentId", ""),
+                term = o.optInt("term", 1).coerceIn(0, 2),
             )
         }.getOrDefault(AppSettings())
     }
@@ -182,8 +194,99 @@ object LocalStore {
                     .put("dockTabs", settings.dockTabs)
                     .put("targetPages", settings.targetPages)
                     .put("layoutVersion", settings.layoutVersion)
+                    .put("activeStudentId", settings.activeStudentId)
+                    .put("term", settings.term)
                     .toString(2)
             )
+        }
+    }
+
+    // -------------------------------------------------------------- 学生档案
+
+    /**
+     * 学生档案（v0.19.0）。单独一个文件，理由和错题本一样：
+     * 备份/恢复就是拷一个文件，且将来加字段不会牵动 settings。
+     */
+    fun loadStudents(ctx: Context): List<Student> {
+        val arr = read(ctx, FILE_STUDENTS)
+        return (0 until arr.length()).mapNotNull { i ->
+            runCatching {
+                val o = arr.getJSONObject(i)
+                Student(
+                    id = o.optString("id"),
+                    name = o.optString("name"),
+                    grade = o.optInt("grade", 3).coerceIn(1, 9),
+                    term = o.optInt("term", 1).coerceIn(0, 2),
+                    gender = Gender.of(o.optString("gender")),
+                    subjects = o.optString("subjects")
+                        .split(',')
+                        .mapNotNull { name -> Subject.entries.firstOrNull { it.name == name.trim() } }
+                        .ifEmpty { listOf(Subject.MATH) },
+                    note = o.optString("note"),
+                )
+            }.getOrNull()
+        }
+    }
+
+    fun saveStudents(ctx: Context, list: List<Student>) {
+        runCatching {
+            val arr = JSONArray()
+            list.forEach { s ->
+                arr.put(JSONObject().apply {
+                    put("id", s.id)
+                    put("name", s.name)
+                    put("grade", s.grade)
+                    put("term", s.term)
+                    put("gender", s.gender.name)
+                    put("subjects", s.subjects.joinToString(",") { it.name })
+                    put("note", s.note)
+                })
+            }
+            write(ctx, FILE_STUDENTS, arr)
+        }
+    }
+
+    // -------------------------------------------------------------- 自编题
+
+    fun loadCustomSheets(ctx: Context): List<CustomSheet> {
+        val arr = read(ctx, FILE_CUSTOM)
+        return (0 until arr.length()).mapNotNull { i ->
+            runCatching {
+                val o = arr.getJSONObject(i)
+                CustomSheet(
+                    id = o.optString("id"),
+                    studentId = o.optString("studentId"),
+                    title = o.optString("title"),
+                    mode = CustomMode.of(o.optString("mode")),
+                    raw = o.optString("raw"),
+                    columns = o.optInt("columns", 2).coerceIn(1, 4),
+                    answerLines = o.optInt("answerLines", 1).coerceIn(0, 6),
+                    shuffle = o.optBoolean("shuffle", true),
+                    count = o.optInt("count", 0).coerceIn(0, 200),
+                    points = o.optInt("points", 2).coerceIn(1, 20),
+                )
+            }.getOrNull()
+        }.filter { it.id.isNotEmpty() }
+    }
+
+    fun saveCustomSheets(ctx: Context, list: List<CustomSheet>) {
+        runCatching {
+            val arr = JSONArray()
+            list.forEach { s ->
+                arr.put(JSONObject().apply {
+                    put("id", s.id)
+                    put("studentId", s.studentId)
+                    put("title", s.title)
+                    put("mode", s.mode.name)
+                    put("raw", s.raw)
+                    put("columns", s.columns)
+                    put("answerLines", s.answerLines)
+                    put("shuffle", s.shuffle)
+                    put("count", s.count)
+                    put("points", s.points)
+                })
+            }
+            write(ctx, FILE_CUSTOM, arr)
         }
     }
 

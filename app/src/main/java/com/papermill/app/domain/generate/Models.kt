@@ -154,6 +154,16 @@ enum class QuestionType(
     FIGURE_EXPR("看图列式", 1, 0, "看图数一数一共有几个，把加法算式写在括号里。"),
     CLOCK_READ("认识钟面", 1, 0, "看钟面，写出钟面上的时刻。"),
     BAR_CHART("条形统计图", 1, 0, "看统计图回答问题，把答案填在括号里。"),
+
+    /**
+     * 自编题（v0.19.0）：内容完全由用户自己给，见 [CustomSheet]。
+     *
+     * 这个题型**不出现在题型库里**（[com.papermill.app.domain.generate.GeneratorRegistry]
+     * 没有它的生成器）—— 它没有「随机出题」这回事，题就是你写的那些行。
+     * 声明在枚举里只是为了复用大题标题、分值、栏数、答题线这一整套排版规则，
+     * 让自编出来的大题和内置题型长得一模一样。
+     */
+    CUSTOM("自编题", 2, 1),
     ;
 
     /**
@@ -191,7 +201,7 @@ enum class QuestionType(
             PINYIN, HANZI, DICTATION, ENGLISH_WORD, FILL_BLANK, UNIT_CONVERT,
             NUMBER_PATTERN, LETTER_ORDER, WORD_SCRAMBLE, THEME_PINYIN, THEME_GROUP,
             PHONETIC_WRITE, TEXTBOOK_HANZI, TEXTBOOK_WORD, IDIOM_FILL, POEM_FILL,
-            CURRIC_BLANK, SCIENCE_BLANK,
+            CURRIC_BLANK, SCIENCE_BLANK, CUSTOM,
             -> QuestionFamily.BLANK
         }
 }
@@ -344,6 +354,13 @@ data class GeneratedSection(
     val answerLines: Int,
     /** 印在大题标题下面、只印一次的做题说明（见 [QuestionType.instruction]） */
     val instruction: String = "",
+    /**
+     * 大题名（不含「一、」和「共 N 分」）。删题后要重印标题，只能靠它复原 ——
+     * 自编题的名字是用户起的（「本周生词」），照 [type] 重算会变回「自编题」。
+     */
+    val name: String = "",
+    /** 每题分值：自编题可以让用户自己定（抄写 5 分、口算 2 分） */
+    val points: Int = 2,
 )
 
 /**
@@ -478,7 +495,48 @@ data class PaperSpec(
      * 实现在 PaperRenderer：拿不到就二分缩小正文字号，下限 [MIN_TYPE_SCALE]。
      */
     val targetPages: Int = 0,
+
+    // ---------------- v0.19.0 学生档案 / 学期 / 自编题 ----------------
+
+    /**
+     * 学期：1 上册 / 2 下册 / 0 不限。
+     *
+     * 只对**真有学期数据**的资源生效：课标题库的知识点带 `semester` 字段，
+     * 课本目录带册次；口算、字词这类按年级分段的资源没有学期概念，
+     * 选上册并不会把口算变少 —— 那种「选了没反应」的假开关比没有更糟，
+     * 所以界面上写明「影响哪些资源」。
+     */
+    val term: Int = 1,
+    /** 卷头姓名栏里直接印出来的学生名；空 = 留空线自己写 */
+    val studentName: String = "",
+    /** 自编题：内容由用户自己给，按顺序接在常规大题后面（v0.19.0） */
+    val customSheets: List<CustomSheet> = emptyList(),
 )
+
+/** 学期文案：上册 / 下册 / 不限。集中一处，UI 和标题都读它 */
+object Term {
+    const val BOTH = 0
+    const val FIRST = 1
+    const val SECOND = 2
+
+    fun label(term: Int): String = when (term) {
+        FIRST -> "上册"
+        SECOND -> "下册"
+        else -> "全学年"
+    }
+
+    private val CN = arrayOf("一", "二", "三", "四", "五", "六", "七", "八", "九")
+
+    /** 卷标题 / 学生胶囊上的短后缀：「三上」「三下」。用汉字数字，幼儿园家长也一眼看懂 */
+    fun short(grade: Int, term: Int): String {
+        val g = CN.getOrElse(grade - 1) { grade.toString() }
+        return when (term) {
+            FIRST -> "${g}上"
+            SECOND -> "${g}下"
+            else -> "${g}年级"
+        }
+    }
+}
 
 data class GeneratedPaper(
     val spec: PaperSpec,

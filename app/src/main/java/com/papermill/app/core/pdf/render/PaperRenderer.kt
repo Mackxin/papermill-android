@@ -733,14 +733,33 @@ object PaperRenderer {
             val rule = tp.rulePaint(0.8f, 0xFF333333.toInt())
             var x = g.margin
 
-            fun field(text: String, lineW: Float) {
+            fun field(text: String, lineW: Float, value: String = "") {
                 b.drawText(text, x, baseline, labelPaint)
                 x += tp.measure(text, labelPaint) + 3f
-                b.drawLine(x, baseline + 2f, x + lineW, baseline + 2f, rule)
-                x += lineW + 16f
+                var remain = lineW
+                if (value.isNotEmpty()) {
+                    // 已经知道是谁的卷子：名字直接印上去，线留短一截还能写别的。
+                    // 名字最多占三分之二行宽，太长就截断 —— 姓名栏不能因为一个名字
+                    // 把后面的「班级／日期／得分」挤出纸外。
+                    val vPaint = tp.paint(11f, color = 0xFF1A1A1A.toInt())
+                    // 名字最多占四分之三行宽：中文名两三个字远用不到，
+                    // 英文名（XiaoMing）也不会被截成「XiaoM…」
+                    val room = lineW * 0.75f
+                    var shown = value
+                    while (shown.length > 1 && tp.measure(shown, vPaint) > room) {
+                        shown = shown.dropLast(2) + "…"
+                    }
+                    b.drawText(shown, x + 1f, baseline, vPaint)
+                    val vw = tp.measure(shown, vPaint)
+                    x += vw + 4f
+                    remain = (lineW - vw - 4f).coerceAtLeast(14f)
+                }
+                b.drawLine(x, baseline + 2f, x + remain, baseline + 2f, rule)
+                x += remain + 16f
             }
 
-            field("姓名", 62f)
+            // 姓名这一格给宽一点：有名字时要真的印得下，不再从 62pt 里抠
+            field("姓名", 90f, doc.studentName)
             field("班级", 52f)
             field("日期", 56f)
 

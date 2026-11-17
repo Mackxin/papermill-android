@@ -19,6 +19,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -64,6 +65,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextAlign
@@ -73,6 +75,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.LineBreak
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.papermill.app.core.design.PaperColors
@@ -83,6 +86,8 @@ import com.papermill.app.domain.content.ContentCatalog
 import com.papermill.app.domain.content.CurriculumBank
 import com.papermill.app.domain.content.TextbookCatalog
 import com.papermill.app.domain.generate.AnswerMode
+import com.papermill.app.domain.generate.CustomMode
+import com.papermill.app.domain.generate.CustomSheet
 import com.papermill.app.domain.generate.GeneratorRegistry
 import com.papermill.app.domain.generate.FooterSize
 import com.papermill.app.domain.generate.GradeProfiles
@@ -92,7 +97,10 @@ import com.papermill.app.domain.generate.PaperPurpose
 import com.papermill.app.domain.generate.PaperTemplates
 import com.papermill.app.domain.generate.QuestionType
 import com.papermill.app.domain.generate.Subject
+import com.papermill.app.domain.generate.Term
 import com.papermill.app.domain.generate.Tilt
+import com.papermill.app.domain.profile.Gender
+import com.papermill.app.domain.profile.Student
 import com.papermill.app.domain.reference.PracticeData
 import com.papermill.app.domain.reference.ReferenceData
 import kotlinx.coroutines.CoroutineScope
@@ -497,6 +505,7 @@ fun PaperMillRoot(state: AppState) {
                             Screen.CREATE -> CreateScreen(state, scope)
                             Screen.PREVIEW -> PreviewScreen(state, scope, activity)
                             Screen.HELP -> HelpScreen(state)
+                            Screen.STUDENTS -> StudentsScreen(state, scope)
                             Screen.LOCAL_PDF -> LocalPdfScreen(state) {
                                 pdfLauncher.launch(arrayOf("application/pdf"))
                             }
@@ -908,7 +917,10 @@ internal fun parseNumberList(raw: String, valid: Set<Int>): Set<Int> {
 
 private fun screenTitle(state: AppState): Pair<String, String> = when (state.screen) {
     Screen.HOME -> "卷子" to "选年级科目，30 秒出一张能打印的卷子"
-    Screen.CREATE -> "自由组合" to "${GradeProfiles.gradeLabel(state.grade)} · ${state.totalQuestions} 题 · 预计 ${state.estimatedPages} 页 ${state.orientation.label}"
+    Screen.CREATE -> "自由组合" to
+        "${GradeProfiles.gradeLabel(state.grade)}" +
+        (if (state.term == Term.BOTH) "" else Term.label(state.term)) +
+        " · ${state.totalQuestions} 题 · 预计 ${state.estimatedPages} 页 ${state.orientation.label}"
     Screen.PREVIEW -> if (state.isReference) {
         // 速查表可能排到 2 页，副标题必须读真实页数（原来写死「1 页」和卡片数字打架）
         "打印预览" to "${state.pdf?.pageCount ?: 0} 页 A4 · 与打印结果完全一致"
@@ -923,6 +935,7 @@ private fun screenTitle(state: AppState): Pair<String, String> = when (state.scr
     Screen.HISTORY -> "试卷库" to "最近的卷子 · 可重新打开或改参数再出一张"
     Screen.HELP -> "打印帮助" to "在家打印与远程打印两种方式"
     Screen.LOCAL_PDF -> "打印本地 PDF" to (state.localPdf?.let { "${it.pages} 页 · ${it.name}" } ?: "选一个 PDF")
+    Screen.STUDENTS -> "学生档案" to "点名字 = 年级 + 学期 + 科目一次就位，直接出卷"
 }
 
 /**
@@ -959,6 +972,12 @@ private fun LazyListScope.homeScreenItems(state: AppState, scope: CoroutineScope
     val presets = PaperTemplates.forSelection(state.grade, state.subjects).take(8)
     val subjectLabel = state.subjects.joinToString(" + ") { it.label }
 
+    // 给谁出卷（v0.19.0）：比「多少题几页纸」更靠前的问题
+    item {
+        StudentStrip(state, scope)
+        Spacer(Modifier.height(12.dp))
+    }
+
     // Hero：一屏说清「给谁出卷、多少题、几张纸」，渐变是整页的视觉锚点
     item {
         Box(
@@ -975,7 +994,9 @@ private fun LazyListScope.homeScreenItems(state: AppState, scope: CoroutineScope
         ) {
             Column {
                 Text(
-                    "${GradeProfiles.gradeLabel(state.grade)} · $subjectLabel",
+                    "${GradeProfiles.gradeLabel(state.grade)}" +
+                        (if (state.term == Term.BOTH) "" else Term.label(state.term)) +
+                        " · $subjectLabel",
                     fontSize = 24.sp,
                     fontWeight = FontWeight.Bold,
                     color = Color.White,
@@ -1035,6 +1056,19 @@ private fun LazyListScope.homeScreenItems(state: AppState, scope: CoroutineScope
             selected = { it == state.grade },
             onClick = { state.selectGrade(it) },
         )
+    }
+
+    item {
+        Spacer(Modifier.height(10.dp))
+        // 学期（v0.19.0）：课标题库的知识点分上下册，选错了抽出来的就是还没学的单元。
+        // 只影响真带学期数据的资源，所以右边把边界写清楚，不做「点了没反应」的假开关。
+        SectionLabel("01b", "这学期", "影响课标题库的单元")
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            ChoiceChip("上册", state.term == Term.FIRST) { state.selectTerm(Term.FIRST) }
+            ChoiceChip("下册", state.term == Term.SECOND) { state.selectTerm(Term.SECOND) }
+            ChoiceChip("全学年", state.term == Term.BOTH) { state.selectTerm(Term.BOTH) }
+        }
     }
 
     item {
@@ -1222,6 +1256,12 @@ private fun CreateScreen(state: AppState, scope: CoroutineScope) {
         append(state.showPageNo).append('|').append(state.footerSize.name).append('|')
         // v0.18.3：页数上限会改变正文压缩比，缩略图必须跟着重排
         append(state.targetPages).append('|')
+        // v0.19.0：学期 / 自编题 / 卷头姓名都会改变纸上内容，缩略图必须跟着重排
+        append(state.term).append('|').append(state.activeStudentId).append('|')
+        append(state.visibleCustomSheets.joinToString(";") {
+            "${it.id}:${it.mode.name}:${it.raw.hashCode()}:${it.columns}:${it.answerLines}:" +
+                "${it.shuffle}:${it.count}:${it.points}:${it.title}"
+        }).append('|')
         append(state.titleOverride).append('|').append(state.previewSeed)
     }
     LaunchedEffect(signature) {
@@ -1586,6 +1626,9 @@ private fun CreateScreen(state: AppState, scope: CoroutineScope) {
             Spacer(Modifier.height(8.dp))
         }
     }
+
+    Spacer(Modifier.height(16.dp))
+    CustomSheetsCard(state)
 
     Spacer(Modifier.height(16.dp))
     Row(
@@ -2698,6 +2741,14 @@ private fun LazyListScope.moreScreenItems(
     item { Spacer(Modifier.height(PaperDimens.Gap)) }
     item {
         CardSection(title = "数据") {
+            // 学生档案入口（v0.19.0）：首页那条学生栏是主入口，
+            // 这里补一条 —— 首页页签被用户关掉时，档案不能就此摸不着
+            ListRow(
+                "学生档案",
+                if (state.students.isEmpty()) "还没建档案 · 建了就能点名字直接出卷"
+                else "${state.students.size} 位学生 · 点名字按他的年级和学期出卷",
+            ) { state.screen = Screen.STUDENTS }
+            Divider()
             // 试卷库已经是页签时就别再摆一行重复入口；
             // 被隐藏时这里补一条，免得数据彻底摸不到
             if (NavTab.HISTORY !in state.dockTabs) {
@@ -3261,5 +3312,630 @@ private fun HelpLine(no: String, text: String) {
     Row(Modifier.padding(vertical = 3.dp)) {
         Text(no, fontSize = PaperDimens.LabelSp, color = PaperColors.Primary, fontWeight = FontWeight.SemiBold)
         Text("  $text", fontSize = PaperDimens.LabelSp, color = PaperColors.OnSurface, lineHeight = 18.sp)
+    }
+}
+
+// ==================================================================
+// v0.19.0 学生档案 / 学期 / 自编题
+// ==================================================================
+
+/**
+ * 首页最上面那条「给谁出卷」。
+ *
+ * 为什么放在 Hero 之前：Hero 说的是「这张卷多少题、几页纸」，
+ * 而「这是谁做的卷」是更靠前的问题 —— 顺序反了，用户得先读一堆数字才知道给谁。
+ */
+@Composable
+private fun StudentStrip(state: AppState, scope: CoroutineScope) {
+    CardSection(
+        title = "给谁出卷",
+        hint = "点名字 = 换到他的年级、学期和科目，并直接出卷",
+    ) {
+        if (state.students.isEmpty()) {
+            Text(
+                "先建一份学生档案：填姓名、年级、这学期是上册还是下册。" +
+                    "以后点一下名字，年级和学期自动就位，不用每次重选。",
+                fontSize = PaperDimens.CaptionSp,
+                color = PaperColors.OnSurfaceVariant,
+                lineHeight = 17.sp,
+            )
+            Spacer(Modifier.height(10.dp))
+            SecondaryButton("＋ 添加学生") { state.screen = Screen.STUDENTS }
+        } else {
+            Row(
+                Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                state.students.forEach { s ->
+                    StudentPill(
+                        student = s,
+                        active = s.id == state.activeStudentId,
+                        onClick = { scope.launch { state.useStudent(s.id) } },
+                    )
+                }
+            }
+            Spacer(Modifier.height(9.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "当前：" + (state.activeStudent?.let { "${it.name} · ${it.gradeLabel}" }
+                        ?: "未选学生") + " · ${state.totalQuestions} 题",
+                    fontSize = PaperDimens.CaptionSp,
+                    color = PaperColors.OnSurfaceVariant,
+                    modifier = Modifier.weight(1f),
+                )
+                MiniAction("管理") { state.screen = Screen.STUDENTS }
+            }
+        }
+    }
+}
+
+/** 一个学生胶囊：头像字 + 名字 + 「三上」这样的短标签 */
+@Composable
+private fun StudentPill(student: Student, active: Boolean, onClick: () -> Unit) {
+    val shape = RoundedCornerShape(14.dp)
+    Column(
+        Modifier
+            .width(92.dp)
+            .clip(shape)
+            .background(if (active) PaperColors.PrimaryContainer else PaperColors.SurfaceAlt)
+            .then(
+                if (active) {
+                    Modifier.border(1.2.dp, PaperColors.Primary.copy(alpha = 0.45f), shape)
+                } else Modifier
+            )
+            .clickable { onClick() }
+            .padding(vertical = 10.dp, horizontal = 6.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Box(
+            Modifier
+                .width(30.dp)
+                .height(30.dp)
+                .clip(RoundedCornerShape(50))
+                .background(if (active) PaperColors.Primary else PaperColors.Muted),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                student.initial,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color.White,
+            )
+        }
+        Spacer(Modifier.height(6.dp))
+        Text(
+            student.name,
+            fontSize = PaperDimens.LabelSp,
+            fontWeight = FontWeight.SemiBold,
+            color = if (active) PaperColors.Primary else PaperColors.OnSurface,
+            maxLines = 1,
+        )
+        Text(
+            student.shortLabel,
+            fontSize = PaperDimens.TinySp,
+            color = PaperColors.OnSurfaceVariant,
+            maxLines = 1,
+        )
+    }
+}
+
+/** 学生档案页：增删改 + 一键出卷 */
+@Composable
+private fun StudentsScreen(state: AppState, scope: CoroutineScope) {
+    var editing by remember { mutableStateOf<Student?>(null) }
+    var creating by remember { mutableStateOf(false) }
+    var deleting by remember { mutableStateOf<Student?>(null) }
+
+    CardSection(title = "学生档案", hint = "数据只存在这台手机，不上传") {
+        Text(
+            "一个孩子一份档案：姓名、年级、这学期上册还是下册、常做的科目。" +
+                "点「出卷」就按他的配置直接生成一张卷子，卷头还会印上名字。",
+            fontSize = PaperDimens.CaptionSp,
+            color = PaperColors.OnSurfaceVariant,
+            lineHeight = 17.sp,
+        )
+        Spacer(Modifier.height(10.dp))
+        SecondaryButton("＋ 添加学生") { creating = true }
+    }
+
+    if (state.students.isEmpty()) {
+        Spacer(Modifier.height(12.dp))
+        CardSection {
+            Text(
+                "还没有学生档案。",
+                fontSize = PaperDimens.BodySp,
+                fontWeight = FontWeight.SemiBold,
+                color = PaperColors.OnSurface,
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "不建也能用：参数页照样能选年级出卷，只是每次都要重选一遍。",
+                fontSize = PaperDimens.CaptionSp,
+                color = PaperColors.OnSurfaceVariant,
+            )
+        }
+    }
+
+    state.students.forEach { s ->
+        Spacer(Modifier.height(12.dp))
+        val active = s.id == state.activeStudentId
+        CardSection(
+            title = if (active) "${s.name}（当前）" else s.name,
+            hint = "${s.gradeLabel} · ${s.gender.label} · ${s.subjectLabel}" +
+                if (s.note.isNotBlank()) " · ${s.note}" else "",
+        ) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                MiniAction("出卷") { scope.launch { state.useStudent(s.id) } }
+                MiniAction("编辑") { editing = s }
+                MiniAction("删除", color = PaperColors.Error) { deleting = s }
+            }
+        }
+    }
+
+    if (creating || editing != null) {
+        StudentDialog(
+            state = state,
+            initial = editing,
+            onDismiss = {
+                creating = false
+                editing = null
+            },
+        )
+    }
+    deleting?.let { s ->
+        ConfirmDialog(
+            title = "删除「${s.name}」的档案？",
+            message = "档案和他的自编题会一起删掉，已经生成的卷子和错题不受影响。",
+            danger = true,
+            onCancel = { deleting = null },
+            onConfirm = {
+                state.deleteStudent(s.id)
+                deleting = null
+            },
+        )
+    }
+}
+
+/** 新建 / 编辑学生：姓名、性别、年级、学期、科目 */
+@Composable
+private fun StudentDialog(state: AppState, initial: Student?, onDismiss: () -> Unit) {
+    var name by remember { mutableStateOf(initial?.name.orEmpty()) }
+    var grade by remember { mutableStateOf(initial?.grade ?: state.grade) }
+    var term by remember { mutableStateOf(initial?.term ?: state.term) }
+    var gender by remember { mutableStateOf(initial?.gender ?: Gender.UNSET) }
+    var subjects by remember {
+        val src = initial?.subjects ?: listOf(state.subject)
+        val g = initial?.grade ?: state.grade
+        mutableStateOf(src.filter { it.availableFor(g) }.ifEmpty { listOf(Subject.MATH) })
+    }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Column(
+            Modifier
+                .fillMaxWidth(0.92f)
+                .clip(RoundedCornerShape(22.dp))
+                .background(PaperColors.Surface)
+                .padding(18.dp)
+                .heightIn(max = (LocalConfiguration.current.screenHeightDp * 0.8f).dp),
+        ) {
+            Text(
+                if (initial == null) "添加学生" else "编辑学生",
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold,
+                color = PaperColors.OnSurface,
+            )
+            Spacer(Modifier.height(10.dp))
+            // 中间滚、按钮钉底：小屏手机 + 展开的科目网格会把「保存」顶出屏幕
+            Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState())) {
+            Field3(
+                value = name,
+                onValueChange = { if (it.length <= 12) name = it },
+                label = "姓名",
+                placeholder = "例如 小明",
+            )
+            Spacer(Modifier.height(12.dp))
+            Text("性别", fontSize = PaperDimens.CaptionSp, color = PaperColors.OnSurfaceVariant)
+            Spacer(Modifier.height(6.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf(Gender.MALE, Gender.FEMALE).forEach { g ->
+                    ChoiceChip(g.label, gender == g) { gender = if (gender == g) Gender.UNSET else g }
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+            Text("年级", fontSize = PaperDimens.CaptionSp, color = PaperColors.OnSurfaceVariant)
+            Spacer(Modifier.height(6.dp))
+            CompactChipGrid(
+                items = (1..9).toList(),
+                perRow = 5,
+                label = { GradeProfiles.gradeLabel(it) },
+                selected = { it == grade },
+                onClick = { g ->
+                    grade = g
+                    // 换年级后原来的科目可能没开课（英语三年级才有、物理八年级才有）
+                    subjects = subjects.filter { it.availableFor(g) }.ifEmpty { listOf(Subject.MATH) }
+                },
+            )
+            Spacer(Modifier.height(12.dp))
+            Text(
+                "这学期",
+                fontSize = PaperDimens.CaptionSp,
+                color = PaperColors.OnSurfaceVariant,
+            )
+            Spacer(Modifier.height(6.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ChoiceChip("上册", term == Term.FIRST) { term = Term.FIRST }
+                ChoiceChip("下册", term == Term.SECOND) { term = Term.SECOND }
+                ChoiceChip("全学年", term == Term.BOTH) { term = Term.BOTH }
+            }
+            Spacer(Modifier.height(12.dp))
+            Text("常做的科目（可多选）", fontSize = PaperDimens.CaptionSp, color = PaperColors.OnSurfaceVariant)
+            Spacer(Modifier.height(6.dp))
+            CompactChipGrid(
+                items = Subject.entries.toList(),
+                perRow = 5,
+                label = { it.label },
+                selected = { it in subjects },
+                enabled = { it.availableFor(grade) },
+                onClick = { s ->
+                    subjects = if (s in subjects) {
+                        (subjects - s).ifEmpty { listOf(s) }
+                    } else subjects + s
+                },
+            )
+            }
+            Spacer(Modifier.height(12.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                SecondaryButton("取消", modifier = Modifier.weight(1f)) { onDismiss() }
+                PrimaryButton(
+                    "保存",
+                    enabled = name.isNotBlank(),
+                    modifier = Modifier.weight(1.2f),
+                ) {
+                    state.upsertStudent(
+                        Student(
+                            id = initial?.id ?: state.newStudentId(),
+                            name = name.trim(),
+                            grade = grade,
+                            term = term,
+                            gender = gender,
+                            subjects = subjects,
+                            note = initial?.note.orEmpty(),
+                        )
+                    )
+                    onDismiss()
+                }
+            }
+        }
+    }
+}
+
+/** 通用确认框：删除这类不可撤销的动作都过一遍 */
+@Composable
+private fun ConfirmDialog(
+    title: String,
+    message: String,
+    danger: Boolean = false,
+    onCancel: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    Dialog(onDismissRequest = onCancel) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(20.dp))
+                .background(PaperColors.Surface)
+                .padding(18.dp),
+        ) {
+            Text(title, fontSize = 16.sp, fontWeight = FontWeight.Bold, color = PaperColors.OnSurface)
+            Spacer(Modifier.height(6.dp))
+            Text(
+                message,
+                fontSize = PaperDimens.CaptionSp,
+                color = PaperColors.OnSurfaceVariant,
+                lineHeight = 17.sp,
+            )
+            Spacer(Modifier.height(14.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                SecondaryButton("取消", modifier = Modifier.weight(1f)) { onCancel() }
+                if (danger) {
+                    Box(Modifier.weight(1f)) {
+                        DangerButton("删除", onConfirm)
+                    }
+                } else {
+                    PrimaryButton("确定", modifier = Modifier.weight(1f)) { onConfirm() }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DangerButton(text: String, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .height(PaperDimens.ActionBtnH)
+            .clip(RoundedCornerShape(16.dp))
+            .background(PaperColors.ErrorContainer)
+            .clickable { onClick() },
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(text, fontSize = PaperDimens.BodySp, fontWeight = FontWeight.Bold, color = PaperColors.Error)
+    }
+}
+
+/**
+ * 多行输入框。
+ *
+ * 没有复用 [Field3]：它的 decorationBox 是「一行、垂直居中」的布局，
+ * 粘 20 行词表进去会变成一个居中滚动的小窗口，看不出自己写了多少行。
+ */
+@Composable
+private fun MultilineField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    placeholder: String,
+    height: Dp,
+) {
+    BasicTextField(
+        value = value,
+        onValueChange = onValueChange,
+        textStyle = TextStyle(fontSize = PaperDimens.BodySp, color = PaperColors.OnSurface),
+        cursorBrush = SolidColor(PaperColors.Primary),
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(height)
+            .clip(RoundedCornerShape(14.dp))
+            .background(PaperColors.SurfaceAlt)
+            .padding(12.dp),
+        decorationBox = { inner ->
+            Box {
+                if (value.isEmpty()) {
+                    Text(
+                        placeholder,
+                        fontSize = PaperDimens.BodySp,
+                        color = PaperColors.Muted,
+                        lineHeight = 20.sp,
+                    )
+                }
+                inner()
+            }
+        },
+    )
+}
+
+/** 参数页里的「自编题」卡片：自己的词表 / 算式 / 题目 */
+@Composable
+private fun CustomSheetsCard(state: AppState) {
+    var editing by remember { mutableStateOf<CustomSheet?>(null) }
+    var creating by remember { mutableStateOf(false) }
+
+    CardSection(
+        title = "自编题",
+        hint = "自己的词表 / 算式 / 题目，原样排进卷子",
+    ) {
+        Text(
+            "题库再全也覆盖不到「老师今天发的 20 个词」。这里可以把自己的内容粘进来，" +
+                "选一种排法就变成一道大题。同一段里重复的行会自动去掉。",
+            fontSize = PaperDimens.CaptionSp,
+            color = PaperColors.OnSurfaceVariant,
+            lineHeight = 17.sp,
+        )
+        Spacer(Modifier.height(10.dp))
+
+        if (state.visibleCustomSheets.isEmpty()) {
+            Text(
+                "还没有自编题。",
+                fontSize = PaperDimens.CaptionSp,
+                color = PaperColors.Muted,
+            )
+        } else {
+            state.visibleCustomSheets.forEach { sheet ->
+                val n = CustomSheet.validCount(sheet)
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 5.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            sheet.title.ifBlank { sheet.mode.label },
+                            fontSize = PaperDimens.BodySp,
+                            fontWeight = FontWeight.Medium,
+                            color = PaperColors.OnSurface,
+                        )
+                        Text(
+                            "${sheet.mode.label} · 会印 $n 道" +
+                                if (sheet.studentId.isNotEmpty()) " · 仅这位学生" else " · 共用",
+                            fontSize = PaperDimens.TinySp,
+                            color = PaperColors.OnSurfaceVariant,
+                        )
+                    }
+                    MiniAction("改") { editing = sheet }
+                    Spacer(Modifier.width(6.dp))
+                    MiniAction("删", color = PaperColors.Error) { state.deleteCustomSheet(sheet.id) }
+                }
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+        SecondaryButton("＋ 添加自编题") { creating = true }
+    }
+
+    if (creating || editing != null) {
+        CustomSheetDialog(
+            state = state,
+            initial = editing,
+            onDismiss = {
+                creating = false
+                editing = null
+            },
+        )
+    }
+}
+
+/** 自编题编辑框：内容 + 排法（模式 / 栏数 / 答题线 / 打乱 / 只取前 N 条） */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun CustomSheetDialog(state: AppState, initial: CustomSheet?, onDismiss: () -> Unit) {
+    var title by remember { mutableStateOf(initial?.title.orEmpty()) }
+    var mode by remember { mutableStateOf(initial?.mode ?: CustomMode.CALC) }
+    var raw by remember { mutableStateOf(initial?.raw.orEmpty()) }
+    var columns by remember { mutableStateOf(initial?.columns ?: 2) }
+    var answerLines by remember { mutableStateOf(initial?.answerLines ?: 1) }
+    var shuffle by remember { mutableStateOf(initial?.shuffle ?: true) }
+    var limit by remember { mutableStateOf(initial?.count ?: 0) }
+    var studentId by remember { mutableStateOf(initial?.studentId ?: "") }
+
+    // 实时算「这批内容最终会印几道」——用户最关心的就是这个数字
+    val draft = CustomSheet(
+        id = initial?.id ?: "tmp",
+        studentId = studentId,
+        title = title,
+        mode = mode,
+        raw = raw,
+        columns = columns,
+        answerLines = answerLines,
+        shuffle = shuffle,
+        count = limit,
+    )
+    val valid = CustomSheet.validCount(draft)
+    val totalLines = draft.rawLines().size
+    val dup = totalLines - draft.uniqueLines().size
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Column(
+            Modifier
+                .fillMaxWidth(0.94f)
+                .clip(RoundedCornerShape(22.dp))
+                .background(PaperColors.Surface)
+                .padding(18.dp)
+                .heightIn(max = (LocalConfiguration.current.screenHeightDp * 0.78f).dp),
+        ) {
+            Text(
+                if (initial == null) "添加自编题" else "编辑自编题",
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold,
+                color = PaperColors.OnSurface,
+            )
+            Spacer(Modifier.height(10.dp))
+
+            // 只有中间这块滚；「取消 / 保存」钉在弹窗底部 ——
+            // 十个设置项排下来必然超过一屏，按钮跟着内容滚走等于让人找不到出口。
+            Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState())) {
+            Field3(
+                value = title,
+                onValueChange = { if (it.length <= 16) title = it },
+                label = "大题名称（可空）",
+                placeholder = "例如 本周生词默写",
+            )
+            Spacer(Modifier.height(12.dp))
+
+            Text("怎么排", fontSize = PaperDimens.CaptionSp, color = PaperColors.OnSurfaceVariant)
+            Spacer(Modifier.height(6.dp))
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                CustomMode.entries.forEach { m ->
+                    ChoiceChip(m.label, mode == m) {
+                        mode = m
+                        // 换模式时把答题线 / 栏数调到该模式的合理默认值：
+                        // 挖空和整句题干挤进半栏会折成竖条，只能整行
+                        answerLines = m.answerLines
+                        columns = if (m == CustomMode.PLAIN || m == CustomMode.BLANK) 1 else 2
+                    }
+                }
+            }
+            Spacer(Modifier.height(6.dp))
+            Text(
+                mode.hint,
+                fontSize = PaperDimens.TinySp,
+                color = PaperColors.OnSurfaceVariant,
+                lineHeight = 15.sp,
+            )
+            Spacer(Modifier.height(10.dp))
+
+            Text(
+                "内容（一行一道）",
+                fontSize = PaperDimens.TinySp,
+                color = PaperColors.OnSurfaceVariant,
+                modifier = Modifier.padding(bottom = 6.dp),
+            )
+            MultilineField(
+                value = raw,
+                onValueChange = { raw = it },
+                placeholder = mode.sample,
+                height = 150.dp,
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                when {
+                    totalLines == 0 -> "粘进内容后这里会显示能出几道题"
+                    valid == 0 -> "这 ${totalLines} 行都没能变成题：检查一下格式（见上面的说明）"
+                    dup > 0 -> "${totalLines} 行，去掉 $dup 条重复 → 会印 $valid 道"
+                    limit > 0 && valid < totalLines -> "${totalLines} 行，只取前 $valid 道"
+                    else -> "${totalLines} 行，会印 $valid 道"
+                },
+                fontSize = PaperDimens.TinySp,
+                color = if (valid == 0 && totalLines > 0) PaperColors.Error else PaperColors.OnSurfaceVariant,
+            )
+            Spacer(Modifier.height(12.dp))
+
+            SettingRow("一行几栏") {
+                listOf(1, 2, 3, 4).forEach { c ->
+                    ChoiceChip("$c 栏", columns == c) { columns = c }
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            SettingRow("答题线") {
+                ChoiceChip("不留", answerLines == 0) { answerLines = 0 }
+                ChoiceChip("1 条", answerLines == 1) { answerLines = 1 }
+                ChoiceChip("2 条", answerLines == 2) { answerLines = 2 }
+                ChoiceChip("3 条", answerLines == 3) { answerLines = 3 }
+            }
+            Spacer(Modifier.height(8.dp))
+            SettingRow("顺序") {
+                ChoiceChip("打乱", shuffle) { shuffle = true }
+                ChoiceChip("照原顺序", !shuffle) { shuffle = false }
+            }
+            Spacer(Modifier.height(8.dp))
+            SettingRow("取几条") {
+                ChoiceChip("全部", limit == 0) { limit = 0 }
+                listOf(10, 20, 30).forEach { n ->
+                    ChoiceChip("$n", limit == n) { limit = n }
+                }
+            }
+            if (state.activeStudent != null) {
+                Spacer(Modifier.height(8.dp))
+                SettingRow("给谁用") {
+                    ChoiceChip("共用", studentId.isEmpty()) { studentId = "" }
+                    ChoiceChip("只给${state.activeStudent!!.name}",
+                        studentId == state.activeStudent!!.id) {
+                        studentId = state.activeStudent!!.id
+                    }
+                }
+            }
+
+            }
+            Spacer(Modifier.height(12.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                SecondaryButton("取消", modifier = Modifier.weight(1f)) { onDismiss() }
+                PrimaryButton(
+                    "保存",
+                    enabled = raw.isNotBlank() && valid > 0,
+                    modifier = Modifier.weight(1.2f),
+                ) {
+                    state.upsertCustomSheet(
+                        draft.copy(id = initial?.id ?: state.newCustomId())
+                    )
+                    onDismiss()
+                }
+            }
+        }
     }
 }

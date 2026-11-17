@@ -50,6 +50,8 @@ private fun drawCurric(ctx: GenContext, choice: Boolean): List<GeneratedQuestion
         difficulty = ctx.difficulty,
         choice = choice,
         topicIds = ctx.topicIds,
+        // 单元自带学期，按单元出卷时不要再按学期筛一次（会把单元筛空）
+        term = if (ctx.topicIds.isEmpty()) ctx.term else 0,
     )
     if (pool.isEmpty()) return emptyList()
 

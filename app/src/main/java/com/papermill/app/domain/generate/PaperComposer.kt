@@ -36,6 +36,7 @@ object PaperComposer {
                 blocked = blocked,
                 subjects = spec.effectiveSubjects().toSet(),
                 topicIds = spec.topicIds,
+                term = spec.term,
             )
             val questions = generator.generate(ctx)
                 .mapIndexed { i, q -> q.copy(no = nextNo + i) }
@@ -65,6 +66,32 @@ object PaperComposer {
                         hoisted,
                     ).joinToString("　"),
                     prefix = prefix,
+                )
+            )
+        }
+
+        // v0.19.0 自编题：用户自己写的内容，原样接在常规大题后面。
+        // 它不走 GeneratorRegistry（那套是「随机造题」），所以单独拼；
+        // 但标题格式 / 分值 / 栏数 / 答题线仍走同一套规则，纸上看起来没有区别。
+        spec.customSheets.forEach { sheet ->
+            if (sheet.raw.isBlank()) return@forEach
+            val rng = Random(GeneratorRegistry.sectionSeed(spec.seed, 900 + sections.size))
+            val built = CustomSheet.build(sheet, rng)
+            if (built.questions.isEmpty()) return@forEach
+            val qs = built.questions.mapIndexed { i, q -> q.copy(no = nextNo + i) }
+            nextNo += qs.size
+            val ordinal = sections.size + 1
+            val sheetName = sheet.title.ifBlank { sheet.mode.label }
+            sections.add(
+                GeneratedSection(
+                    index = ordinal,
+                    title = titleFor(sheetName, sheet.points, qs.size, ordinal),
+                    name = sheetName,
+                    points = sheet.points,
+                    type = QuestionType.CUSTOM,
+                    questions = qs,
+                    columns = sheet.columns.coerceIn(1, 4),
+                    answerLines = sheet.answerLines.coerceIn(0, 6),
                 )
             )
         }
@@ -99,9 +126,18 @@ object PaperComposer {
      * 加题 / 删题 / 出卷三处必须共用同一份格式。
      */
     fun sectionTitle(type: QuestionType, count: Int, ordinal: Int, prefix: String): String =
+        titleFor("$prefix${type.label}", POINTS_PER_QUESTION, count, ordinal)
+
+    /**
+     * 大题标题的统一格式。
+     *
+     * 自编题的大题名是用户起的、分值也由用户定，所以标题不能只认 [QuestionType] ——
+     * 删题重排时要按「原来那个名字 + 原来的每题分」重印，否则纸上会变成
+     * 「五、自编题（每题 2 分，共 4 分）」，用户起的名字和 5 分都消失了。
+     */
+    fun titleFor(name: String, points: Int, count: Int, ordinal: Int): String =
         "${CN_NUM.getOrElse(ordinal - 1) { ordinal.toString() }}、" +
-            "$prefix${type.label}" +
-            "（每题 $POINTS_PER_QUESTION 分，共 ${count * POINTS_PER_QUESTION} 分）"
+            "$name（每题 $points 分，共 ${count * points} 分）"
 
     fun sectionOf(
         spec: PaperSpec,
@@ -113,6 +149,8 @@ object PaperComposer {
     ): GeneratedSection = GeneratedSection(
         index = ordinal,
         title = sectionTitle(type, questions.size, ordinal, prefix),
+        name = "$prefix${type.label}",
+        points = POINTS_PER_QUESTION,
         type = type,
         questions = questions,
         // 栏数：题型推荐的栏数与用户选的全局栏数取较大者。

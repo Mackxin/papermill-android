@@ -63,6 +63,13 @@ data class PaperDocument(
     /** 副标题是否与标题排在同一行（v0.17.0：省下整整一行的卷头高度） */
     val subtitleInline: Boolean = false,
     val showNameRow: Boolean = true,
+    /**
+     * 卷头姓名栏里直接印出来的名字（v0.19.0 学生档案）。
+     *
+     * 空串 = 留空线让孩子自己写（原来的行为）。有名字时印在「姓名」后面，
+     * 后面的线相应变短 —— 老师发卷子时不用再让孩子一道一道写名字。
+     */
+    val studentName: String = "",
     val sections: List<PaperSection>,
     /** 页脚文字；null = 用渲染层默认那句，空串 = 整条页脚不印 */
     val footerText: String? = DEFAULT_FOOTER,
