@@ -66,10 +66,18 @@ export function pageNode(page) {
  * @param {number} zoom 缩放（1 = 实际大小）
  * @param {{selected?:string, onHit?:Function}|null} edit 传入则进入「可点选」状态：
  *        每道题上盖一层透明的点击热区，点一下就把 qid 交给 onHit。
+ * @param {number} cols 一行排几页（电脑端宽屏用；手机端恒为 1）
  */
-export function renderPages(container, result, zoom = 1, edit = null) {
+export function renderPages(container, result, zoom = 1, edit = null, cols = 1) {
   container.innerHTML = '';
-  const stack = el('div', 'display:flex;flex-direction:column;align-items:center;gap:16px;');
+  container.dataset.cols = String(cols);
+  // 一列就竖着堆；多列用 grid —— 每页尺寸由 zoom 定死，grid 只负责摆位置，
+  // 最后一行不满时自动居中，不靠手算偏移量。
+  const stack = el('div', cols > 1
+    ? `display:grid;grid-template-columns:repeat(${cols},max-content);justify-content:center;`
+      + 'align-items:start;gap:18px;'
+    : 'display:flex;flex-direction:column;align-items:center;gap:16px;');
+  stack.className = 'paper-grid';
   const offset = new Map(); // qid → 这一题所在页码
   result.pages.forEach((page, i) => {
     const wrap = el('div', `width:${page.pageW * zoom}pt;height:${page.pageH * zoom}pt;`);

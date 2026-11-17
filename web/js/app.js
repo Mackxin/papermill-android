@@ -50,6 +50,8 @@ const state = {
   sheetNode: null,
   sheetTab: 'ref',
   studentFilter: '',
+  // 预览排版：一行几页。'auto' 按窗口宽度自动，1/2/3 是用户点名要的固定栏数
+  pageCols: 'auto',
   // 编辑排版（电脑端独占）：只影响这一张卷，不改出卷设置
   editor: false,
   editSel: null,
@@ -68,6 +70,7 @@ function save() {
       mistakes: state.mistakes,
       zoom: state.zoom,
       zoomAuto: state.zoomAuto,
+      pageCols: state.pageCols,
       tab: state.tab,
     }));
   } catch (err) {
@@ -87,6 +90,7 @@ function load() {
     state.mistakes = data.mistakes ?? [];
     state.zoom = data.zoom ?? 1;
     state.zoomAuto = data.zoomAuto ?? true;
+    state.pageCols = data.pageCols ?? 'auto';
     return true;
   } catch (err) {
     console.warn('读取本地数据失败', err);
@@ -475,6 +479,45 @@ function customCard() {
 
 // ------------------------------------------------------------------ 页面：预览
 
+/**
+ * 纸面怎么摆：一行几页、每页多大。
+ *
+ * 以前只有「一张纸铺满宽度」一条路，电脑端宽屏上一张 A4 竖着占中间一条，
+ * 左右空出两大片灰 —— 用户直接说「可以一行多列显示」。
+ * 现在的规则：
+ *   自动  → 先算最窄能排几栏（每页不低于 MIN），再按栏数均分宽度；
+ *           单栏时最多拉到 135%，多栏时不超过 100%（不然像海报）。
+ *   手动缩放过 → 栏数按「这个比例能塞下几张」倒推，用户想看清就自然变一栏。
+ * @param {number} avail 容器可用宽度（px）
+ * @param {number} pageW 页面宽度（pt）
+ * @param {number} pageCount 总页数
+ * @param {number|null} zoomPref 手动缩放（null = 自动）
+ * @param {'auto'|number} colsPref 版面偏好
+ */
+function pageLayout(avail, pageW, pageCount, zoomPref, colsPref = 'auto') {
+  const gap = 18;
+  const w1 = pageW * (96 / 72);   // 100% 缩放时的像素宽（CSS pt → px 是 4/3）
+  // 多栏时每页至少这么宽（px）：再窄字就糊了，宁可少排一栏。
+  // 用绝对像素而不是百分比 —— 13 寸笔记本（内容区约 900px）也要能两页并排。
+  const perMin = Math.max(400, w1 * 0.5);
+  const count = Math.max(1, pageCount);
+
+  if (zoomPref != null) {
+    const w = w1 * zoomPref;
+    const cols = Math.max(1, Math.min(count, Math.floor((avail + gap) / (w + gap))));
+    return { cols, zoom: zoomPref };
+  }
+
+  let fit = 1;
+  while (fit < 4 && (fit + 1) * perMin + fit * gap <= avail) fit += 1;
+  const wanted = colsPref === 'auto' ? fit : Number(colsPref) || fit;
+  const cols = Math.max(1, Math.min(fit, count, wanted));
+  const zoom = cols === 1
+    ? Math.min(1.35, Math.max(0.35, avail / w1))
+    : Math.min(1, Math.max(0.35, (avail - gap * (cols - 1)) / (cols * w1)));
+  return { cols, zoom };
+}
+
 function previewScreen() {
   if (!state.result) {
     return card('还没有卷子', h('p', { class: 'hint', text: '回到「出卷」页生成一张，或者从试卷库打开一张历史卷。' }));
@@ -483,33 +526,37 @@ function previewScreen() {
   // 所以默认按「铺满可用宽度」显示，不然用户进来只看见左边一角，还以为卷子坏了。
   // 可用宽度从纸面容器实际量，不能拿 window.innerWidth 硬算（电脑端左侧还有 208px 导航栏）。
   const pageW = state.result.pages[0]?.pageW ?? 595;
+  const pageCount = state.result.pages.length;
   const view = h('div', { class: 'preview-view' });
   const pages = h('div', { class: 'paper-stage' });
-  const fitZoom = () => {
-    // 留 32px 呼吸 —— 纸面顶到窗口边缘看着像被裁掉了
-    const avail = (pages.clientWidth || Math.max(320, window.innerWidth - 64)) - 32;
-    // 上限 1.35：超宽屏上别把 595pt 的纸拉成一张巨幅海报
-    return Math.min(1.35, Math.max(0.35, avail / (pageW * (96 / 72))));
-  };
-  const zoomNow = () => (state.zoomAuto ? fitZoom() : state.zoom);
-  const zoomLabel = h('span', { class: 'zoom-label', text: `${Math.round(zoomNow() * 100)}%` });
+  // 留 32px 呼吸 —— 纸面顶到窗口边缘看着像被裁掉了
+  const stageAvail = () => (pages.clientWidth || Math.max(320, window.innerWidth - 64)) - 32;
+  const layoutNow = () => pageLayout(stageAvail(), pageW, pageCount, state.zoomAuto ? null : state.zoom, state.pageCols);
+  const zoomNow = () => layoutNow().zoom;
+  // 缩放百分比同时也是「回到自动」的按钮：点过 −/＋ 之后容易困在一个小比例里出不来
+  const zoomLabel = h('button', {
+    class: `zoom-label${state.zoomAuto ? '' : ' manual'}`,
+    text: `${Math.round(zoomNow() * 100)}%`,
+    title: state.zoomAuto ? '按可用宽度自动缩放' : '点一下回到自动缩放',
+    onclick: () => { state.zoomAuto = true; save(); render(); },
+  });
   const info = h('span', { class: 'grow', text: describe(state.result) });
 
   const editOn = state.editor;
   const panelHost = editOn ? h('aside', { class: 'edit-panel' }) : null;
   if (editOn) fillEditorPanel(panelHost);
   const draw = () => {
-    const z = zoomNow();
-    zoomLabel.textContent = `${Math.round(z * 100)}%`;
+    const L = layoutNow();
+    zoomLabel.textContent = `${Math.round(L.zoom * 100)}%${L.cols > 1 ? ` · ${L.cols} 栏` : ''}`;
     info.textContent = describe(state.result);
-    renderPages(pages, state.result, z, editOn ? {
+    renderPages(pages, state.result, L.zoom, editOn ? {
       selected: state.editSel,
       onHit: (qid) => {
         state.editSel = qid;
         if (panelHost) fillEditorPanel(panelHost);   // 右侧面板要跟着换内容
         draw();
       },
-    } : null);
+    } : null, L.cols);
     stageCtx = { pages, draw, zoom: zoomNow };
   };
 
@@ -550,6 +597,20 @@ function previewScreen() {
   ];
   if (editOn || !narrow) {
     toolButtons.push(button(editOn ? '✓ 完成编辑' : '✎ 编辑排版', 'ghost', () => toggleEditor()));
+  }
+  // 电脑端：一行排几页可以自己定（自动 / 1 栏 / 2 栏 / 3 栏）
+  if (!narrow) {
+    toolButtons.push(button(
+      state.pageCols === 'auto' ? '版面：自动' : `版面：${state.pageCols} 栏`,
+      'ghost',
+      () => {
+        const seq = ['auto', 1, 2, 3];
+        const i = seq.indexOf(state.pageCols);
+        state.pageCols = seq[(i + 1) % seq.length];
+        save();
+        render();
+      },
+    ));
   }
   // 窄屏按钮一多就堆成三行，把次要操作收进「更多」
   if (narrow) {
@@ -1057,14 +1118,15 @@ function studentsScreen() {
   const list = h('div', { class: 'student-list' });
   if (!state.students.length) list.appendChild(h('p', { class: 'hint', text: '还没有学生档案。' }));
   state.students.forEach((s) => {
+    const sex = s.gender ? ` · ${s.gender}` : '';
     list.appendChild(h('div', { class: 'student-item' }, [
       h('div', {}, [
         h('b', { text: s.name }),
-        h('span', { class: 'meta', text: `${GradeProfiles.gradeLabel(s.grade)} · ${Term.label(s.term)} · ${(s.subjects ?? []).map((x) => SUBJECT_LABEL[x]).join('/')}` }),
+        h('span', { class: 'meta', text: `${GradeProfiles.gradeLabel(s.grade)} · ${Term.label(s.term)}${sex} · ${(s.subjects ?? []).map((x) => SUBJECT_LABEL[x]).join('/')}` }),
       ]),
       h('div', { class: 'custom-actions' }, [
-        button('出卷', 'ghost', () => applyStudent(s)),
         button('编辑', 'ghost', () => editStudent(s)),
+        button('出卷', 'ghost', () => applyStudent(s)),
         button('删', 'ghost danger', () => {
           confirmDialog('删除学生', `确定删除「${s.name}」的档案？`, () => {
             state.students = state.students.filter((x) => x.id !== s.id);
@@ -1080,34 +1142,87 @@ function studentsScreen() {
 }
 
 function editStudent(student) {
+  const isNew = !student;
   const draft = student
-    ? { ...student }
+    ? { ...student, subjects: [...(student.subjects ?? [])] }
     : { id: `s_${Date.now().toString(36)}`, name: '', grade: 3, term: TERM.FIRST, gender: '', subjects: ['MATH'], note: '' };
-  const body = h('div', {}, [
-    field('姓名', input('text', draft.name, (v) => { draft.name = v; })),
-    field('年级', select(Array.from({ length: 9 }, (_, i) => ({ value: i + 1, label: GradeProfiles.gradeLabel(i + 1) })), draft.grade, (v) => { draft.grade = Number(v); })),
-    field('学期', chips([{ value: TERM.FIRST, label: '上册' }, { value: TERM.SECOND, label: '下册' }, { value: TERM.BOTH, label: '全学年' }], draft.term, (v) => { draft.term = Number(v); })),
-    field('性别', chips([{ value: '', label: '不填' }, { value: '男', label: '男' }, { value: '女', label: '女' }], draft.gender, (v) => { draft.gender = v; })),
-    h('div', { class: 'field' }, [
+  // 老存档可能没有 id（早期版本没写）：补一个，否则保存时对不上号会多出一条重复档案
+  if (!draft.id) draft.id = `s_${Date.now().toString(36)}`;
+  if (!draft.subjects.length) draft.subjects = ['MATH'];
+  const oldName = student?.name ?? '';
+
+  // 底部一行「实时档案摘要」：点哪个 chip 这里立刻变，证明这一下真的点上了
+  const summary = h('p', { class: 'hint' });
+  const paintSummary = () => {
+    const name = draft.name.trim();
+    summary.textContent = `${GradeProfiles.gradeLabel(draft.grade)} · ${Term.label(draft.term)}`
+      + ` · ${draft.subjects.map((s) => SUBJECT_LABEL[s]).join('/')}`
+      + (draft.gender ? ` · ${draft.gender}` : '')
+      + (name ? `　卷头印「${name}」` : '　还没填姓名');
+  };
+
+  // 科目随年级变（英语三年级才有、物理八年级才有）：换年级就把这一格重画
+  const subjectField = h('div', { class: 'field' });
+  const paintSubjects = () => {
+    const usable = SUBJECT_ALL.filter((s) => subjectAvailableFor(s, draft.grade));
+    const kept = draft.subjects.filter((s) => usable.includes(s));
+    draft.subjects = kept.length ? kept : [usable[0] ?? 'MATH'];
+    subjectField.innerHTML = '';
+    subjectField.append(
       h('span', { text: '科目' }),
-      chips(SUBJECT_ALL.filter((s) => subjectAvailableFor(s, draft.grade)).map((s) => ({ value: s, label: SUBJECT_LABEL[s] })),
-        draft.subjects[0], (v) => { draft.subjects = [v]; }),
-    ]),
+      chips(usable.map((s) => ({ value: s, label: SUBJECT_LABEL[s] })), draft.subjects, (v) => {
+        draft.subjects = Array.isArray(v) ? v : [v];
+        paintSummary();
+      }, { multi: true }),
+    );
+  };
+
+  const body = h('div', {}, [
+    field('姓名', input('text', draft.name, (v) => { draft.name = v; paintSummary(); }, { maxlength: '12', placeholder: '例如 小明' })),
+    field('年级', select(Array.from({ length: 9 }, (_, i) => ({ value: i + 1, label: GradeProfiles.gradeLabel(i + 1) })), draft.grade, (v) => {
+      draft.grade = Number(v);
+      paintSubjects();
+      paintSummary();
+    })),
+    field('学期', chips([{ value: TERM.FIRST, label: '上册' }, { value: TERM.SECOND, label: '下册' }, { value: TERM.BOTH, label: '全学年' }], draft.term, (v) => {
+      draft.term = Number(v);
+      paintSummary();
+    })),
+    field('性别', chips([{ value: '', label: '不填' }, { value: '男', label: '男' }, { value: '女', label: '女' }], draft.gender, (v) => {
+      draft.gender = v;
+      paintSummary();
+    })),
+    subjectField,
+    summary,
   ]);
+  paintSubjects();
+  paintSummary();
+
   openModal({
-    title: student ? '编辑学生' : '新建学生',
+    title: isNew ? '新建学生' : `编辑「${oldName}」`,
     body,
     actions: [
       { label: '取消', kind: 'ghost' },
       {
         label: '保存',
         onClick: () => {
-          if (!draft.name.trim()) { toast('姓名不能为空'); return; }
-          const i = state.students.findIndex((s) => s.id === draft.id);
+          const name = draft.name.trim();
+          if (!name) { toast('姓名不能为空'); return; }
+          draft.name = name;
+          let i = state.students.findIndex((s) => s.id === draft.id);
+          // id 对不上（手改过存档 / 老数据）就按原名找，别稀里糊涂 push 出一条重复档案
+          if (i < 0 && oldName) i = state.students.findIndex((s) => s.name === oldName);
           if (i >= 0) state.students[i] = draft; else state.students.push(draft);
+          // 改名要连坐：当前出卷学生、挂在他名下的自编题，都跟着改，不然对不上号
+          if (oldName && oldName !== name) {
+            if (state.spec?.studentName === oldName) state.spec.studentName = name;
+            state.customSheets.forEach((sheet) => {
+              if (sheet.studentId === oldName) sheet.studentId = name;
+            });
+          }
           save();
           render();
-          toast('已保存');
+          toast(`${isNew ? '已加上' : '已保存'}「${name}」`);
         },
       },
     ],

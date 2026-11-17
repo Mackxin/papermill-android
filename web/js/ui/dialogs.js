@@ -315,14 +315,50 @@ export function textarea(value, onChange, rows = 6) {
   return el;
 }
 
-export function chips(options, value, onChange) {
+/**
+ * 一排胶囊按钮（单选 / 多选）。
+ *
+ * 关键：点下去要**自己把高亮挪过来**。以前只调 onChange、指望外面重画整页，
+ * 结果在弹窗里（改学生资料）外面不会重画 —— 用户点「下册」「女」「数学」
+ * 一个都不变色，以为按钮坏了。现在组件自带选中态，谁用都不会瞎。
+ *
+ * @param {{value:any,label:string}[]} options
+ * @param {any|any[]} value 单选传值，多选传数组
+ * @param {(v:any)=>void} onChange
+ * @param {{multi?:boolean}} [opts]
+ */
+export function chips(options, value, onChange, opts = {}) {
+  const multi = !!opts.multi;
   const wrap = document.createElement('div');
   wrap.className = 'chips';
+
+  const isOn = (o, v) => (multi ? (Array.isArray(v) ? v : [v]).some((x) => String(x) === String(o.value)) : String(o.value) === String(v));
+  const paint = (v) => {
+    [...wrap.children].forEach((b) => b.classList.toggle('on', isOn({ value: b.dataset.value }, v)));
+  };
+
   options.forEach((o) => {
     const b = document.createElement('button');
-    b.className = `chip${String(o.value) === String(value) ? ' on' : ''}`;
+    b.type = 'button';
+    b.dataset.value = String(o.value);
+    b.className = `chip${isOn(o, value) ? ' on' : ''}`;
     b.textContent = o.label;
-    b.onclick = () => onChange(o.value);
+    b.onclick = () => {
+      if (!multi) {
+        paint(o.value);
+        onChange(o.value);
+        return;
+      }
+      // 多选：至少留一个，全点掉就把它自己留下（不然「没科目」没法出卷）
+      const cur = (Array.isArray(value) ? value : [value]).map(String);
+      const has = cur.includes(String(o.value));
+      let next = has ? cur.filter((x) => x !== String(o.value)) : [...cur, String(o.value)];
+      if (!next.length) next = [String(o.value)];
+      const out = next.map((x) => options.find((op) => String(op.value) === x)?.value ?? x);
+      value = out;   // 内部记住最新值：外面不改引用也不会错位
+      paint(out);
+      onChange(out);
+    };
     wrap.appendChild(b);
   });
   return wrap;

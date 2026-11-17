@@ -677,6 +677,106 @@ await test('弹窗里的下拉 · 浮层不被滚动容器裁掉，选中生效'
   return `浮层 ${Math.round(r.width)}×${Math.round(r.height)} · 选到 ${sel.options[sel.selectedIndex].text}`;
 });
 
+// 25 --------------------------------------------------------------
+await test('学生档案 · 编辑时 chip 高亮跟着点，改完真存下', async () => {
+  dock('更多');
+  await waitFor(() => q('#view .stat-grid'), '更多页');
+  qa('#view .btn').find((b) => T(b) === '学生档案').click();
+  await waitFor(() => q('#view .student-list'), '学生页');
+  const edit = qa('#view .student-item .btn').find((b) => T(b) === '编辑');
+  if (!edit) throw new Error('学生条目上没有「编辑」');
+  edit.click();
+  await waitFor(() => modal(), '编辑学生弹窗');
+
+  // 打开时高亮必须和档案一致（以前点完不变色，用户以为坏了）
+  const termOn = () => {
+    const f = findField(modal(), '学期');
+    return [...f.querySelectorAll('.chip')].find((c) => c.classList.contains('on'))?.textContent.trim();
+  };
+  const before = termOn();
+  if (!before) throw new Error('打开编辑弹窗时「学期」一个都没高亮');
+
+  const sexField = findField(modal(), '性别');
+  const other = [...sexField.querySelectorAll('.chip')].find((c) => !c.classList.contains('on'));
+  other.click();
+  await sleep(100);
+  const sexOn = [...sexField.querySelectorAll('.chip')].filter((c) => c.classList.contains('on')).map(T);
+  if (sexOn.length !== 1 || sexOn[0] !== T(other)) throw new Error(`点了「${T(other)}」高亮没挪过来：${sexOn.join('/')}`);
+  // 「不填」在存档里是空串
+  const sexValue = T(other) === '不填' ? '' : T(other);
+
+  // 学期换个值，高亮也只能有一个
+  const second = [...findField(modal(), '学期').querySelectorAll('.chip')].find((c) => T(c) !== termOn());
+  second.click();
+  await sleep(80);
+  if (termOn() !== T(second)) throw new Error(`点了「${T(second)}」学期高亮还是「${termOn()}」`);
+
+  // 摘要行要跟着变（给用户「点上了」的即时反馈）
+  const summary = [...modal().querySelectorAll('.hint')].map(T).join(' ');
+  if (!/卷头印|还没填姓名/.test(summary)) throw new Error('弹窗里没有实时摘要：' + summary);
+
+  // 改名 + 保存
+  const nameInput = findField(modal(), '姓名').querySelector('input');
+  setControl(nameInput, '小明同学');
+  await sleep(80);
+  modalBtn('保存').click();
+  await sleep(300);
+  if (modal()) throw new Error('保存后弹窗没关');
+  const item = qa('#view .student-item').find((n) => /小明同学/.test(T(n)));
+  if (!item) throw new Error('列表里没出现「小明同学」');
+  const stored = JSON.parse(localStorage.getItem(KEY)).students.find((s) => s.name === '小明同学');
+  if (!stored) throw new Error('存档里没有改名后的学生');
+  if (stored.gender !== sexValue) throw new Error(`存档性别是「${stored.gender}」，点了「${T(other)}」`);
+  const TERM_CN = { 0: '全学年', 1: '上册', 2: '下册' };
+  if (TERM_CN[stored.term] !== T(second)) throw new Error(`存档学期是 ${TERM_CN[stored.term]}，点了 ${T(second)}`);
+  // 列表摘要里要看得到性别（以前只写年级/学期/科目，改了性别像没改）
+  if (sexValue && !T(item).includes(sexValue)) throw new Error('列表摘要里没显示性别：' + T(item));
+  return `${before}→${T(second)} · 性别「${T(other)}」 · 列表与存档一致`;
+});
+
+// 26 --------------------------------------------------------------
+await test('电脑端 · 试卷一行多列（自动 + 手动切 1 栏）', async () => {
+  if (frame.clientWidth < 1024) return '窗口太窄，跳过（电脑端功能）';
+  goCreate();
+  await waitFor(() => q('#view .create-actions'), '出卷页');
+  viewChip('页数上限', '不限').click();
+  await sleep(80);
+  // 把第一类题型加点题量，凑出一张两页以上的卷子
+  for (let k = 0; k < 3; k++) {
+    setControl(q('#view .type-item input.num'), '50');
+    await sleep(160);
+    if (Number(/已选 (\d+) 题/.exec(T(q('#view .page-head p')))?.[1] ?? 0) >= 50) break;
+  }
+  const r = await generate();
+  if (r.n < 2) throw new Error(`只排出 ${r.n} 页，验不了多栏`);
+  const stage = q('#view .paper-stage');
+  const cols = Number(stage.dataset.cols);
+  if (cols < 2) throw new Error(`窗口 ${stage.clientWidth}px 只排出 ${cols} 栏`);
+  const tops = r.pages.slice(0, 2).map((p) => Math.round(p.getBoundingClientRect().top));
+  if (Math.abs(tops[0] - tops[1]) > 2) throw new Error('前两页没并在同一行');
+  const lefts = r.pages.slice(0, 2).map((p) => Math.round(p.getBoundingClientRect().left));
+  if (lefts[1] <= lefts[0]) throw new Error('第二页没排到右边');
+  const pagePx = Math.round(r.pages[0].getBoundingClientRect().width);
+
+  // 手动切到 1 栏：必须真的竖回来
+  const colBtn = qa('#view .preview-toolbar .btn').find((b) => T(b).startsWith('版面'));
+  if (!colBtn) throw new Error('没有「版面」按钮');
+  for (let i = 0; i < 4 && q('#view .paper-stage').dataset.cols !== '1'; i++) {
+    colBtn.click();
+    await sleep(250);
+  }
+  const one = q('#view .paper-stage');
+  if (one.dataset.cols !== '1') throw new Error(`手动切 1 栏后仍是 ${one.dataset.cols} 栏`);
+  const t2 = qa('#view .paper-page').slice(0, 2).map((p) => Math.round(p.getBoundingClientRect().top));
+  if (Math.abs(t2[0] - t2[1]) < 100) throw new Error('切 1 栏后两页还挤在一行');
+  // 交还给自动，别把存档留在手动档
+  for (let i = 0; i < 4 && q('#view .preview-toolbar .btn') && T(qa('#view .preview-toolbar .btn').find((b) => T(b).startsWith('版面'))) !== '版面：自动'; i++) {
+    qa('#view .preview-toolbar .btn').find((b) => T(b).startsWith('版面')).click();
+    await sleep(200);
+  }
+  return `${r.n} 页排 ${cols} 栏 · 每页 ${pagePx}px`;
+});
+
 // ---------------------------------------------------------------- 收尾
 
 paint();

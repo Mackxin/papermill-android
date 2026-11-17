@@ -113,6 +113,13 @@ main {
 
 .grow { flex: 1; }
 
+/* 「共 2 页 · 缩到 96%」这类说明：整块一起换行，不许在中间折成两行
+   （也不许省略号 —— 页数被截成「共 2…」比折行更难看懂） */
+.preview-toolbar .grow {
+  flex: 1 0 auto;
+  white-space: nowrap;
+}
+
 /* ---------------------------------------------------------------- 按钮 */
 
 .btn {
@@ -603,7 +610,22 @@ input[type="number"]::-webkit-inner-spin-button {
   box-shadow: var(--shadow);
 }
 
-.zoom-label { font-size: 12px; color: var(--ink-3); min-width: 40px; text-align: center; }
+.zoom-label {
+  font: inherit;
+  font-size: 12px;
+  color: var(--ink-3);
+  min-width: 46px;
+  padding: 4px 6px;
+  text-align: center;
+  white-space: nowrap;
+  background: none;
+  border: 0;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.zoom-label:hover { background: #f1effa; color: var(--ink); }
+/* 手动缩放过：加个下划虚线提醒「点一下能回自动」 */
+.zoom-label.manual { color: var(--brand); text-decoration: underline dotted; }
 
 .paper-stage {
   display: flex;
