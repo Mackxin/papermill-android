@@ -138,8 +138,10 @@ function inlineEditor(hit, inline, page) {
  * @param {HTMLElement} container
  * @param {{pages:Array}} result renderPaper 的返回值
  * @param {number} zoom 缩放（1 = 实际大小）
- * @param {{selected?:string, onHit?:Function}|null} edit 传入则进入「可点选」状态：
- *        每道题上盖一层透明的点击热区，点一下就把 qid 交给 onHit。
+ * @param {{selected?:string, onHit?:Function, mode?:'click'|'dbl'}|null} edit 传入则盖热区：
+ *        mode='click'（编辑排版的默认值）点一下就把 qid 交给 onHit；
+ *        mode='dbl' 是预览页用的：单击不做事，**双击**才进原地编辑 ——
+ *        平时在预览里读卷子，手一抖点到某道题不该弹出输入框。
  * @param {number} cols 一行排几页（电脑端宽屏用；手机端恒为 1）
  */
 export function renderPages(container, result, zoom = 1, edit = null, cols = 1) {
@@ -162,14 +164,20 @@ export function renderPages(container, result, zoom = 1, edit = null, cols = 1) 
     inner.style.transformOrigin = 'top left';
     if (edit && page.hits?.length) {
       const inline = edit.inline?.qid ? edit.inline : null;
+      const dbl = edit.mode === 'dbl';
       page.hits.forEach((hit) => {
         offset.set(hit.qid, i + 1);
         const editable = !!inline && inline.qid === hit.qid;
         const box = el('div',
           `left:${hit.x}pt;top:${hit.y}pt;width:${hit.w}pt;height:${Math.max(6, hit.h)}pt;`);
-        box.className = `hit${hit.qid === edit.selected ? ' on' : ''}${editable ? ' editing' : ''}`;
-        box.title = '点一下就能在原地改';
-        box.onclick = (e) => { e.stopPropagation(); edit.onHit?.(hit.qid); };
+        box.className = `hit${dbl ? ' dbl' : ''}${hit.qid === edit.selected ? ' on' : ''}`
+          + `${editable ? ' editing' : ''}`;
+        box.title = dbl ? '双击这里，直接在原地改这道题' : '点一下就能在原地改';
+        if (dbl) {
+          box.ondblclick = (e) => { e.preventDefault(); e.stopPropagation(); edit.onHit?.(hit.qid); };
+        } else {
+          box.onclick = (e) => { e.stopPropagation(); edit.onHit?.(hit.qid); };
+        }
         inner.appendChild(box);
         if (editable) {
           // 这道题原来的文字先藏起来，底下换成输入框 —— 不然两行字叠在一起看不清

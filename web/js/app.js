@@ -549,32 +549,42 @@ function previewScreen() {
   const editOn = state.editor;
   const panelHost = editOn ? h('aside', { class: 'edit-panel' }) : null;
   if (editOn) fillEditorPanel(panelHost);
+
+  // 「正在原地改」的那一题：两种入口（编辑排版的单击、预览页的双击）共用同一套回调
+  const inlineCfg = () => (state.editInline && state.editSel ? {
+    qid: state.editSel,
+    value: findQuestion(state.editSel)?.q.stem ?? '',
+    // 打字时只更新数据，**一次都不重排** —— 重排就是把整张卷子推乱，
+    // 用户改一个字就得重新找自己刚改的题（这是他说「不要破坏原来的布局」的由来）
+    onChange: (v) => {
+      const hit = findQuestion(state.editSel);
+      if (hit) hit.q.stem = v;
+    },
+    onCommit: (v) => commitInlineEdit(v),
+    onCancel: () => cancelInlineEdit(),
+  } : null);
+
+  const openInline = (qid) => {
+    state.editSel = qid;
+    state.editInline = true;
+    state.editOrigin = findQuestion(qid)?.q.stem ?? '';
+    if (panelHost) fillEditorPanel(panelHost);   // 右侧面板要跟着换内容
+    draw();
+  };
+
+  // 预览页（没进编辑模式）也盖一层热区，但只认双击：
+  // 双击某一题 → 直接在那一行上改，**不**切「编辑排版」模式 ——
+  // 切模式会插进右侧面板，纸面被挤窄、缩放比例跟着变，看着像布局被打乱了。
+  const dblEdit = !editOn && window.innerWidth >= 1024;
+
   const draw = () => {
     const L = layoutNow();
     zoomLabel.textContent = `${Math.round(L.zoom * 100)}%${L.cols > 1 ? ` · ${L.cols} 栏` : ''}`;
     info.textContent = describe(state.result);
-    renderPages(pages, state.result, L.zoom, editOn ? {
-      selected: state.editSel,
-      inline: state.editInline && state.editSel ? {
-        qid: state.editSel,
-        value: findQuestion(state.editSel)?.q.stem ?? '',
-        // 打字时只更新数据，**一次都不重排** —— 重排就是把整张卷子推乱，
-        // 用户改一个字就得重新找自己刚改的题（这是他说「不要破坏原来的布局」的由来）
-        onChange: (v) => {
-          const hit = findQuestion(state.editSel);
-          if (hit) hit.q.stem = v;
-        },
-        onCommit: (v) => commitInlineEdit(v),
-        onCancel: () => cancelInlineEdit(),
-      } : null,
-      onHit: (qid) => {
-        state.editSel = qid;
-        state.editInline = true;
-        state.editOrigin = findQuestion(qid)?.q.stem ?? '';
-        if (panelHost) fillEditorPanel(panelHost);   // 右侧面板要跟着换内容
-        draw();
-      },
-    } : null, L.cols);
+    const hitCfg = editOn
+      ? { selected: state.editSel, inline: inlineCfg(), onHit: openInline }
+      : dblEdit ? { mode: 'dbl', selected: null, inline: inlineCfg(), onHit: openInline } : null;
+    renderPages(pages, state.result, L.zoom, hitCfg, L.cols);
     stageCtx = { pages, draw, zoom: zoomNow };
   };
 

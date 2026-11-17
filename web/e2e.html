@@ -847,6 +847,49 @@ await test('编辑排版 · 标题并成一行、每大题单独定栏数', asyn
   return `标题并成一行省 ${(y0 - y1).toFixed(0)}pt · 这一大题 2 栏 → 1 栏（${w0.toFixed(0)} → ${w1.toFixed(0)}pt）`;
 });
 
+// 29 --------------------------------------------------------------
+await test('预览页双击就改 · 单击不弹框、不进编辑模式、位置不动', async () => {
+  if (frame.clientWidth < 1024) return '窗口太窄，跳过（电脑端功能）';
+  goCreate();
+  await waitFor(() => q('#view .create-actions'), '出卷页');
+  await generate();
+  await waitFor(() => qa('#view .hit.dbl').length > 0, '双击热区', 8000);
+  if (q('#view .edit-panel')) throw new Error('预览页不该有编辑面板');
+
+  // 单击 = 只是读卷子，不许弹输入框
+  const hits = qa('#view .hit.dbl');
+  if (hits.length < 3) throw new Error(`双击热区只有 ${hits.length} 个`);
+  hits[0].click();
+  await sleep(250);
+  if (q('#view .inline-ta')) throw new Error('单击就弹出了输入框（应该只有双击才进编辑）');
+
+  const snap = () => D().defaultView.__papermill.result.pages
+    .flatMap((p) => (p.hits ?? [])
+      .map((h) => `${p.index}|${h.qid}|${h.x.toFixed(2)}|${h.y.toFixed(2)}`));
+  const s0 = snap();
+  const pages0 = D().defaultView.__papermill.result.pages.length;
+
+  const win = D().defaultView;
+  hits[0].dispatchEvent(new win.MouseEvent('dblclick', { bubbles: true, cancelable: true }));
+  await sleep(400);
+  const ta = q('#view .inline-ta');
+  if (!ta) throw new Error('双击后在原地没有出现输入框');
+  const oldText = ta.value;
+  setControl(ta, `${oldText}（双击改的，位置不许动）`);
+  await sleep(200);
+  ta.blur();                       // 点走才落纸，和编辑模式里同一套提交逻辑
+  await sleep(800);
+  const after = collect();
+  if (!/双击改的/.test(after.text)) throw new Error('双击改完纸面没更新');
+  const s1 = snap();
+  const moved = s1.filter((x, i) => x !== s0[i]);
+  if (moved.length) throw new Error(`双击改字后挪了 ${moved.length} 处：${moved[0]}（原 ${s0[s1.indexOf(moved[0])]}）`);
+  if (D().defaultView.__papermill.result.pages.length !== pages0) throw new Error('双击改字后页数变了');
+  if (q('#view .edit-panel')) throw new Error('双击不该切进编辑模式（右侧面板会挤窄纸面）');
+
+  return `单击无反应 · 双击原地弹框 · ${s0.length} 个 slot 原封不动`;
+});
+
 // ---------------------------------------------------------------- 收尾
 
 paint();
