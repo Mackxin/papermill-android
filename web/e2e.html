@@ -636,6 +636,39 @@ await test('编辑排版 · 点题改字、删题、滑杆重排', async () => {
   return `${n0} 题 → 改字重排 ${after.n} 页 → 删 1 题余 ${n1} 题`;
 });
 
+// 24 --------------------------------------------------------------
+await test('弹窗里的下拉 · 浮层不被滚动容器裁掉，选中生效', async () => {
+  dock('更多');
+  await waitFor(() => q('#view .stat-grid'), '更多页');
+  const toStudents = qa('#view .btn').find((b) => T(b) === '学生档案');
+  if (!toStudents) throw new Error('更多页没有「学生档案」入口');
+  toStudents.click();
+  await waitFor(() => q('#view .student-list'), '学生页');
+  const add = qa('#view .btn').find((b) => T(b).includes('新建学生'));
+  if (!add) throw new Error('没有「新建学生」');
+  add.click();
+  await waitFor(() => modal(), '学生弹窗');
+  const dd = modal().querySelector('.field .dd');
+  if (!dd) throw new Error('弹窗里没有下拉');
+  dd.querySelector('.dd-btn').click();
+  await sleep(200);
+  // 弹窗里的浮层会被挪到 body 上，所以不能按 .dd.open .dd-pop 找
+  const pop = [...D().querySelectorAll('.dd-pop')]
+    .find((p) => D().defaultView.getComputedStyle(p).display !== 'none');
+  if (!pop) throw new Error('下拉没展开');
+  const r = pop.getBoundingClientRect();
+  if (r.bottom > D().defaultView.innerHeight + 1) throw new Error('浮层超出窗口底部');
+  if (r.height < 40) throw new Error(`浮层只有 ${Math.round(r.height)}px 高，被裁了`);
+  const opt = [...pop.querySelectorAll('.dd-opt')].find((o) => T(o) === '五年级');
+  if (!opt) throw new Error('浮层里没有「五年级」');
+  opt.click();
+  await sleep(120);
+  const sel = dd.querySelector('select');
+  if (sel.value !== '5') throw new Error(`选完下拉值是 ${sel.value}，应为 5`);
+  closeModal();
+  return `浮层 ${Math.round(r.width)}×${Math.round(r.height)} · 选到 ${sel.options[sel.selectedIndex].text}`;
+});
+
 // ---------------------------------------------------------------- 收尾
 
 paint();

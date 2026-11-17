@@ -155,10 +155,16 @@ export function select(options, value, onChange) {
 
   const close = () => {
     wrap.classList.remove('open');
+    // 从 body 挪回原处，清掉临时定位
+    if (pop.parentElement === document.body) wrap.appendChild(pop);
+    pop.removeAttribute('style');
     document.removeEventListener('mousedown', onDocDown, true);
     document.removeEventListener('keydown', onKey, true);
+    window.removeEventListener('resize', close);
   };
-  const onDocDown = (e) => { if (!wrap.contains(e.target)) close(); };
+  const onDocDown = (e) => {
+    if (!wrap.contains(e.target) && !pop.contains(e.target)) close();
+  };
   const onKey = (e) => {
     if (e.key === 'Escape') { close(); btn.focus(); return; }
     if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
@@ -179,6 +185,31 @@ export function select(options, value, onChange) {
     document.querySelectorAll('.dd.open').forEach((w) => { if (w !== wrap) w.classList.remove('open'); });
     wrap.classList.add('open');
     mark();
+
+    // 弹窗里的下拉会被 .modal-body 的滚动容器裁掉（.modal-mask 的 backdrop-filter
+    // 还会把 fixed 定位的参照系变成弹窗本身），所以直接挂到 body 上、按视口定位
+    if (btn.closest('.modal-body')) {
+      const r = btn.getBoundingClientRect();
+      const below = window.innerHeight - r.bottom - 14;
+      const above = r.top - 14;
+      const room = Math.max(140, Math.min(288, Math.max(below, above)));
+      document.body.appendChild(pop);
+      pop.style.display = 'block';   // 挪出 .dd 之后，.dd.open .dd-pop 的显示规则不再命中
+      pop.style.position = 'fixed';
+      pop.style.zIndex = '70';
+      pop.style.left = `${r.left}px`;
+      pop.style.width = `${r.width}px`;
+      pop.style.minWidth = '0';      // 否则 min-width:100% 会按 body 宽度铺满整屏
+      pop.style.maxHeight = `${room}px`;
+      if (below >= 160 || below >= above) {
+        pop.style.top = `${r.bottom + 6}px`;
+      } else {
+        pop.style.top = 'auto';
+        pop.style.bottom = `${window.innerHeight - r.top + 6}px`;
+      }
+      window.addEventListener('resize', close);
+    }
+
     document.addEventListener('mousedown', onDocDown, true);
     document.addEventListener('keydown', onKey, true);
     pop.querySelector('.dd-opt.on')?.scrollIntoView({ block: 'nearest' });
@@ -193,11 +224,10 @@ export function select(options, value, onChange) {
   return wrap;
 }
 
-// 点空白处关掉所有下拉
+// 点空白处关掉所有下拉（浮层在弹窗里时挂在 body 上，要一并放过）
 document.addEventListener('mousedown', (e) => {
-  if (!e.target.closest?.('.dd')) {
-    document.querySelectorAll('.dd.open').forEach((w) => w.classList.remove('open'));
-  }
+  if (e.target.closest?.('.dd, .dd-pop')) return;
+  document.querySelectorAll('.dd.open').forEach((w) => w.classList.remove('open'));
 }, true);
 
 export function input(type, value, onChange, attrs = {}) {
