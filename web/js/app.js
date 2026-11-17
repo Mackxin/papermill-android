@@ -474,25 +474,32 @@ function previewScreen() {
   }
   // A4 一张纸 595pt ≈ 793px，手机屏幕装不下 —— 横版更宽。
   // 所以默认按「铺满可用宽度」显示，不然用户进来只看见左边一角，还以为卷子坏了。
+  // 可用宽度从纸面容器实际量，不能拿 window.innerWidth 硬算（电脑端左侧还有 208px 导航栏）。
   const pageW = state.result.pages[0]?.pageW ?? 595;
-  const avail = Math.min(window.innerWidth, 980) - 56;
-  const fit = Math.min(1, Math.max(0.35, avail / (pageW * (96 / 72))));
-  const zoom = state.zoomAuto ? fit : state.zoom;
-
   const view = h('div', { class: 'preview-view' });
+  const pages = h('div', { class: 'paper-stage' });
+  const fitZoom = () => {
+    // 留 32px 呼吸 —— 纸面顶到窗口边缘看着像被裁掉了
+    const avail = (pages.clientWidth || Math.max(320, window.innerWidth - 64)) - 32;
+    // 上限 1.35：超宽屏上别把 595pt 的纸拉成一张巨幅海报
+    return Math.min(1.35, Math.max(0.35, avail / (pageW * (96 / 72))));
+  };
+  const zoomNow = () => (state.zoomAuto ? fitZoom() : state.zoom);
+  const zoomLabel = h('span', { class: 'zoom-label', text: `${Math.round(zoomNow() * 100)}%` });
+
   const toolbar = h('div', { class: 'preview-toolbar' }, [
     button('← 返回', 'ghost', () => { state.tab = 'create'; render(); }),
     h('span', { class: 'grow', text: describe(state.result) }),
     button('－', 'ghost', () => {
       state.zoomAuto = false;
-      state.zoom = Math.max(0.4, Math.round((zoom - 0.1) * 100) / 100);
+      state.zoom = Math.max(0.4, Math.round((zoomNow() - 0.1) * 100) / 100);
       save();
       render();
     }),
-    h('span', { class: 'zoom-label', text: `${Math.round(zoom * 100)}%` }),
+    zoomLabel,
     button('＋', 'ghost', () => {
       state.zoomAuto = false;
-      state.zoom = Math.min(2, Math.round((zoom + 0.1) * 100) / 100);
+      state.zoom = Math.min(2, Math.round((zoomNow() + 0.1) * 100) / 100);
       save();
       render();
     }),
@@ -508,9 +515,13 @@ function previewScreen() {
     button('存进试卷库', 'ghost', () => saveToLibrary()),
   ]);
   view.appendChild(toolbar);
-  const pages = h('div', { class: 'paper-stage' });
   view.appendChild(pages);
-  setTimeout(() => renderPages(pages, state.result, zoom), 0);
+  // 挂进文档后才量得到真实宽度：量完再画，并把百分比刷成实际用的值
+  setTimeout(() => {
+    const z = zoomNow();
+    zoomLabel.textContent = `${Math.round(z * 100)}%`;
+    renderPages(pages, state.result, z);
+  }, 0);
   return view;
 }
 
@@ -659,7 +670,7 @@ function saveToLibrary() {
 // ------------------------------------------------------------------ 页面：错题本 / 试卷库 / 学生
 
 function mistakesScreen() {
-  const wrap = h('div', {});
+  const wrap = h('div', { class: 'page' });
   wrap.appendChild(h('div', { class: 'page-head' }, [
     h('h1', { text: '错题本' }),
     h('p', { class: 'hint', text: `共 ${state.mistakes.length} 道 · 同一个题干只记一次` }),
@@ -713,7 +724,7 @@ function mistakesScreen() {
 }
 
 function libraryScreen() {
-  const wrap = h('div', {});
+  const wrap = h('div', { class: 'page' });
   wrap.appendChild(h('div', { class: 'page-head' }, [
     h('h1', { text: '试卷库' }),
     h('p', { class: 'hint', text: `本地保存了 ${state.history.length} 张卷子（存在这台设备的浏览器里）` }),
@@ -747,7 +758,7 @@ function libraryScreen() {
 }
 
 function studentsScreen() {
-  const wrap = h('div', {});
+  const wrap = h('div', { class: 'page' });
   wrap.appendChild(h('div', { class: 'page-head' }, [
     h('h1', { text: '学生档案' }),
     h('p', { class: 'hint', text: '姓名 + 年级 + 学期 + 科目。点名字就按他的档案出卷，卷头直接印名字。' }),
@@ -880,7 +891,7 @@ function textbookScreen() {
   const spec = ensureSpec();
   const subject = primarySubjects()[0];
   const grade = spec.grade;
-  const wrap = h('div', {});
+  const wrap = h('div', { class: 'page page-cards' });
   wrap.appendChild(h('div', { class: 'page-head' }, [
     h('h1', { text: '课本' }),
     h('p', { class: 'hint', text: '按课标单元出卷：点一个单元，只从这套知识点里抽题。教材原文不收录，只给链接。' }),
@@ -964,7 +975,7 @@ function textbookScreen() {
 // ------------------------------------------------------------------ 页面：打印纸
 
 function sheetsScreen() {
-  const wrap = h('div', {});
+  const wrap = h('div', { class: 'page' });
   wrap.appendChild(h('div', { class: 'page-head' }, [
     h('h1', { text: '打印纸' }),
     h('p', { class: 'hint', text: '速查表与练习格纸，点开就能打印。内容全在本机，不联网。' }),
@@ -1002,7 +1013,8 @@ function sheetsScreen() {
 function previewSheet(item, kind) {
   const node = kind === 'ref' ? referenceSheet(item) : practiceSheet(item);
   const holder = h('div', { class: 'sheet-preview' });
-  const scale = 0.62;
+  // 电脑端弹窗宽，纸面给它放大一点，别让一张 A4 缩成邮票
+  const scale = window.innerWidth >= 900 ? 0.8 : 0.62;
   node.style.transform = `scale(${scale})`;
   node.style.transformOrigin = 'top left';
   holder.appendChild(node);
@@ -1026,7 +1038,7 @@ function previewSheet(item, kind) {
 // ------------------------------------------------------------------ 页面：更多
 
 function moreScreen() {
-  const wrap = h('div', {});
+  const wrap = h('div', { class: 'page page-cards' });
   wrap.appendChild(h('div', { class: 'page-head' }, [
     h('h1', { text: '更多' }),
     h('p', { class: 'hint', text: '数据统计 · 打印帮助 · 关于' }),
@@ -1094,6 +1106,8 @@ const TABS = [
 
 function navBar() {
   const nav = h('nav', { class: 'dock' });
+  // 电脑端侧栏才显示的小标题（手机端隐藏）
+  nav.appendChild(h('div', { class: 'dock-title', text: '工作台' }));
   TABS.forEach((t) => {
     nav.appendChild(h('button', {
       class: `dock-btn${state.tab === t.key || (t.key === 'create' && state.tab === 'preview') ? ' on' : ''}`,
@@ -1139,10 +1153,12 @@ function render() {
       ]));
       view.appendChild(studentStrip());
       view.appendChild(templateRow());
-      view.appendChild(paramCard());
-      view.appendChild(typesCard());
-      view.appendChild(customCard());
-      view.appendChild(layoutCard());
+      // 电脑端两列并排：左「出什么卷 + 题型」，右「自编题 + 卷面定制」；
+      // 手机端 .create-cols 退化成块级，还是原来那样竖着堆。
+      view.appendChild(h('div', { class: 'create-cols' }, [
+        h('div', { class: 'col' }, [paramCard(), typesCard()]),
+        h('div', { class: 'col' }, [customCard(), layoutCard()]),
+      ]));
       view.appendChild(h('div', { class: 'create-actions' }, [
         button(`生成卷子（${totalCount(spec.counts)} 题）`, 'primary', async () => {
           if (!totalCount(spec.counts)) { toast('先勾几个题型'); return; }
@@ -1189,5 +1205,13 @@ async function boot() {
     if (built) render();
   }
 }
+
+// 窗口尺寸变了（拖动窗口 / 转屏 / 收起侧栏）：预览页重新按宽度铺满纸面
+let resizeTimer = null;
+window.addEventListener('resize', () => {
+  if (state.tab !== 'preview') return;
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => { if (state.tab === 'preview') render(); }, 180);
+});
 
 boot();

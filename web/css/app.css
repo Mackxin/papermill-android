@@ -542,6 +542,9 @@ main {
   font-weight: 600;
 }
 
+/* 侧栏小标题：只在电脑端出现 */
+.dock-title { display: none; }
+
 .create-actions {
   position: sticky;
   z-index: 10;
@@ -550,6 +553,9 @@ main {
   justify-content: center;
   padding: 10px 0;
 }
+
+/* 出卷页的两列容器：手机端是普通块，电脑端才排两列（见文件末尾的桌面样式） */
+.create-cols > .col { min-width: 0; }
 
 .create-actions .btn {
   padding: 12px 30px;
@@ -683,6 +689,127 @@ main.tab-create { padding-bottom: 190px; }
   .topbar-hint { display: none; }
 }
 
-@media (min-width: 900px) {
-  #dock-holder { justify-content: center; }
+/* ---------------------------------------------------------------- 桌面端（电脑浏览器） */
+
+/*
+ * 手机端的底部胶囊导航在电脑上竖起来当左侧导航栏，正文从 208px 往右铺满整个窗口。
+ * 断点 1024px：平板横屏（1024×768）也走这一套，别在 1024 宽度上还留一条居中的窄栏。
+ */
+@media (min-width: 1024px) {
+  /* ---- 顶栏与侧栏 ---- */
+  .topbar { padding: 12px 28px; }
+
+  #dock-holder {
+    top: 57px;
+    right: auto;
+    bottom: 0;
+    left: 0;
+    width: 208px;
+    padding: 16px 10px 20px;
+    flex-direction: column;
+    justify-content: flex-start;
+  }
+
+  .dock {
+    flex-direction: column;
+    align-items: stretch;
+    width: 100%;
+    gap: 3px;
+    padding: 8px;
+    background: #fff;
+    backdrop-filter: none;
+    box-shadow: var(--shadow);
+  }
+
+  .dock-title {
+    display: block;
+    padding: 4px 12px 10px;
+    font-size: 10.5px;
+    letter-spacing: 0.14em;
+    color: var(--ink-3);
+  }
+
+  .dock-btn {
+    text-align: left;
+    padding: 11px 14px;
+    font-size: 13.5px;
+    border-radius: 11px;
+  }
+
+  .dock-btn:hover { background: #faf9ff; }
+
+  /* ---- 正文：右边不再留白，一路铺到窗口边缘 ---- */
+  main {
+    max-width: none;
+    margin: 0 0 0 208px;
+    padding: 20px 28px 44px;
+  }
+
+  main.tab-create { padding-bottom: 108px; }
+
+  .card { padding: 18px; }
+
+  /* ---- 出卷页：左「出什么卷 + 题型」，右「自编题 + 卷面定制」 ---- */
+  .create-cols {
+    display: grid;
+    grid-template-columns: minmax(0, 1.04fr) minmax(0, 0.96fr);
+    column-gap: 20px;
+    align-items: start;
+  }
+
+  /* 模板卡与学生 pill 不再横向滚动：换行铺满整行，鼠标不用横着拖 */
+  .template-row,
+  .student-strip {
+    flex-wrap: wrap;
+    overflow: visible;
+  }
+
+  .template-chip { width: 184px; }
+
+  /* 多卡片页（课本 / 更多）：卡片并排，别一张占满 1300px 的细长条 */
+  .page-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+    column-gap: 20px;
+    align-items: start;
+  }
+
+  .page-cards > .page-head,
+  .page-cards > .row { grid-column: 1 / -1; }
+
+  /* 错题 / 试卷库 / 学生 / 单元：一屏能看四五个，不用滚半天 */
+  .mistake-list,
+  .lib-list,
+  .student-list,
+  .unit-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(330px, 1fr));
+    gap: 10px;
+  }
+
+  .sheet-grid { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
+  .stat-grid { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); }
+
+  /* 出卷按钮：贴窗口底边做成一条实心操作条，靠右（跟右侧表单同一列） */
+  .create-actions {
+    bottom: 0;
+    justify-content: flex-end;
+    padding: 12px 0;
+    background: var(--bg);
+    border-top: 1px solid var(--line);
+  }
+
+  .create-actions .btn { padding: 12px 34px; }
+
+  .preview-toolbar { top: 57px; }
+  .paper-stage { padding: 4px 0 32px; }
+}
+
+/* 宽屏：题型列表排两列，四十多个题型不用滚一屏半 */
+@media (min-width: 1200px) {
+  .type-list {
+    grid-template-columns: 1fr 1fr;
+    column-gap: 16px;
+    max-height: none;
+  }
 }
