@@ -173,14 +173,16 @@ await test('生成卷子 · 页数 / 姓名栏 / 页脚页码', async () => {
 });
 
 // 3 ---------------------------------------------------------------
-await test('页脚 · 默认那句印得出来', async () => {
+await test('页脚 · 默认不印版权说明，只留时间与页码', async () => {
   goCreate();
   await waitFor(() => q('#view .create-actions'), '出卷页');
-  viewChip('页脚', '默认那句').click();
+  viewChip('页脚', '只印时间/页码').click();
   await sleep(80);
   const r = await generate();
-  if (!/非官方教材配套/.test(r.text)) throw new Error('没找到默认页脚文案');
-  return '含「题目由本程序生成」';
+  // 用户点名：那张「题目由本程序生成，非官方教材配套」别默认印出来
+  if (/非官方教材配套/.test(r.text)) throw new Error('默认页脚还印着版权说明');
+  if (!/第\s*1\s*\/\s*\d+\s*页/.test(r.text)) throw new Error('页脚连页码都没了');
+  return '无版权说明 · 页码仍在';
 });
 
 // 4 ---------------------------------------------------------------
@@ -190,7 +192,7 @@ await test('页脚 · 整条不印', async () => {
   viewChip('页脚', '整条不印').click();
   await sleep(80);
   const r = await generate();
-  if (/非官方教材配套/.test(r.text)) throw new Error('页脚文案还在');
+  if (/第\s*1\s*\/\s*\d+\s*页/.test(r.text)) throw new Error('整条不印时页码还在');
   if (/第\s*1\s*\/\s*\d+\s*页/.test(r.text)) throw new Error('页码还在');
   return '文案与页码都没了';
 });
@@ -207,7 +209,7 @@ await test('页脚 · 自定义文字', async () => {
   if (!/三班数学/.test(r.text)) throw new Error('自定义页脚没印出来');
   goCreate();
   await waitFor(() => q('#view .create-actions'), '出卷页');
-  viewChip('页脚', '默认那句').click();
+  viewChip('页脚', '只印时间/页码').click();
   return '印出「三班数学 · 每日一练」';
 });
 
@@ -888,6 +890,89 @@ await test('预览页双击就改 · 单击不弹框、不进编辑模式、位�
   if (q('#view .edit-panel')) throw new Error('双击不该切进编辑模式（右侧面板会挤窄纸面）');
 
   return `单击无反应 · 双击原地弹框 · ${s0.length} 个 slot 原封不动`;
+});
+
+// 30 --------------------------------------------------------------
+await test('改题同时改答案 · 答案页跟着变、算式自动重算', async () => {
+  if (frame.clientWidth < 1024) return '窗口太窄，跳过（电脑端功能）';
+  goCreate();
+  await waitFor(() => q('#view .create-actions'), '出卷页');
+  // 只留口算：只有纯算式题才谈得上「自动知道答案」
+  qa('#view .type-tools .btn').find((b) => T(b) === '清空')?.click();
+  await sleep(150);
+  const oral = qa('#view .type-item').find((n) => /口算/.test(T(n.querySelector('.type-name'))));
+  if (!oral) throw new Error('题型列表里没有口算');
+  oral.querySelector('input[type="checkbox"]').click();
+  await sleep(250);
+  await generate();
+  await waitFor(() => qa('#view .hit.dbl').length > 0, '双击热区', 8000);
+
+  const W = D().defaultView;
+  const sec0 = W.__papermill.paper.sections[0];
+  if (sec0.type !== 'ORAL') throw new Error(`第一个大题是 ${sec0.type}，不是口算`);
+  const pages0 = W.__papermill.result.pages.length;
+  const answerTextOf = (uid) => W.__papermill.result.pages
+    .flatMap((p) => p.nodes.filter((n) => n.a === uid).map((n) => n.text ?? '')).join(' ');
+
+  const openHit = async (i) => {
+    qa('#view .hit.dbl')[i].dispatchEvent(new W.MouseEvent('dblclick', { bubbles: true, cancelable: true }));
+    const ta = await waitFor(() => q('#view .inline-ta'), '原地输入框');
+    return ta;
+  };
+
+  // ① 只改题干、答案不动：算式题应当自己把答案算出来
+  const ta1 = await openHit(0);
+  setControl(ta1, '888-88=（　　）');
+  await sleep(150);
+  const ansBox = q('#view .inline-ans-input');
+  if (!ansBox) throw new Error('编辑框里没有「答案」输入框');
+  ta1.blur();
+  await sleep(800);
+  const q0 = W.__papermill.paper.sections[0].questions[0];
+  if (q0.answer !== '800') throw new Error(`题干改成 888-88= 后答案是「${q0.answer}」，应为 800`);
+  if (!/800/.test(answerTextOf(q0.uid))) throw new Error('答案页没跟着改成 800：' + answerTextOf(q0.uid));
+
+  // ② 手打答案：非算式题也得能改，且答案页要跟着变
+  const ta2 = await openHit(0);
+  setControl(ta2, '看图写一句话（　　）');
+  await sleep(120);
+  const ansInput = q('#view .inline-ans-input');
+  ansInput.focus();                 // 真实操作是点进答案框里打字，失焦才提交
+  setControl(ansInput, '我喜欢画画。');
+  await sleep(120);
+  ansInput.blur();
+  await sleep(800);
+  const q0b = W.__papermill.paper.sections[0].questions[0];
+  if (q0b.answer !== '我喜欢画画。') throw new Error(`手写的答案没存下：${q0b.answer}`);
+  if (!/我喜欢画画/.test(answerTextOf(q0b.uid))) throw new Error('答案页没印新手写的答案');
+  const pages1 = W.__papermill.result.pages.length;
+  if (pages1 !== pages0) throw new Error(`改答案把页数改了：${pages0} → ${pages1}`);
+
+  return `888-88= 自动算出 800 · 手写答案落纸 · 页数仍 ${pages1}`;
+});
+
+// 31 --------------------------------------------------------------
+await test('一年级科学 · 大题印「请家长读题」', async () => {
+  goCreate();
+  await waitFor(() => q('#view .create-actions'), '出卷页');
+  setControl(q('#view .field select'), '1');
+  await sleep(300);
+  // 科目只留科学：先加科学，再把数学去掉
+  const subj = findField(q('#view'), '科目（可多选）');
+  [...subj.querySelectorAll('.chip')].find((c) => T(c) === '科学').click();
+  await sleep(200);
+  const mathChip = [...findField(q('#view'), '科目（可多选）').querySelectorAll('.chip')].find((c) => T(c) === '数学' && c.classList.contains('on'));
+  if (mathChip) { mathChip.click(); await sleep(250); }
+  qa('#view .type-tools .btn').find((b) => T(b) === '清空')?.click();
+  await sleep(150);
+  const sci = qa('#view .type-item').find((n) => /科学选择/.test(T(n.querySelector('.type-name'))));
+  if (!sci) throw new Error('一年级没有「科学选择」这一项');
+  sci.querySelector('input[type="checkbox"]').click();
+  await sleep(250);
+  const r = await generate();
+  if (!/请家长读题/.test(r.text)) throw new Error('一年级科学没有印读题提示：' + r.text.slice(0, 120));
+  if (!r.text.match(/科学/)) throw new Error('这一卷根本没出科学题');
+  return '一年级科学卷已印「请家长读题，孩子口头作答」';
 });
 
 // ---------------------------------------------------------------- 收尾

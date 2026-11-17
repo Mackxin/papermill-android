@@ -86,7 +86,8 @@ export function assemble(spec, paper) {
   if (spec.answerMode === 'LAST_PAGE' && paper.questions.length) {
     sections.push({
       title: '参考答案（家长核对用）',
-      questions: paper.questions.map((q) => ({ no: q.no, uid: null, stem: q.answer, figure: null })),
+      // uid 必须带上：改完答案要能把答案页的对应格子找出来重画（以前是 null，只能整页重排）
+      questions: paper.questions.map((q) => ({ no: q.no, uid: q.uid ?? null, stem: q.answer, figure: null })),
       columns: 4,
       answerLines: 0,
       instruction: '',
@@ -108,7 +109,9 @@ export function assemble(spec, paper) {
     showNameRow: spec.showNameRow !== false,
     studentName: spec.studentName ?? '',
     sections,
-    footerText: spec.footerText ?? '卷子 · 题目由本程序生成，非官方教材配套',
+    // 默认**不印**左边那句版权说明 —— 家长要的是一张干净的练习卷，
+    // 需要署字就自己在「页脚 → 自定义」里写。右侧的生成时间与页码照旧。
+    footerText: spec.footerText ?? '',
     footerStamp: spec.showCreatedAt && !footerOff ? `生成 ${stamp(paper.createdAt)}` : '',
     showPageNo: spec.showPageNo !== false && !footerOff,
     footerSize: spec.footerSize ?? 'NORMAL',
@@ -324,9 +327,12 @@ export function renderPaper(doc, tp = TP) {
       answerSections.forEach((section) => {
         blocks.push(sectionHeader(section.title));
         section.questions.forEach((q) => {
-          blocks.push(questionBlock({
-            no: q.no, stem: q.stem, answerLines: section.answerLines, itemGap: gapV,
-          }));
+          const b = questionBlock({
+            no: q.no, uid: q.uid ?? null, stem: q.stem,
+            answerLines: section.answerLines, itemGap: gapV,
+          });
+          b.isAnswer = true;   // 画的时候塞进 answers 而不是 hits，免得编辑热区跑到答案页去
+          blocks.push(b);
         });
       });
       return new FlowLayout({
@@ -364,12 +370,11 @@ export function renderPaper(doc, tp = TP) {
     const nodes = [];
     const contentTop = index === 0 ? drawCover(nodes, doc, g, tp) : drawRunning(nodes, doc, g);
     const hits = [];
+    const answers = [];   // 答案页的格子：改答案时只重画这一块
     page.items.forEach((placed) => {
       const prims = placed.block.draw(tp, g.margin + placed.x, contentTop + placed.y, placed.w);
       if (placed.block.qid) {
-        // 带上题目身份：编辑器靠它把「纸上这块」和「paper 里那道题」对上
-        prims.forEach((p) => { p.q = placed.block.qid; });
-        hits.push({
+        const slot = {
           qid: placed.block.qid,
           no: placed.block.no,
           x: g.margin + placed.x,
@@ -381,14 +386,22 @@ export function renderPaper(doc, tp = TP) {
           lines: placed.block.answerLines ?? 0,
           itemGap: placed.block.itemGap ?? gap.base,
           figure: placed.block.figure ?? null,
-        });
+        };
+        if (placed.block.isAnswer) {
+          // 答案块用 a 标记：正文编辑器隐藏 / 重画时读的是 q，互不干扰
+          prims.forEach((p) => { p.a = placed.block.qid; });
+          answers.push(slot);
+        } else {
+          prims.forEach((p) => { p.q = placed.block.qid; });
+          hits.push(slot);
+        }
       }
       nodes.push(...prims);
     });
     drawFooter(nodes, doc, g, footerSize, index + 1, total, tp);
     return {
       index, pageW: g.pageW, pageH: g.pageH, margin: g.margin,
-      cover: index === 0, nodes, hits,
+      cover: index === 0, nodes, hits, answers,
     };
   });
 
@@ -448,6 +461,45 @@ export function repaintQuestion(pages, qid, stem, tp = TP) {
     hit.curH = pickedH;
     // 缩到 70% 还是比格子高：调用方据此提示一句，别让用户以为排版错了
     return { page, overflow: pickedH > hit.h + 0.5 };
+  }
+  return null;
+}
+
+/**
+ * 只重画答案页上某个答案 —— 改完题干/答案时用。
+ *
+ * 和 [repaintQuestion] 是同一套规矩：**不重跑排版**，只按原来的格子重画这一块。
+ * 答案通常比题干短，改长了就按 5% 档缩字号塞回去，位置与页数一律不动。
+ *
+ * @returns 被改动的页；没找到（这卷没印答案页）返回 null
+ */
+export function repaintAnswer(pages, qid, text, tp = TP) {
+  for (const page of pages) {
+    const slot = page.answers?.find((a) => a.qid === qid);
+    if (!slot) continue;
+    page.nodes = page.nodes.filter((n) => n.a !== qid);
+
+    const base = slot.size ?? BODY_SIZE;
+    let picked = null;
+    let pickedH = Infinity;
+    for (let scale = 1; scale >= 0.699; scale -= 0.05) {
+      const block = questionBlock({
+        no: slot.no,
+        uid: qid,
+        stem: text,
+        answerLines: 0,
+        size: base * scale,
+        itemGap: slot.itemGap ?? 4,
+        figure: null,
+      });
+      const h = block.measure(tp, slot.w);
+      if (h <= slot.h) { picked = block; pickedH = h; break; }
+      if (h < pickedH) { picked = block; pickedH = h; }
+    }
+    const prims = picked.draw(tp, slot.x, slot.y, slot.w);
+    prims.forEach((p) => { p.a = qid; });
+    page.nodes.push(...prims);
+    return page;
   }
   return null;
 }
@@ -527,12 +579,9 @@ function drawCover(nodes, doc, g, tp) {
     field('班级', 52);
     field('日期', 56);
 
+    // 「得分」后面留白给老师手写（以前印三个小方框，用户说碍眼）。
+    // 只到标签为止，后面的空白天然成为书写区。
     nodes.push(atBaseline(x, baseline, '得分', labelSize));
-    x += tp.measure('得分', labelSize) + 6;
-    for (let i = 0; i < 3; i++) {
-      nodes.push({ k: 'rect', x, y: baseline - 10, w: 11, h: 12, stroke: '#333', width: 0.8 });
-      x += 13;
-    }
     y += NAME_ROW_H;
   }
 

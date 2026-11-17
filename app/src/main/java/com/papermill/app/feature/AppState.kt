@@ -216,7 +216,7 @@ class AppState(private val rawContext: Context) {
     var headerOneLine by mutableStateOf(false)
 
     /**
-     * 页脚模式：0 = 默认那句（题目由本 App 程序生成…），1 = 自定义，2 = 不印。
+     * 页脚模式：0 = 不写字（只印右侧时间与页码），1 = 自定义，2 = 不印。
      *
      * 为什么用三个状态而不是「留空 = 不印」：留空是「我懒得写」还是「我不要页脚」
      * 分不出来，而这两种意图的结果差 26pt 纸面高度。

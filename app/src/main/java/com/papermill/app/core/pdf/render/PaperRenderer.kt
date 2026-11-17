@@ -763,12 +763,8 @@ object PaperRenderer {
             field("班级", 52f)
             field("日期", 56f)
 
+            // 「得分」后面留白给老师手写（以前印三个小方框，用户说碍眼）
             b.drawText("得分", x, baseline, labelPaint)
-            x += tp.measure("得分", labelPaint) + 6f
-            repeat(3) {
-                b.drawRect(x, baseline - 10f, x + 11f, baseline + 2f, rule)
-                x += 13f
-            }
             y += NAME_ROW_H
         }
 

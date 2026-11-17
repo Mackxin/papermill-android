@@ -13,6 +13,9 @@ object PaperComposer {
 
     private val CN_NUM = arrayOf("一", "二", "三", "四", "五", "六", "七", "八", "九", "十")
 
+    /** 一二年级科学：题干里的字大多超出识字量，印在大题说明里请家长读题 */
+    const val LOW_GRADE_SCIENCE_NOTE = "低年级科学以观察和口头表达为主：请家长读题，孩子口头作答即可。"
+
     fun compose(spec: PaperSpec, historyHashes: Set<Long> = emptySet()): GeneratedPaper {
         val blocked = historyHashes.toMutableSet()
         val sections = ArrayList<GeneratedSection>()
@@ -64,6 +67,10 @@ object PaperComposer {
                     instruction = listOfNotNull(
                         type.instruction.takeIf { it.isNotBlank() },
                         hoisted,
+                        // 一二年级科学题干里的字超出识字量：明说一句请家长读题、口头作答
+                        LOW_GRADE_SCIENCE_NOTE.takeIf {
+                            spec.grade <= 2 && type.name.startsWith("SCIENCE")
+                        },
                     ).joinToString("　"),
                     prefix = prefix,
                 )

@@ -111,7 +111,13 @@ export function compose(spec, historyHashes = new Set()) {
 
     const prefix = subjectPrefixFor(spec, type);
     const [hoisted, trimmed] = hoistInstruction(drawn);
-    const instruction = [TYPE[type].instruction, hoisted].filter((x) => x && x.trim()).join('　');
+    // 一年级 / 二年级的科学题，题干里的字（植物、观察、舌头…）大多超出识字量。
+    // 卷子照出，但在大题下面明说一句：让家长读题、孩子口头答，别让孩子干瞪着。
+    const lowGradeScience = spec.grade <= 2 && String(type).startsWith('SCIENCE')
+      ? '低年级科学以观察和口头表达为主：请家长读题，孩子口头作答即可。'
+      : '';
+    const instruction = [TYPE[type].instruction, hoisted, lowGradeScience]
+      .filter((x) => x && x.trim()).join('　');
     sections.push(sectionOf(spec, type, trimmed, sections.length + 1, instruction, prefix));
   });
 

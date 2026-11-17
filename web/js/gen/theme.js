@@ -91,7 +91,7 @@ export const themePinyinGenerator = {
     }
     themePinyinLastWord = w.word;
     const stem = [
-      `【${group.name}】看拼音写词语：${w.pinyin} →（　　）`,
+      `【${group.name}】看拼音写词 ${w.pinyin}（　　）`,
       `【${group.name}】${w.pinyin}，写出词语（　　）`,
       `读拼音写词语（${group.name}）：${w.pinyin}（　　）`,
     ][ctx.rng.nextInt(3)];

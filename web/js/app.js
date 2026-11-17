@@ -21,7 +21,7 @@ import {
   CUSTOM_MODES, newCustomSheet, tiltFits, sectionTitle, titleFor,
 } from './core/composer.js';
 import { availableTypes, generatorOf, runGenerator, generatorCount } from './core/registry.js';
-import { renderPaper, assemble, repaintQuestion } from './core/renderer.js';
+import { renderPaper, assemble, repaintQuestion, repaintAnswer } from './core/renderer.js';
 import { renderPages, printPaper, describe, printNodes } from './ui/paper.js';
 import { exportPdf, exportPngs } from './ui/export.js';
 import { referenceSheet, practiceSheet } from './ui/sheets.js';
@@ -60,6 +60,7 @@ const state = {
   editInline: false,
   // 打开原地编辑时的原文：按 Esc / 点「还原」要能回到这一版
   editOrigin: null,
+  editOriginAnswer: '',
 };
 
 // ------------------------------------------------------------------ 存储
@@ -408,7 +409,7 @@ function layoutCard() {
     field('标题一行', chips([{ value: 'off', label: '两行' }, { value: 'on', label: '标题+题数一行' }],
       spec.headerOneLine ? 'on' : 'off', (v) => { spec.headerOneLine = v === 'on'; save(); render(); })),
     field('页脚', chips([
-      { value: 'default', label: '默认那句' },
+      { value: 'default', label: '只印时间/页码' },
       { value: 'custom', label: '自定义' },
       { value: 'off', label: '整条不印' },
     ], footerMode, (v) => {
@@ -554,13 +555,19 @@ function previewScreen() {
   const inlineCfg = () => (state.editInline && state.editSel ? {
     qid: state.editSel,
     value: findQuestion(state.editSel)?.q.stem ?? '',
+    answer: findQuestion(state.editSel)?.q.answer ?? '',
+    // 答案框边打边记（不落纸，提交时一起处理），这样「手改过答案」这件事能被识别到
+    onAnswerChange: (v) => {
+      const hit = findQuestion(state.editSel);
+      if (hit) hit.q.answer = v;
+    },
     // 打字时只更新数据，**一次都不重排** —— 重排就是把整张卷子推乱，
     // 用户改一个字就得重新找自己刚改的题（这是他说「不要破坏原来的布局」的由来）
     onChange: (v) => {
       const hit = findQuestion(state.editSel);
       if (hit) hit.q.stem = v;
     },
-    onCommit: (v) => commitInlineEdit(v),
+    onCommit: (v, a) => commitInlineEdit(v, a),
     onCancel: () => cancelInlineEdit(),
   } : null);
 
@@ -568,6 +575,7 @@ function previewScreen() {
     state.editSel = qid;
     state.editInline = true;
     state.editOrigin = findQuestion(qid)?.q.stem ?? '';
+    state.editOriginAnswer = findQuestion(qid)?.q.answer ?? '';
     if (panelHost) fillEditorPanel(panelHost);   // 右侧面板要跟着换内容
     draw();
   };
@@ -695,31 +703,120 @@ function scheduleStage() {
  * 位置、栏数、页数全都不动 —— 用户改的字变多了，就缩这一题的字号；
  * 缩到 70% 还塞不下就让它压进下面那点留白。总之不把后面的题推走。
  */
-function commitInlineEdit(value) {
+function commitInlineEdit(value, answerValue) {
   const hit = findQuestion(state.editSel);
   state.editInline = false;
   if (!hit) { stageCtx?.draw(); return; }
   const next = String(value ?? '');
-  const changed = next !== state.editOrigin;
+  const stemChanged = next !== state.editOrigin;
   hit.q.stem = next;
-  if (changed) {
-    const res = repaintQuestion(state.result.pages, state.editSel, next);
-    if (res) {
-      stageCtx?.draw();
-      save();
-      if (res.overflow) toast('这道题变长了：字号已经缩到 70%，再长就会压到下面的留白');
-      return;
-    }
+
+  // 答案：优先用编辑框里的值；算式题在用户没手改答案时自己重算一遍
+  const typed = answerValue == null ? hit.q.answer : String(answerValue);
+  const answerTouched = typed !== (state.editOriginAnswer ?? typed);
+  const auto = !answerTouched && stemChanged
+    ? autoAnswer(next, state.paper.sections[hit.si]?.type)
+    : null;
+  const finalAnswer = auto != null ? auto : typed;
+  const answerChanged = finalAnswer !== (state.editOriginAnswer ?? '');
+  hit.q.answer = finalAnswer;
+  if (stemChanged || answerChanged) {
+    syncPaper();     // 批改 / 错题本 / 存库读的是 paper.questions 这份扁平副本
+    save();
   }
+
+  let overflow = false;
+  if (stemChanged) {
+    const res = repaintQuestion(state.result.pages, state.editSel, next);
+    overflow = !!res?.overflow;
+  }
+  // 答案页只重画这一格：不重排，页数也不变
+  if (answerChanged) repaintAnswer(state.result.pages, state.editSel, finalAnswer);
   stageCtx?.draw();
+  if (auto != null) toast(`答案已按题干重算：${auto}`);
+  else if (overflow) toast('这道题变长了：字号已经缩到 70%，再长就会压到下面的留白');
 }
 
 /** 放弃这一改：把原文写回去（输入过程中数据已经被实时改过了） */
 function cancelInlineEdit() {
   const hit = findQuestion(state.editSel);
-  if (hit && state.editOrigin != null) hit.q.stem = state.editOrigin;
+  if (hit) {
+    if (state.editOrigin != null) hit.q.stem = state.editOrigin;
+    if (state.editOriginAnswer != null) hit.q.answer = state.editOriginAnswer;
+    syncPaper();
+  }
   state.editInline = false;
   stageCtx?.draw();
+}
+
+/** 只有「纯算式」题型才敢自动算答案 —— 应用题/脱式这些答案不是算出来的一个数 */
+const CALC_TYPES = new Set([
+  'ORAL', 'ORAL_MISSING', 'VERTICAL', 'FILL_BLANK',
+  'MAKE_TEN', 'CHAIN_CALC', 'MIXED_CALC', 'TENS_CALC', 'TWO_DIGIT',
+]);
+
+/**
+ * 从题干里认出算式并把答案算出来，认不出就返回 null（不猜）。
+ *
+ * 用户的原话是「改完题目答案也要改，改不了的话你自己知道答案也行」。
+ * 所以这里只管**能确定**的那一类：`275-97=` `8×3=（　）` 这种。
+ * 带余数的除法（17÷5）答案形式是「3……2」，不是 3.4，宁可不改也不写错。
+ */
+function autoAnswer(stem, type) {
+  if (!CALC_TYPES.has(String(type ?? ''))) return null;
+  const s = String(stem)
+    .replace(/[×✕xX]/g, '*')
+    .replace(/[÷]/g, '/')
+    .replace(/[−－—]/g, '-');
+  const m = s.match(/(\d+(?:\.\d+)?(?:\s*[+\-*/]\s*\d+(?:\.\d+)?)+)\s*=/);
+  if (!m) return null;
+  const val = evalExpr(m[1]);
+  if (val == null) return null;
+  // 除不尽就不动（可能是「有余数除法」，答案要写余数）
+  if (/\//.test(m[1]) && Math.abs(val - Math.round(val)) > 1e-9) return null;
+  return String(Math.round(val * 10000) / 10000);
+}
+
+/** 极小的四则运算求值（先乘除后加减），不走 eval */
+function evalExpr(src) {
+  const tokens = String(src).match(/\d+(?:\.\d+)?|[+\-*/]/g) ?? [];
+  const nums = [];
+  const ops = [];
+  const prec = { '+': 1, '-': 1, '*': 2, '/': 2 };
+  const apply = () => {
+    const b = nums.pop();
+    const a = nums.pop();
+    const op = ops.pop();
+    if (a == null || b == null) return false;
+    if (op === '+') nums.push(a + b);
+    else if (op === '-') nums.push(a - b);
+    else if (op === '*') nums.push(a * b);
+    else if (op === '/') {
+      if (b === 0) return false;
+      nums.push(a / b);
+    }
+    return true;
+  };
+  let expectNum = true;
+  for (const t of tokens) {
+    if (/^\d/.test(t)) {
+      nums.push(Number(t));
+      expectNum = false;
+    } else {
+      if (expectNum) {
+        if (t === '-') nums.push(0);   // 「-3+5」开头的负号
+        else return null;
+      }
+      while (ops.length && prec[ops[ops.length - 1]] >= prec[t]) {
+        if (!apply()) return null;
+      }
+      ops.push(t);
+      expectNum = true;
+    }
+  }
+  while (ops.length) if (!apply()) return null;
+  if (nums.length !== 1 || !Number.isFinite(nums[0])) return null;
+  return nums[0];
 }
 
 /**
@@ -853,6 +950,14 @@ function fillEditorPanel(panel) {
     panel.appendChild(card(`第 ${hit.q.no} 题 · ${section.name ?? section.title ?? ''}`, [
       h('p', { class: 'edit-quote', text: hit.q.stem }),
       h('p', { class: 'edit-tip', text: '想改字：直接点纸面上这一题，光标就落在原地（Esc 还原、⌘↵ 完成）。' }),
+      line('答案', input('text', hit.q.answer ?? '', (v) => {
+        // 改答案只重画答案页那一格，正文一个字都不动
+        hit.q.answer = v;
+        syncPaper();
+        save();
+        repaintAnswer(state.result.pages, hit.q.uid, v);
+        stageCtx?.draw();
+      }), '算式题改题干会自动重算'),
       line('这一大题', chips([1, 2, 3, 4].map((n) => ({ value: n, label: `${n} 栏` })), section.columns ?? 2, (v) => {
         // 每大题单独定栏数：整卷栏数管不了「大计算题想窄、填空想宽」这种
         section.columns = Number(v);

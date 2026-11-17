@@ -121,7 +121,8 @@ data class PaperDocument(
         get() = footerText ?: DEFAULT_FOOTER
 
     companion object {
-        const val DEFAULT_FOOTER = "卷子 · 题目由本 App 程序生成，非官方教材配套"
+        /** 默认不印左边那句版权说明：家长要的是一张干净练习卷（右侧时间与页码照旧） */
+        const val DEFAULT_FOOTER = ""
     }
 }
 

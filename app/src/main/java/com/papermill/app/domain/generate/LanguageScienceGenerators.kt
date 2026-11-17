@@ -35,9 +35,10 @@ object PinyinGenerator : BaseGenerator() {
         val w = freshWord(ctx, "PINYIN", WordBank.chineseFor(ctx.grade))
         // 多种题干模板只是措辞不同，素材仍是同一个词 —— 由 freshWord 保证本卷只出现一次
         val stem = when (ctx.rng.nextInt(3)) {
-            0 -> "看拼音写词语：${w.pinyin} →（　　）"
-            1 -> "根据拼音写出词语：${w.pinyin}（　　）"
-            else -> "拼音 ${w.pinyin}，对应的词语是（　　）"
+            // 题干刻意压短：两栏时单栏只有 ~247pt，长句会把结尾的「）」单独挤到下一行
+            0 -> "看拼音写词 ${w.pinyin}（　　）"
+            1 -> "读拼音写词 ${w.pinyin}（　　）"
+            else -> "拼音 ${w.pinyin} →（　　）"
         }
         return stem to w.word
     }

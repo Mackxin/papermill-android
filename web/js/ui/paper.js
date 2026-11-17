@@ -23,6 +23,8 @@ function primitiveNode(p) {
   const node = buildNode(p);
   // 打上题目身份：编辑时要把「这道题原来的文字」藏起来，换成输入框
   if (p.q) node.dataset.q = p.q;
+  // 答案页上的块用 a：改答案时只重画答案那一格，不碰正文
+  if (p.a) node.dataset.a = p.a;
   return node;
 }
 
@@ -98,15 +100,40 @@ function inlineEditor(hit, inline, page) {
   const done = (commit) => {
     if (closed) return;
     closed = true;
-    if (commit) inline.onCommit?.(ta.value);
+    if (commit) inline.onCommit?.(ta.value, ans.value);
     else inline.onCancel?.();
   };
 
+  // 答案一起改：改了题干而答案还是旧的，这张卷就没法批改了（用户报的正是这个）。
+  // 算式类题型在 app.js 里会自动重算，这里只负责让人能手动改。
+  const ansRow = el('div', '');
+  ansRow.className = 'inline-ans';
+  const ansTag = el('span', '');
+  ansTag.className = 'inline-ans-label';
+  ansTag.textContent = '答案';
+  const ans = document.createElement('input');
+  ans.className = 'inline-ans-input';
+  ans.type = 'text';
+  ans.value = inline.answer ?? '';
+  ans.placeholder = '这一题的答案（可留空）';
+  ans.spellcheck = false;
+  ansRow.appendChild(ansTag);
+  ansRow.appendChild(ans);
+
+  // 失焦只在「焦点离开整个编辑框」时才提交：点到答案框不该把编辑框关掉
+  const blurOut = (e) => { if (!box.contains(e.relatedTarget)) done(true); };
+
   ta.oninput = () => { grow(); inline.onChange?.(ta.value); };
-  ta.onblur = () => done(true);            // 点到纸面别处 = 存下这一改
+  ta.onblur = blurOut;
   ta.onkeydown = (e) => {
     if (e.key === 'Escape') { e.preventDefault(); done(false); }
     else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); done(true); }
+  };
+  ans.oninput = () => inline.onAnswerChange?.(ans.value);
+  ans.onblur = blurOut;
+  ans.onkeydown = (e) => {
+    if (e.key === 'Escape') { e.preventDefault(); done(false); }
+    else if (e.key === 'Enter') { e.preventDefault(); done(true); }
   };
 
   const bar = el('div', '');
@@ -123,6 +150,7 @@ function inlineEditor(hit, inline, page) {
   bar.appendChild(mk('✓ 完成', 'ok', () => done(true)));
   bar.appendChild(mk('↺ 还原', 'ghost', () => done(false)));
   box.appendChild(ta);
+  box.appendChild(ansRow);
   box.appendChild(bar);
 
   setTimeout(() => {

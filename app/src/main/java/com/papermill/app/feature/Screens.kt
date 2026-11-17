@@ -1371,7 +1371,8 @@ private fun CreateScreen(state: AppState, scope: CoroutineScope) {
         )
         Spacer(Modifier.height(9.dp))
         SettingRow("用哪种") {
-            ChoiceChip("默认文字", state.footerMode == 0) {
+            // v0.20.1：默认文案（题目由本 App 程序生成…）已去掉，这一档只剩右侧的时间与页码
+            ChoiceChip("只印时间/页码", state.footerMode == 0) {
                 state.footerMode = 0
                 state.saveSettings()
             }
@@ -1425,7 +1426,7 @@ private fun CreateScreen(state: AppState, scope: CoroutineScope) {
                 state.footerMode == 2 ->
                     "页脚整条不印：文字、时间、页码、分隔线一起去掉，正文能多吃 26pt（约一行题）。"
                 state.footerMode == 1 && state.footerCustom.isBlank() ->
-                    "还没写内容 —— 现在纸上印的是空白页脚，写一句话或选「默认文字」。"
+                    "还没写内容 —— 现在纸上印的是空白页脚，写一句话，或者选「只印时间/页码」。"
                 else -> "左边是你写的字，右边依次是生成时间和页码（第 N/M 页），每页都印。"
             },
             fontSize = PaperDimens.TinySp,

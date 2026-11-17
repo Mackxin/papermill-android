@@ -49,7 +49,7 @@ object ThemePinyinGenerator : BaseGenerator() {
         repeat(5) { if (w.word == lastWord) w = list[ctx.rng.nextInt(list.size)] }
         lastWord = w.word
         return when (ctx.rng.nextInt(3)) {
-            0 -> "【${group.name}】看拼音写词语：${w.pinyin} →（　　）" to w.word
+            0 -> "【${group.name}】看拼音写词 ${w.pinyin}（　　）" to w.word
             1 -> "【${group.name}】${w.pinyin}，写出词语（　　）" to w.word
             else -> "读拼音写词语（${group.name}）：${w.pinyin}（　　）" to w.word
         }

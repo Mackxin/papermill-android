@@ -704,6 +704,24 @@ input[type="number"]::-webkit-inner-spin-button {
 .edit-label { flex: 0 0 62px; font-size: 12px; color: var(--ink-2); white-space: nowrap; }
 
 .edit-line .slider { flex: 1; min-width: 90px; }
+.edit-line input[type="text"] {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 12.5px;
+  font-family: inherit;
+  color: var(--ink);
+  background: #fff;
+}
+
+.edit-line input[type="text"]:focus {
+  outline: none;
+  border-color: #b9aef5;
+  box-shadow: 0 0 0 3px rgba(108, 92, 231, 0.12);
+}
+
 .edit-line .chips { flex: 1; gap: 5px; }
 .edit-line .chip { padding: 4px 9px; font-size: 12px; }
 
@@ -816,6 +834,44 @@ input[type="number"]::-webkit-inner-spin-button {
   font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* 答案行：跟题干明显分开（一条虚线），一眼看得出「这一格是答案，不是题目」 */
+.inline-ans {
+  display: flex;
+  align-items: center;
+  gap: 4pt;
+  margin: 2pt 0 1pt;
+  padding-top: 2pt;
+  border-top: 1px dashed #e2ddf8;
+}
+
+.inline-ans-label {
+  flex: none;
+  font-size: 6.6pt;
+  color: #8a7fc0;
+  letter-spacing: 0.04em;
+}
+
+.inline-ans-input {
+  flex: 1;
+  min-width: 0;
+  min-height: 10pt;
+  padding: 1pt 4pt;
+  border: 1px solid #e4defb;
+  border-radius: 2pt;
+  background: #fbfaff;
+  color: #333;
+  font-family: inherit;
+  font-size: 7.2pt;
+  line-height: 1.5;
+  outline: none;
+}
+
+.inline-ans-input:focus {
+  border-color: var(--brand);
+  background: #fff;
+  box-shadow: 0 0 0 1.5pt rgba(108, 92, 231, 0.14);
 }
 
 .inline-bar { display: flex; gap: 4pt; padding: 1pt 0 3pt; }
