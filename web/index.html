@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>试卷工坊 · 网页版</title>
+<link rel="stylesheet" href="css/app.css">
+<link rel="stylesheet" href="css/paper.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">卷</span>
+      <div>
+        <b>试卷工坊</b>
+        <em>出卷 · 排版 · 打印</em>
+      </div>
+    </div>
+    <div class="topbar-hint">数据全在本机，不上传</div>
+  </header>
+
+  <main id="view"></main>
+  <div id="dock-holder"></div>
+
+  <!-- 打印专用：屏幕上看不见，打印时只显示这里 -->
+  <div id="print-root"></div>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

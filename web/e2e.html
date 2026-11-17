@@ -1,0 +1,569 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>端到端自检</title>
+<style>
+  body { margin: 0; padding: 12px; background: #f6f5fa; font: 13px/1.6 -apple-system, "PingFang SC", sans-serif; }
+  #report { margin: 0 0 12px; padding: 10px 12px; background: #fff; border-radius: 8px;
+            white-space: pre-wrap; box-shadow: 0 2px 10px rgba(0,0,0,.06); }
+  #app { width: 1180px; height: 860px; border: 1px solid #ddd; border-radius: 8px; background: #fff; }
+</style>
+</head>
+<body>
+<pre id="report">运行中…</pre>
+<iframe id="app"></iframe>
+<script type="module">
+/**
+ * 端到端自检：把「出卷 → 排版 → 批改 → 错题本 → 试卷库 → 学生 → 自编题 → 打印纸 → 课本」
+ * 整条链路真的点一遍，用 iframe 加载真实页面、真实点按钮。
+ *
+ * 为什么不写单元测试：这里要验的恰恰是「连起来还对不对」——按钮点得动、DOM 出得来、
+ * 数据存得下、刷新还在。拆成函数级单测反而测不到这些。
+ *
+ * 为了不弄脏用户数据：开工前把 localStorage 里的那份存档拿出备份、清空，跑完再放回去。
+ */
+
+const KEY = 'papermill.web.v2';
+const backup = localStorage.getItem(KEY);
+localStorage.removeItem(KEY);
+
+const frame = document.getElementById('app');
+const report = document.getElementById('report');
+const rows = [];
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const D = () => frame.contentDocument;
+const q = (sel) => D().querySelector(sel);
+const qa = (sel) => [...D().querySelectorAll(sel)];
+const T = (n) => (n ? n.textContent.replace(/\s+/g, ' ').trim() : '');
+
+function paint() {
+  const pass = rows.filter((r) => r[0] === '✅').length;
+  report.textContent = `端到端自检 ${pass}/${rows.length}\n\n`
+    + rows.map(([m, name, detail]) => `${m} ${name}${detail ? ` — ${detail}` : ''}`).join('\n');
+  document.title = `E2E ${pass}/${rows.length}`;
+}
+
+async function test(name, fn) {
+  try {
+    const detail = await fn();
+    rows.push(['✅', name, detail ?? '']);
+  } catch (err) {
+    rows.push(['❌', name, err.message]);
+  }
+  paint();
+}
+
+// 任何逃出 test() 的异常都要留下来 —— 否则页面就停在那句「运行中…」，
+// 看不出到底是哪一步炸的（这个坑踩过一次）
+window.addEventListener('error', (e) => {
+  rows.push(['💥', '脚本异常', e.message]);
+  paint();
+});
+window.addEventListener('unhandledrejection', (e) => {
+  rows.push(['💥', '未捕获的 Promise 错误', String(e.reason?.message ?? e.reason)]);
+  paint();
+});
+
+async function waitFor(fn, label, ms = 9000) {
+  const t0 = Date.now();
+  for (;;) {
+    let v = null;
+    try { v = fn(); } catch { v = null; }
+    if (v) return v;
+    if (Date.now() - t0 > ms) throw new Error(`等不到「${label}」`);
+    await sleep(50);
+  }
+}
+
+// ---------------------------------------------------------------- 操作小工具
+
+function dock(label) {
+  const b = qa('.dock .dock-btn').find((x) => T(x) === label);
+  if (!b) throw new Error(`导航里没有「${label}」`);
+  b.click();
+}
+function findField(root, label) {
+  return [...root.querySelectorAll('.field')].find((f) => T(f.querySelector(':scope > span')) === label);
+}
+function chipIn(root, label, text) {
+  const f = findField(root, label);
+  if (!f) throw new Error(`没有「${label}」这一项`);
+  const c = [...f.querySelectorAll('.chip')].find((x) => T(x) === text);
+  if (!c) throw new Error(`「${label}」下没有「${text}」`);
+  return c;
+}
+const viewChip = (label, text) => chipIn(q('#view'), label, text);
+function setControl(el, v) {
+  if (el.tagName === 'SELECT') { el.value = String(v); el.dispatchEvent(new Event('change', { bubbles: true })); return; }
+  el.value = v;
+  // 页面上有的控件挂在 oninput、有的挂在 onchange，两个都发一遍最稳
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+  el.dispatchEvent(new Event('change', { bubbles: true }));
+}
+function setFieldInput(root, label, v) {
+  const f = findField(root, label);
+  if (!f) throw new Error(`没有「${label}」输入框`);
+  setControl(f.querySelector('input, select, textarea'), v);
+}
+const modal = () => q('.modal-mask .modal-card');
+const modalBtn = (text) => [...modal().querySelectorAll('.modal-foot .btn')].find((b) => T(b) === text);
+function closeModal() { const x = q('.modal-mask .icon-btn'); if (x) x.click(); }
+
+/** 从出卷页生成一张卷子，再把关键指标收集起来 */
+async function generate() {
+  const b = q('#view .create-actions .btn.primary');
+  if (!b) throw new Error('当前不在出卷页');
+  b.click();
+  await waitFor(() => qa('#view .paper-stage .paper-page').length > 0, '卷子排出来');
+  await sleep(180);
+  return collect();
+}
+function collect() {
+  const pages = qa('#view .paper-stage .paper-page');
+  const desc = T(q('#view .preview-toolbar .grow'));
+  return { n: pages.length, desc, text: pages.map((p) => T(p)).join('\n'), pages };
+}
+function goCreate() {
+  const back = qa('#view .preview-toolbar .btn').find((b) => T(b) === '← 返回');
+  if (back) back.click();
+  else dock('出卷');
+}
+
+// ---------------------------------------------------------------- 开跑
+
+frame.src = 'index.html';
+try {
+  await new Promise((r, j) => {
+    frame.onload = r;
+    setTimeout(() => j(new Error('iframe 加载超时')), 15000);
+  });
+  await waitFor(() => q('#view .type-list'), '出卷页渲染完', 15000);
+} catch (err) {
+  let seen = '';
+  try { seen = T(q('#view')) || T(D().body).slice(0, 300); } catch { seen = '(读不到 iframe)'; }
+  rows.push(['❌', '页面启动', `${err.message}｜iframe 里看到：${seen.slice(0, 300)}`]);
+  paint();
+  throw err;
+}
+await sleep(400); // 让 boot 里那张垫底卷子排完
+
+// 1 ---------------------------------------------------------------
+await test('出卷页 · 题型 / 模板 / 卷面定制', () => {
+  const types = qa('#view .type-item').length;
+  const tpls = qa('#view .template-chip').length;
+  const heads = qa('#view .card h2').map(T);
+  const need = ['出什么卷', '卷面定制'];
+  if (types < 10) throw new Error(`题型只有 ${types} 个`);
+  // 模板是按年级 + 科目筛过的，低年级数学只出得来 7 个，不能写死 12
+  if (tpls < 5) throw new Error(`快捷模板只有 ${tpls} 个`);
+  const miss = need.filter((h) => !heads.some((x) => x.startsWith(h)));
+  if (miss.length) throw new Error('缺卡片：' + miss.join('、'));
+  return `${types} 个题型 · ${tpls} 个模板 · ${heads.length} 张卡`;
+});
+
+// 2 ---------------------------------------------------------------
+let base = null;
+await test('生成卷子 · 页数 / 姓名栏 / 页脚页码', async () => {
+  base = await generate();
+  if (!base.n) throw new Error('一页都没排出来');
+  if (!/姓名|班级/.test(base.text)) throw new Error('卷头没有姓名栏');
+  if (!/第\s*1\s*\/\s*\d+\s*页/.test(base.text)) throw new Error('页脚没有「第 1/N 页」');
+  return `${base.desc}`;
+});
+
+// 3 ---------------------------------------------------------------
+await test('页脚 · 默认那句印得出来', async () => {
+  goCreate();
+  await waitFor(() => q('#view .create-actions'), '出卷页');
+  viewChip('页脚', '默认那句').click();
+  await sleep(80);
+  const r = await generate();
+  if (!/非官方教材配套/.test(r.text)) throw new Error('没找到默认页脚文案');
+  return '含「题目由本程序生成」';
+});
+
+// 4 ---------------------------------------------------------------
+await test('页脚 · 整条不印', async () => {
+  goCreate();
+  await waitFor(() => q('#view .create-actions'), '出卷页');
+  viewChip('页脚', '整条不印').click();
+  await sleep(80);
+  const r = await generate();
+  if (/非官方教材配套/.test(r.text)) throw new Error('页脚文案还在');
+  if (/第\s*1\s*\/\s*\d+\s*页/.test(r.text)) throw new Error('页码还在');
+  return '文案与页码都没了';
+});
+
+// 5 ---------------------------------------------------------------
+await test('页脚 · 自定义文字', async () => {
+  goCreate();
+  await waitFor(() => q('#view .create-actions'), '出卷页');
+  viewChip('页脚', '自定义').click();
+  await sleep(120);
+  setFieldInput(q('#view'), '页脚文字', '三班数学 · 每日一练');
+  await sleep(80);
+  const r = await generate();
+  if (!/三班数学/.test(r.text)) throw new Error('自定义页脚没印出来');
+  goCreate();
+  await waitFor(() => q('#view .create-actions'), '出卷页');
+  viewChip('页脚', '默认那句').click();
+  return '印出「三班数学 · 每日一练」';
+});
+
+// 6 ---------------------------------------------------------------
+await test('页数上限 2 页 · 自动缩字号压进去', async () => {
+  goCreate();
+  await waitFor(() => q('#view .create-actions'), '出卷页');
+  viewChip('页数上限', '不限').click();
+  await sleep(80);
+  // 默认卷本来就 2 页，限 2 页什么也测不出来 —— 先把第一类题型加到刚过 3 页
+  // （不能堆太多：缩字号有 0.72 的下限，塞不进去就会老实多印一页，那是设计如此）
+  let free = null;
+  let used = '';
+  let picked = '';
+  for (const n of ['40', '50', '60', '70', '80']) {
+    // 设完回读一次：带虚拟时间的无头浏览器偶尔会在重渲染的间隙把设置吞掉
+    for (let k = 0; k < 3; k++) {
+      setControl(q('#view .type-item input.num'), n);
+      await sleep(180);
+      picked = /已选 (\d+) 题/.exec(T(q('#view .page-head p')))?.[1] ?? '0';
+      if (Number(picked) >= Number(n)) break;
+    }
+    if (Number(picked) < Number(n)) throw new Error(`题量设不成 ${n}（页面显示 ${picked}）`);
+    viewChip('页数上限', '不限').click();
+    await sleep(60);
+    free = await generate();
+    used = n;
+    if (free.n >= 3) break;
+    goCreate();
+    await waitFor(() => q('#view .create-actions'), '出卷页');
+  }
+  if (!free || free.n < 3) throw new Error(`题量加到 ${used}（已选 ${picked} 题）也没到 3 页，当前 ${free?.n} 页`);
+  goCreate();
+  await waitFor(() => q('#view .create-actions'), '出卷页');
+  viewChip('页数上限', '2 页').click();
+  await sleep(80);
+  const capped = await generate();
+  const shrunk = /缩到\s*(\d+)%/.exec(capped.desc);
+  if (capped.n > free.n) throw new Error(`限页反而从 ${free.n} 页变 ${capped.n} 页`);
+  if (capped.n > 2 && !shrunk) throw new Error(`限 2 页排了 ${capped.n} 页，且没缩过字号`);
+  // 缩字号可以，但题不能少
+  const lf = free.text.replace(/\s/g, '').length;
+  const lc = capped.text.replace(/\s/g, '').length;
+  if (lc < lf * 0.9) throw new Error(`限页后内容少了 ${Math.round((1 - lc / lf) * 100)}%，可能丢题`);
+  goCreate();
+  await waitFor(() => q('#view .create-actions'), '出卷页');
+  viewChip('页数上限', '不限').click();
+  const reset = qa('#view .type-tools .btn').find((b) => T(b) === '全选常用');
+  if (reset) reset.click();
+  return `${used} 题：不限 ${free.n} 页 → 限 2 页 ${capped.n} 页${shrunk ? `（字号缩到 ${shrunk[1]}%）` : '（压不下去，按设计保留）'} · 题目没丢`;
+});
+
+// 7 ---------------------------------------------------------------
+await test('横版 A4 · 纸面真的转成 842×595', async () => {
+  goCreate();
+  await waitFor(() => q('#view .create-actions'), '出卷页');
+  viewChip('页数上限', '不限').click();
+  await sleep(80);
+  viewChip('纸张', 'A4 横版').click();
+  await sleep(80);
+  const r = await generate();
+  const w = parseFloat(r.pages[0].style.width);
+  const h = parseFloat(r.pages[0].style.height);
+  if (!(w > h)) throw new Error(`纸面还是 ${w}×${h}`);
+  if (Math.round(w) !== 842 || Math.round(h) !== 595) throw new Error(`尺寸 ${w}×${h} 不是 A4 横版`);
+  goCreate();
+  await waitFor(() => q('#view .create-actions'), '出卷页');
+  viewChip('纸张', 'A4 竖版').click();
+  return `${Math.round(w)}×${Math.round(h)}pt`;
+});
+
+// 8 ---------------------------------------------------------------
+await test('行距自定义 12pt', async () => {
+  goCreate();
+  await waitFor(() => q('#view .create-actions'), '出卷页');
+  viewChip('题间行距', '自定义').click();
+  await sleep(120);
+  setFieldInput(q('#view'), '自定义行距(pt)', '12');
+  await sleep(80);
+  const custom = await generate();
+  goCreate();
+  await waitFor(() => q('#view .create-actions'), '出卷页');
+  viewChip('题间行距', '标准').click();
+  await sleep(80);
+  const normal = await generate();
+  return `自定义 ${custom.n} 页 / 标准 ${normal.n} 页`;
+});
+
+// 9 ---------------------------------------------------------------
+await test('批改 · 勾 3 道错题记进错题本', async () => {
+  goCreate();
+  await waitFor(() => q('#view .create-actions'), '出卷页');
+  await generate();
+  const grade = qa('#view .preview-toolbar .btn').find((b) => T(b) === '批改');
+  if (!grade) throw new Error('工具栏没有「批改」');
+  grade.click();
+  await waitFor(() => modal(), '批改弹窗');
+  const boxes = [...modal().querySelectorAll('.grading-row input')];
+  if (boxes.length < 3) throw new Error(`批改列表只有 ${boxes.length} 道`);
+  boxes.slice(0, 3).forEach((b) => { b.checked = true; b.dispatchEvent(new Event('change', { bubbles: true })); });
+  modalBtn('记进错题本').click();
+  await sleep(200);
+  dock('错题本');
+  await waitFor(() => q('#view .mistake-list'), '错题本页');
+  const n = qa('#view .mistake-item').length;
+  if (n !== 3) throw new Error(`错题本里有 ${n} 道，应为 3`);
+  return `${boxes.length} 道里勾了 3 道 → 错题本 ${n} 道`;
+});
+
+// 10 --------------------------------------------------------------
+await test('错题本 · 用错题出卷', async () => {
+  const b = qa('#view .row .btn').find((x) => T(x) === '用错题出卷');
+  if (!b) throw new Error('没有「用错题出卷」按钮');
+  b.click();
+  await waitFor(() => qa('#view .paper-stage .paper-page').length > 0, '错题卷');
+  await sleep(180);
+  const r = collect();
+  if (!/错题重练/.test(r.text)) throw new Error('卷面没有「错题重练」大题');
+  return `${r.n} 页 · ${r.desc}`;
+});
+
+// 11 --------------------------------------------------------------
+await test('试卷库 · 存 / 打开 / 删', async () => {
+  // 先存一张
+  const save = qa('#view .preview-toolbar .btn').find((b) => T(b) === '存进试卷库');
+  if (!save) throw new Error('没有「存进试卷库」');
+  save.click();
+  await sleep(150);
+  dock('试卷库');
+  await waitFor(() => q('#view .lib-list'), '试卷库页');
+  const before = qa('#view .lib-item').length;
+  if (before < 1) throw new Error('存完试卷库还是空的');
+  const open = qa('#view .lib-item .btn').find((b) => T(b) === '打开');
+  open.click();
+  await waitFor(() => qa('#view .paper-stage .paper-page').length > 0, '打开历史卷');
+  await sleep(150);
+  const opened = collect().n;
+  dock('试卷库');
+  await waitFor(() => q('#view .lib-list'), '试卷库页');
+  const del = qa('#view .lib-item .btn').find((b) => T(b) === '删');
+  const firstTitle = T(q('#view .lib-item b'));
+  del.click();
+  await sleep(150);
+  const after = qa('#view .lib-item').length;
+  if (after !== before - 1) throw new Error(`删完还有 ${after} 张（删前 ${before}）`);
+  return `存 ${before} 张 → 打开 ${opened} 页 → 删到 ${after} 张`;
+});
+
+// 12 --------------------------------------------------------------
+await test('学生档案 · 新建 + 点名字直接出卷', async () => {
+  dock('更多');
+  await waitFor(() => q('#view .card'), '更多页');
+  const stu = qa('#view .btn').find((b) => T(b) === '学生档案');
+  if (!stu) throw new Error('更多页没有「学生档案」入口');
+  stu.click();
+  await waitFor(() => q('#view .student-list'), '学生页');
+  const add = qa('#view .btn').find((b) => T(b) === '＋ 新建学生');
+  add.click();
+  await waitFor(() => modal(), '新建学生弹窗');
+  setFieldInput(modal(), '姓名', '小明');
+  chipIn(modal(), '学期', '下册').click();
+  chipIn(modal(), '性别', '男').click();
+  await sleep(60);
+  modalBtn('保存').click();
+  await sleep(200);
+  const n = qa('#view .student-item').length;
+  if (!n) throw new Error('学生没存进去');
+  const meta = T(q('#view .student-item .meta'));
+  if (!/小明|年级|册/.test(meta)) throw new Error('档案摘要不对：' + meta);
+  // 点「出卷」= 直接生成并跳预览
+  const go = qa('#view .student-item .btn').find((b) => T(b) === '出卷');
+  go.click();
+  await waitFor(() => qa('#view .paper-stage .paper-page').length > 0, '按学生档案出卷');
+  await sleep(200);
+  const r = collect();
+  if (!/小明/.test(r.text)) throw new Error('卷头没印学生姓名');
+  return `${meta} → 卷头印「小明」· ${r.desc}`;
+});
+
+// 13 --------------------------------------------------------------
+await test('学生条 · 点名字出卷（出卷页）', async () => {
+  goCreate();
+  await waitFor(() => q('#view .student-strip'), '出卷页学生条');
+  const pill = qa('#view .student-pill').find((b) => T(b).startsWith('小明'));
+  if (!pill) throw new Error('学生条里没有小明');
+  pill.click();
+  await waitFor(() => qa('#view .paper-stage .paper-page').length > 0, '点名字出卷');
+  await sleep(200);
+  const r = collect();
+  if (!/小明/.test(r.text)) throw new Error('卷头没印名字');
+  return `${r.desc}`;
+});
+
+// 14 --------------------------------------------------------------
+await test('自编题 · 算式模式（自动算答案）', async () => {
+  goCreate();
+  await waitFor(() => q('#view .create-actions'), '出卷页');
+  const add = qa('#view .btn').find((b) => T(b) === '＋ 新建自编题');
+  if (!add) throw new Error('没有「＋ 新建自编题」');
+  add.click();
+  await waitFor(() => modal(), '自编题弹窗');
+  chipIn(modal(), '模式', '算式').click();
+  await sleep(60);
+  const ta = modal().querySelector('textarea');
+  setControl(ta, '24+18\n7×8\n96÷4\n7÷2\n24+18');
+  await sleep(120);
+  const save = modalBtn('保存');
+  save.click();
+  await sleep(200);
+  const item = q('#view .custom-item');
+  if (!item) throw new Error('自编题没存下来');
+  const desc = T(item);
+  if (!/算式/.test(desc)) throw new Error('列表里没显示模式：' + desc);
+  // 勾上它再出卷
+  const box = item.querySelector('input[type=checkbox]');
+  box.checked = true;
+  box.dispatchEvent(new Event('change', { bubbles: true }));
+  await sleep(120);
+  const r = await generate();
+  // 算式会被排成「24 + 18 = （　　）」，等号两边带空格，匹配时别写死
+  if (!/24\s*\+\s*18/.test(r.text)) throw new Error('卷面没有自编的算式');
+  // 答案页每个答案是一个独立的绝对定位块，textContent 会连成一串（18.4219.40…），
+  // 所以按块取文本再判断，别在整页字符串上找数字
+  const cells = r.pages.flatMap((p) => [...p.children].map((n) => T(n)));
+  if (!cells.some((c) => /(^|\D)42$/.test(c))) {
+    throw new Error('答案 42 没算出来｜尾部：' + cells.slice(-8).join(' / '));
+  }
+  return `${desc} · ${r.n} 页`;
+});
+
+// 15 --------------------------------------------------------------
+await test('自编题 · 去重（重复行只印一次）', async () => {
+  goCreate();
+  await waitFor(() => q('#view .custom-item'), '出卷页自编题列表');
+  const item = q('#view .custom-item');
+  const edit = [...item.querySelectorAll('.btn')].find((b) => T(b) === '编辑');
+  edit.click();
+  await waitFor(() => modal(), '编辑自编题');
+  // 上面存的内容里有两条 24+18，预览应报「去掉 1 条重复」
+  const hint = [...modal().querySelectorAll('p.hint')].map(T).join(' ');
+  if (!/去掉\s*1\s*条重复/.test(hint)) throw new Error('没提示重复：' + hint);
+  closeModal();
+  return '提示「去掉 1 条重复」';
+});
+
+// 16 --------------------------------------------------------------
+await test('打印纸 · 16 张速查表逐张开得出来', async () => {
+  dock('打印纸');
+  await waitFor(() => q('#view .sheet-grid'), '打印纸页');
+  const cards = qa('#view .sheet-card').length;
+  let ok = 0;
+  const bad = [];
+  for (let i = 0; i < cards; i += 1) {
+    qa('#view .sheet-card')[i].click();
+    try {
+      await waitFor(() => modal(), '速查表弹窗', 3000);
+      const tbl = modal().querySelector('table.ref-table');
+      const rows = tbl ? tbl.querySelectorAll('tbody tr').length : 0;
+      const bottom = tbl
+        ? (tbl.getBoundingClientRect().bottom - modal().querySelector('.paper-page').getBoundingClientRect().top)
+          / (modal().querySelector('.paper-page').getBoundingClientRect().height / 842)
+        : 1e9;
+      if (!tbl || !rows) throw new Error('没表格');
+      if (bottom > 842 - 40 + 1) throw new Error(`底边 ${Math.round(bottom)}pt 超出纸面`);
+      ok += 1;
+    } catch (err) {
+      bad.push(`${i}:${err.message}`);
+    }
+    closeModal();
+    await sleep(40);
+  }
+  if (bad.length) throw new Error(bad.join(' / '));
+  return `${ok}/${cards} 张全部装得下`;
+});
+
+// 17 --------------------------------------------------------------
+await test('打印纸 · 22 张练习格纸逐张开得出来', async () => {
+  const tab = qa('#view .chips .chip').find((c) => T(c) === '练习格纸');
+  if (!tab) throw new Error('没有「练习格纸」切页');
+  tab.click();
+  await waitFor(() => q('#view .sheet-card'), '格纸列表');
+  const cards = qa('#view .sheet-card').length;
+  let ok = 0;
+  const bad = [];
+  for (let i = 0; i < cards; i += 1) {
+    const title = T(qa('#view .sheet-card b')[i]);
+    qa('#view .sheet-card')[i].click();
+    try {
+      await waitFor(() => modal(), '格纸弹窗', 3000);
+      const page = modal().querySelector('.paper-page');
+      const svg = page?.querySelector('svg');
+      const marks = svg ? svg.querySelectorAll('line, path, rect, circle, text').length : 0;
+      if (!svg) throw new Error('没有 svg');
+      // 「空白纸」这一张本来就不画线，别把它当故障
+      if (marks < 5 && !/空白/.test(title)) throw new Error(`只画了 ${marks} 笔`);
+      ok += 1;
+    } catch (err) {
+      bad.push(`${title}:${err.message}`);
+    }
+    closeModal();
+    await sleep(40);
+  }
+  if (bad.length) throw new Error(bad.join(' / '));
+  return `${ok}/${cards} 张（${'全部有线条'}）`;
+});
+
+// 18 --------------------------------------------------------------
+await test('课本 · 单元列表 + 按单元出卷', async () => {
+  dock('课本');
+  await waitFor(() => q('#view .unit-item') || /没有单元|没有课标单元/.test(T(q('#view .unit-list'))), '单元列表', 15000);
+  const units = qa('#view .unit-item').length;
+  if (!units) throw new Error('这个科目/年级没有单元');
+  const go = qa('#view .unit-item .btn').find((b) => T(b) === '按此单元出卷');
+  go.click();
+  await waitFor(() => qa('#view .paper-stage .paper-page').length > 0, '按单元出卷', 15000);
+  await sleep(200);
+  const r = collect();
+  if (!r.text.trim()) throw new Error('卷子是空白的');
+  return `${units} 个单元 · 出卷 ${r.n} 页`;
+});
+
+// 19 --------------------------------------------------------------
+await test('打印 · @page 与横竖版一致', async () => {
+  goCreate();
+  await waitFor(() => q('#view .create-actions'), '出卷页');
+  await generate();
+  const btn = qa('#view .preview-toolbar .btn').find((b) => T(b) === '打印 / 存 PDF');
+  if (!btn) throw new Error('没有打印按钮');
+  btn.click();
+  await sleep(400);
+  const style = D().getElementById('page-style');
+  if (!style) throw new Error('没有注入 @page');
+  if (!/size:\s*A4\s+portrait/.test(style.textContent)) throw new Error('@page 不是纵向：' + style.textContent);
+  return style.textContent.replace(/\s+/g, ' ');
+});
+
+// 20 --------------------------------------------------------------
+await test('刷新后数据还在（localStorage）', async () => {
+  const before = JSON.parse(localStorage.getItem(KEY) ?? '{}');
+  if (!before.students?.length) throw new Error('存档里没有学生');
+  if (!before.mistakes?.length) throw new Error('存档里没有错题');
+  if (!before.customSheets?.length) throw new Error('存档里没有自编题');
+  frame.src = 'index.html';
+  await new Promise((r) => { frame.onload = r; });
+  await waitFor(() => q('#view .student-strip'), '重开后出卷页');
+  const pill = qa('#view .student-pill').map(T).join('|');
+  if (!/小明/.test(pill)) throw new Error('重开后学生条丢了：' + pill);
+  return `学生 ${before.students.length} · 错题 ${before.mistakes.length} · 自编题 ${before.customSheets.length}`;
+});
+
+// ---------------------------------------------------------------- 收尾
+
+paint();
+if (backup !== null) localStorage.setItem(KEY, backup);
+else localStorage.removeItem(KEY);
+window.__done = true;
+</script>
+</body>
+</html>

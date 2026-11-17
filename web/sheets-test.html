@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>打印纸自检</title>
+<link rel="stylesheet" href="css/app.css">
+<link rel="stylesheet" href="css/paper.css">
+<style>
+  body { padding: 16px; background: #f6f5fa; }
+  #stage { display: flex; gap: 18px; flex-wrap: wrap; }
+  .frame { background: #fff; box-shadow: 0 4px 18px rgba(0,0,0,.12); }
+</style>
+</head>
+<body>
+<div id="stage"></div>
+<script type="module">
+import { loadCoreData } from './js/data/store.js';
+import { DATA } from './js/data/store.js';
+import { referenceSheet, practiceSheet } from './js/ui/sheets.js';
+
+const q = new URLSearchParams(location.search);
+await loadCoreData();
+const stage = document.getElementById('stage');
+const refId = q.get('ref') ?? 'mul99';
+const gridId = q.get('grid') ?? 'tianzi';
+const scale = Number(q.get('zoom') ?? 0.62);
+
+const ref = DATA.content.references.find((x) => x.id === refId) ?? DATA.content.references[0];
+const grid = DATA.content.practice.find((x) => x.id === gridId) ?? DATA.content.practice[0];
+
+const only = q.get('only');
+const items = [
+  { node: referenceSheet(ref), title: ref.title, kind: 'ref' },
+  { node: practiceSheet(grid), title: grid.title, kind: 'grid' },
+].filter((x) => !only || x.kind === only);
+for (const item of items) {
+  const frame = document.createElement('div');
+  frame.className = 'frame';
+  frame.style.width = `${595 * scale}pt`;
+  frame.style.height = `${842 * scale}pt`;
+  frame.style.overflow = 'hidden';
+  const inner = item.node;
+  inner.style.transform = `scale(${scale})`;
+  inner.style.transformOrigin = 'top left';
+  frame.appendChild(inner);
+  stage.appendChild(frame);
+}
+const info = document.createElement('pre');
+info.id = 'info';
+const page = stage.querySelector('.paper-page');
+const t = stage.querySelector('.ref-table');
+if (t && page) {
+  // 用 DOM 实测：表格底边相对纸面顶端的距离，和可用高度（去掉下边距 40pt）比
+  const pr = page.getBoundingClientRect();
+  const tr = t.getBoundingClientRect();
+  const k = pr.height / 842; // rx 像素 / pt（受页面缩放的 transform 影响，用它换算回 pt）
+  const bottomPt = (tr.bottom - pr.top) / k;
+  const rows = t.querySelectorAll('tbody tr').length;
+  const size = getComputedStyle(t).fontSize;
+  info.textContent = `${ref.title} · ${rows} 行 · 字号 ${size} · `
+    + `底边 ${bottomPt.toFixed(0)}pt / 可用 ${842 - 40}pt · ${bottomPt <= 842 - 40 ? '✅ 装得下' : '❌ 溢出'}`;
+  document.body.insertBefore(info, stage);
+}
+window.__ready = true;
+</script>
+</body>
+</html>

@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>debug</title>
+<link rel="stylesheet" href="css/app.css">
+<link rel="stylesheet" href="css/paper.css">
+<style>
+  #diag { max-width: 980px; margin: 12px auto; padding: 0 16px; }
+  #diag pre { background: #fff4f4; color: #b00020; padding: 10px; border-radius: 8px; white-space: pre-wrap; font-size: 12px; }
+  #diag pre.ok { background: #f2fbf5; color: #17763f; }
+</style>
+</head>
+<body>
+  <header class="topbar"><div class="brand"><span class="logo">卷</span><div><b>试卷工坊</b><em>出卷 · 排版 · 打印</em></div></div></header>
+  <div id="diag"></div>
+  <main id="view"></main>
+  <div id="dock-holder"></div>
+  <div id="print-root"></div>
+<script>
+  const diag = document.getElementById('diag');
+  const log = (msg, ok) => {
+    const p = document.createElement('pre');
+    if (ok) p.className = 'ok';
+    p.textContent = msg;
+    diag.appendChild(p);
+  };
+  window.__log = log;
+  window.addEventListener('error', (e) => log(`error: ${e.message}\n  at ${e.filename}:${e.lineno}:${e.colno}`));
+  window.addEventListener('unhandledrejection', (e) => log(`rejection: ${e.reason && e.reason.stack ? e.reason.stack : e.reason}`));
+  window.console.error = ((orig) => (...args) => { log('console.error: ' + args.map(String).join(' ')); orig(...args); })(console.error);
+</script>
+<script type="module">
+  try {
+    await import('./js/app.js');
+    window.__log('app.js 已加载');
+  } catch (err) {
+    window.__log(`import 失败: ${err && err.stack ? err.stack : err}`);
+  }
+</script>
+</body>
+</html>

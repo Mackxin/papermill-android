@@ -1,0 +1,81 @@
+/* 卷面本身：一切尺寸都用 pt，和 A4 的 595×842pt 一一对应 */
+
+.paper-page {
+  position: relative;
+  background: #fff;
+  box-sizing: border-box;
+  overflow: hidden;
+  color: #1a1a1a;
+  font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.paper-page * {
+  box-sizing: border-box;
+}
+
+.paper-wrap {
+  position: relative;
+  box-shadow: 0 6px 24px rgba(30, 25, 60, 0.14);
+  border-radius: 2px;
+  overflow: hidden;
+  background: #fff;
+}
+
+/* 速查表：网页版用真表格，能自动折行 */
+.ref-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: 9pt;
+  line-height: 1.35;
+}
+
+.ref-table th,
+.ref-table td {
+  border: 0.5pt solid #bbb;
+  /* padding 用 em 而不是 pt：缩字号时行高才跟得上，否则 2pt 的固定留白会把 48 行的表顶出纸外 */
+  padding: 0.22em 0.34em;
+  vertical-align: middle;
+  word-break: break-word;
+}
+
+.ref-table th {
+  background: #f4f3f8;
+  font-weight: 600;
+  text-align: center;
+  border-color: #999;
+}
+
+/* 打印：只留纸面 */
+#print-root {
+  display: none;
+}
+
+@media print {
+  body.printing {
+    background: #fff !important;
+  }
+
+  body.printing > *:not(#print-root) {
+    display: none !important;
+  }
+
+  body.printing #print-root {
+    display: block !important;
+  }
+
+  body.printing #print-root .paper-page,
+  body.printing #print-root .sheet-page {
+    box-shadow: none !important;
+    border-radius: 0 !important;
+    margin: 0 !important;
+    break-after: page;
+    page-break-after: always;
+  }
+
+  body.printing #print-root > *:last-child {
+    break-after: auto;
+    page-break-after: auto;
+  }
+}

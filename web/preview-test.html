@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>排版自检</title>
+<link rel="stylesheet" href="css/app.css">
+<link rel="stylesheet" href="css/paper.css">
+<style>
+  body { padding: 20px; }
+  #info { font: 13px/1.7 -apple-system, "PingFang SC", sans-serif; background: #fff; padding: 12px 16px; border-radius: 10px; margin-bottom: 16px; }
+  #info b { color: #4b3fc0; }
+  #stage { display: flex; flex-wrap: wrap; gap: 20px; justify-content: center; }
+</style>
+</head>
+<body>
+<div id="info">正在出卷…</div>
+<div id="stage"></div>
+<script type="module">
+import { loadCoreData, loadCurriculumFor } from './js/data/store.js';
+import { compose } from './js/core/composer.js';
+import { assemble, renderPaper } from './js/core/renderer.js';
+import { renderPages } from './js/ui/paper.js';
+import { defaultSpec } from './js/core/composer.js';
+
+const params = new URLSearchParams(location.search);
+const grade = Number(params.get('grade') ?? 3);
+const subjects = (params.get('subjects') ?? 'MATH').split(',');
+const counts = params.get('counts');
+const zoom = Number(params.get('zoom') ?? 0.75);
+
+await loadCoreData();
+if ([...Object.keys(counts ? JSON.parse(counts) : {})].some((k) => k.startsWith('CURRIC_'))) {
+  await loadCurriculumFor(subjects);
+}
+
+const spec = defaultSpec(grade, subjects, params.get('tilt') ?? 'BALANCED', params.get('purpose') ?? 'DAILY');
+if (counts) spec.counts = JSON.parse(counts);
+if (params.get('gap')) spec.lineGap = params.get('gap');
+if (params.get('pages')) spec.targetPages = Number(params.get('pages'));
+if (params.get('cols')) spec.columns = Number(params.get('cols'));
+if (params.get('orient')) spec.orientation = params.get('orient');
+if (params.get('name')) spec.studentName = params.get('name');
+const t0 = performance.now();
+const paper = compose(spec);
+const t1 = performance.now();
+const result = renderPaper(assemble(spec, paper));
+const t2 = performance.now();
+renderPages(document.getElementById('stage'), result, zoom);
+const t3 = performance.now();
+
+const counts2 = paper.sections.map((s) => `${s.title.trim()} ×${s.questions.length}`);
+document.getElementById('info').innerHTML = `
+  <b>出卷 ${Math.round(t1 - t0)}ms · 排版 ${Math.round(t2 - t1)}ms · 渲染 ${Math.round(t3 - t2)}ms</b><br>
+  共 ${paper.questions.length} 题 · ${result.pageCount} 页（正文 ${result.contentPageCount} 页）· 字号系数 ${result.typeScale.toFixed(2)}<br>
+  各页填充率：${result.fillRatios.map((f) => (f * 100).toFixed(0) + '%').join(' / ')}<br>
+  ${counts2.join('　|　')}
+`;
+const g = result.geometry;
+const capOf = (i) => (i === 0 ? g.contentHFirst ?? 0 : g.contentHOther ?? 0);
+document.getElementById('info').innerHTML += `<br><small>geom: contentW=${g.contentW} pageH=${g.pageH} pages=${result.pages.length} nodes/p=${result.pages.map((p) => p.nodes.length).join(',')}</small>`;
+window.__ready = true;
+</script>
+</body>
+</html>
