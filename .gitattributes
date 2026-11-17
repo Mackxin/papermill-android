@@ -1,0 +1,2 @@
+# 单文件版是构建产物（3MB 一行 JSON），diff 展开没意义还会卡住 git 界面
+试卷工坊.html -diff
