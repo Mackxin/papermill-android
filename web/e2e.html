@@ -613,17 +613,31 @@ await test('编辑排版 · 点题改字、删题、滑杆重排', async () => {
   const hits = qa('#view .hit');
   if (hits.length < 3) throw new Error(`纸面热区只有 ${hits.length} 个`);
 
+  // 快照整张卷的 slot 坐标：改字之后这些数字一个都不许变（「不破坏原布局」）
+  const snap = () => D().defaultView.__papermill.result.pages
+    .flatMap((p) => (p.hits ?? [])
+      .map((h) => `${p.index}|${h.qid}|${h.x.toFixed(2)}|${h.y.toFixed(2)}|${h.w.toFixed(2)}`));
+  const slot0 = snap();
+  const pages0 = D().defaultView.__papermill.result.pages.length;
+
   hits[0].click();
-  await sleep(200);
-  const ta = q('#view .edit-panel textarea');
-  if (!ta) throw new Error('选中题目后没有题干输入框');
+  await sleep(250);
+  const ta = q('#view .inline-ta');
+  if (!ta) throw new Error('点题之后纸面上没有出现原地输入框');
   const oldText = ta.value;
 
-  // 改题干：加长后应当重排（页数或版面变），并且纸面上能看到新字
-  setControl(ta, `${oldText}（这一句是手动加的，应该立刻出现在纸面上）`);
-  await sleep(500);
+  // 原地加长题干：纸面要出现新字，但**一个 slot 都不许挪**，页数也不许变
+  setControl(ta, `${oldText}（这一句是手动加的，应该立刻出现在纸面上，而且不许把别的题推走）`);
+  await sleep(300);
+  ta.blur();                       // 输入期间不重画是设计：点走（或 ⌘↵）才落纸
+  await sleep(600);
   const after = collect();
   if (!/手动加的/.test(after.text)) throw new Error('改完题干纸面没跟着变');
+  const slot1 = snap();
+  const moved = slot1.filter((x, i) => x !== slot0[i]);
+  if (moved.length) throw new Error(`改一个字就挪了 ${moved.length} 处：${moved[0]}（原 ${slot0[slot1.indexOf(moved[0])]}）`);
+  const pages1 = D().defaultView.__papermill.result.pages.length;
+  if (pages1 !== pages0) throw new Error(`页数从 ${pages0} 变成 ${pages1}`);
 
   // 删一题：题数应当少 1
   const del = qa('#view .edit-panel .btn').find((b) => T(b) === '删除');
@@ -641,7 +655,7 @@ await test('编辑排版 · 点题改字、删题、滑杆重排', async () => {
   const ts = D().defaultView.__papermill.result.typeScale;
   if (Math.abs(ts - 1.3) > 0.01) throw new Error(`字号滑杆拖到 130% 后 typeScale=${ts}`);
 
-  return `${n0} 题 → 改字重排 ${after.n} 页 → 删 1 题余 ${n1} 题 → 字号 ${Math.round(ts * 100)}%`;
+  return `${n0} 题 → 原地改字 ${slot1.length} 个 slot 原封不动 → 删 1 题余 ${n1} 题 → 字号 ${Math.round(ts * 100)}%`;
 });
 
 // 24 --------------------------------------------------------------
@@ -775,6 +789,62 @@ await test('电脑端 · 试卷一行多列（自动 + 手动切 1 栏）', asyn
     await sleep(200);
   }
   return `${r.n} 页排 ${cols} 栏 · 每页 ${pagePx}px`;
+});
+
+// 27 --------------------------------------------------------------
+await test('拼音题不重复 · 同一个词一张卷只出一次', async () => {
+  // 用户报的：31「拼音 tóng xué，对应的词语是」与 34「根据拼音写出词语：tóng xué」撞车。
+  // 去重键是题干，同一素材换措辞就绕过去了 —— 所以生成器自己按「词」记账。
+  const { compose, defaultSpec } = await import('./js/core/composer.js');
+  let worst = null;
+  for (const grade of [1, 3, 5]) {
+    const spec = defaultSpec(grade, ['CHINESE']);
+    spec.counts = { PINYIN: 30 };
+    const paper = compose(spec);
+    const ans = paper.questions.map((q) => q.answer);
+    const dup = [...new Set(ans.filter((x, i) => ans.indexOf(x) !== i))];
+    if (dup.length) throw new Error(`三年级卷里「${dup.join('/')}」出了不止一次`);
+    if (!worst || paper.questions.length < worst.n) worst = { n: paper.questions.length, g: grade };
+  }
+  return `一/三/五年级各出 30 题，答案无重复（最少 ${worst.n} 题：词池按年级取）`;
+});
+
+// 28 --------------------------------------------------------------
+await test('编辑排版 · 标题并成一行、每大题单独定栏数', async () => {
+  if (frame.clientWidth < 1024) return '窗口太窄，跳过（电脑端功能）';
+  goCreate();
+  await waitFor(() => q('#view .create-actions'), '出卷页');
+  await generate();
+  const editBtn = qa('#view .preview-toolbar .btn').find((b) => T(b).includes('编辑排版'));
+  if (!editBtn) throw new Error('没有「编辑排版」按钮');
+  editBtn.click();
+  await waitFor(() => q('#view .edit-panel'), '编辑面板');
+  await waitFor(() => qa('#view .hit').length > 0, '纸面热区', 8000);
+
+  const y0 = D().defaultView.__papermill.result.pages[0].hits[0].y;
+  const headCard = qa('#view .edit-card').find((n) => T(n).startsWith('顶部与底部'));
+  if (!headCard) throw new Error('面板里没有「顶部与底部」');
+  const oneline = [...headCard.querySelectorAll('.chip')].find((n) => T(n) === '同一行');
+  if (!oneline) throw new Error('没有「同一行」开关');
+  oneline.click();
+  await sleep(900);
+  const y1 = D().defaultView.__papermill.result.pages[0].hits[0].y;
+  if (!(y1 < y0 - 5)) throw new Error(`标题合成一行后卷头没变矮：${y0.toFixed(1)} → ${y1.toFixed(1)}`);
+
+  // 每大题栏数：点第一题 → 面板里把它切成 1 栏，块宽应当明显变宽
+  const w0 = D().defaultView.__papermill.result.pages[0].hits[0].w;
+  qa('#view .hit')[0].click();
+  await sleep(300);
+  const selCard = q('#view .edit-card.is-selected');
+  if (!selCard) throw new Error('选中题目后没有「这一大题」卡片');
+  const one = [...selCard.querySelectorAll('.chip')].find((n) => T(n) === '1 栏');
+  if (!one) throw new Error('没有「1 栏」');
+  one.click();
+  await sleep(1200);
+  const w1 = D().defaultView.__papermill.result.pages[0].hits[0].w;
+  if (!(w1 > w0 * 1.5)) throw new Error(`切成 1 栏后块宽没变：${w0.toFixed(0)} → ${w1.toFixed(0)}pt`);
+
+  return `标题并成一行省 ${(y0 - y1).toFixed(0)}pt · 这一大题 2 栏 → 1 栏（${w0.toFixed(0)} → ${w1.toFixed(0)}pt）`;
 });
 
 // ---------------------------------------------------------------- 收尾

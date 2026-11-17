@@ -126,6 +126,12 @@ export function questionBlock({ no, uid = null, stem, answerLines = 0, size = BO
     no,
     /** 编辑器用：这道题在 paper.sections 里的稳定序号；答案页为 null */
     qid: uid,
+    /* 下面四个只有编辑器重画单题时才读（排版本身不看），把「原件」留在块上，
+       省得重画时再回头去 paper 里翻一遍参数、翻错了字号就和上下文对不上 */
+    size,
+    answerLines,
+    itemGap,
+    figure,
     /** 这道题不折行需要多宽：排版拿它定栏数 */
     singleLineWidth(tp) {
       return numberWidth(tp) + tp.measure(stem, size);

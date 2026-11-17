@@ -371,10 +371,16 @@ export function renderPaper(doc, tp = TP) {
         prims.forEach((p) => { p.q = placed.block.qid; });
         hits.push({
           qid: placed.block.qid,
+          no: placed.block.no,
           x: g.margin + placed.x,
           y: contentTop + placed.y,
           w: placed.w,
           h: placed.block.measure(tp, placed.w),
+          // 重画这一题时要用的原件：字号 / 答题线 / 题间距 / 配图
+          size: placed.block.size ?? BODY_SIZE * typeScale,
+          lines: placed.block.answerLines ?? 0,
+          itemGap: placed.block.itemGap ?? gap.base,
+          figure: placed.block.figure ?? null,
         });
       }
       nodes.push(...prims);
@@ -396,6 +402,54 @@ export function renderPaper(doc, tp = TP) {
     fillRatios,
     geometry: g,
   };
+}
+
+/**
+ * 只重画一道题 —— 「编辑排版改字不挪位」的实现。
+ *
+ * 进入编辑模式时排版结果（pages 与每题的 slot）就冻结了：改完字**不重跑 FlowLayout**，
+ * 只把这一题在原 slot 里重画一遍。
+ *
+ *   · 文字变多 → 从原字号开始每档缩 5%（下限 70%），直到塞回原来的高度；
+ *   · 缩到 70% 还塞不下 → 就用 70% 画，允许压进下面那点留白。
+ *
+ * 位置、栏数、页数一律不动。用户改一个字，不会发现整张卷子跳了 ——
+ * 这比「自动排得最紧」重要得多：排版一乱，他得重新找自己刚改的那道题。
+ *
+ * @returns 被改动的那一页；没找到这道题则返回 null
+ */
+export function repaintQuestion(pages, qid, stem, tp = TP) {
+  for (const page of pages) {
+    const hit = page.hits?.find((h) => h.qid === qid);
+    if (!hit) continue;
+    // 先把这题原来的文字 / 答案线摘掉（节点的 q 字段是排版时打上的）
+    page.nodes = page.nodes.filter((n) => n.q !== qid);
+
+    const base = hit.size ?? BODY_SIZE;
+    let picked = null;
+    let pickedH = Infinity;
+    for (let scale = 1; scale >= 0.699; scale -= 0.05) {
+      const block = questionBlock({
+        no: hit.no,
+        uid: qid,
+        stem,
+        answerLines: hit.lines ?? 0,
+        size: base * scale,
+        itemGap: hit.itemGap ?? 6,
+        figure: hit.figure ?? null,
+      });
+      const h = block.measure(tp, hit.w);
+      if (h <= hit.h) { picked = block; pickedH = h; break; }  // 第一个塞得下的就是最大字号
+      if (h < pickedH) { picked = block; pickedH = h; }        // 都塞不下：留最矮的那个
+    }
+    const prims = picked.draw(tp, hit.x, hit.y, hit.w);
+    prims.forEach((p) => { p.q = qid; });
+    page.nodes.push(...prims);
+    hit.curH = pickedH;
+    // 缩到 70% 还是比格子高：调用方据此提示一句，别让用户以为排版错了
+    return { page, overflow: pickedH > hit.h + 0.5 };
+  }
+  return null;
 }
 
 /** 正文撑开：在「不增页」前提下二分题间距，用最差那一页评分 */

@@ -10,6 +10,7 @@
  */
 
 import { figureSvg } from './figures.js';
+import { TP } from '../core/measure.js';
 
 function el(tag, style, inner) {
   const node = document.createElement(tag);
@@ -19,6 +20,13 @@ function el(tag, style, inner) {
 }
 
 function primitiveNode(p) {
+  const node = buildNode(p);
+  // 打上题目身份：编辑时要把「这道题原来的文字」藏起来，换成输入框
+  if (p.q) node.dataset.q = p.q;
+  return node;
+}
+
+function buildNode(p) {
   switch (p.k) {
     case 'text': {
       const weight = p.bold ? '700' : '400';
@@ -60,6 +68,72 @@ export function pageNode(page) {
 }
 
 /**
+ * 原地编辑框：直接盖在这道题的 slot 上，字号与行距跟纸面一模一样。
+ *
+ * 为什么不放在右侧面板里：用户的原话是「点击某处可以直接在原地方改」——
+ * 看着卷子改卷子，眼睛不用在两个地方来回跳。输入过程中**不触发任何重排**
+ * （onChange 只更新数据），提交后才由 renderer 把这一题重画回原来的 slot。
+ */
+function inlineEditor(hit, inline, page) {
+  const fs = hit.size ?? 10;
+  const lh = TP.lineHeight(fs);
+  // 高度：内容多高框就多高（最多 10 行 / 到纸底为止），再长就在框里滚动。
+  //
+  // 试过「只占原格子」——格子之间本来就排得很紧，只剩一行高，写的字自己都看不见；
+  // 也试过「长到下一题之前」——同样没留白可用。所以编辑时它就是一张**浮起来的卡片**，
+  // 允许临时遮住下面几行；这不叫破坏布局：提交后整张卷的位置一个都不会变。
+  const bottom = (page?.pageH ?? 842) - hit.y - 24;
+  const maxH = Math.max(hit.h + 6, Math.min(lh * 10 + 12, bottom));
+  const box = el('div', `left:${hit.x}pt;top:${hit.y}pt;width:${hit.w}pt;max-height:${maxH}pt;`);
+  box.className = 'inline-editor';
+
+  const ta = document.createElement('textarea');
+  ta.className = 'inline-ta';
+  ta.value = inline.value ?? '';
+  ta.spellcheck = false;
+  ta.setAttribute('style', `font-size:${fs}pt;line-height:${lh}pt;`);
+  const grow = () => { ta.style.height = 'auto'; ta.style.height = `${ta.scrollHeight}px`; };
+
+  let closed = false;
+  const done = (commit) => {
+    if (closed) return;
+    closed = true;
+    if (commit) inline.onCommit?.(ta.value);
+    else inline.onCancel?.();
+  };
+
+  ta.oninput = () => { grow(); inline.onChange?.(ta.value); };
+  ta.onblur = () => done(true);            // 点到纸面别处 = 存下这一改
+  ta.onkeydown = (e) => {
+    if (e.key === 'Escape') { e.preventDefault(); done(false); }
+    else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); done(true); }
+  };
+
+  const bar = el('div', '');
+  bar.className = 'inline-bar';
+  const mk = (label, cls, fn) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = cls;
+    b.textContent = label;
+    b.onmousedown = (e) => e.preventDefault();   // 别让 textarea 先失焦，否则「还原」永远点不到
+    b.onclick = fn;
+    return b;
+  };
+  bar.appendChild(mk('✓ 完成', 'ok', () => done(true)));
+  bar.appendChild(mk('↺ 还原', 'ghost', () => done(false)));
+  box.appendChild(ta);
+  box.appendChild(bar);
+
+  setTimeout(() => {
+    ta.focus();
+    ta.setSelectionRange(ta.value.length, ta.value.length);
+    grow();
+  }, 0);
+  return box;
+}
+
+/**
  * 渲染到容器。
  * @param {HTMLElement} container
  * @param {{pages:Array}} result renderPaper 的返回值
@@ -87,14 +161,22 @@ export function renderPages(container, result, zoom = 1, edit = null, cols = 1) 
     inner.style.transform = `scale(${zoom})`;
     inner.style.transformOrigin = 'top left';
     if (edit && page.hits?.length) {
+      const inline = edit.inline?.qid ? edit.inline : null;
       page.hits.forEach((hit) => {
         offset.set(hit.qid, i + 1);
+        const editable = !!inline && inline.qid === hit.qid;
         const box = el('div',
           `left:${hit.x}pt;top:${hit.y}pt;width:${hit.w}pt;height:${Math.max(6, hit.h)}pt;`);
-        box.className = `hit${hit.qid === edit.selected ? ' on' : ''}`;
-        box.title = '点一下编辑这一题';
+        box.className = `hit${hit.qid === edit.selected ? ' on' : ''}${editable ? ' editing' : ''}`;
+        box.title = '点一下就能在原地改';
         box.onclick = (e) => { e.stopPropagation(); edit.onHit?.(hit.qid); };
         inner.appendChild(box);
+        if (editable) {
+          // 这道题原来的文字先藏起来，底下换成输入框 —— 不然两行字叠在一起看不清
+          inner.querySelectorAll(`[data-q="${hit.qid}"]`)
+            .forEach((n) => { n.style.visibility = 'hidden'; });
+          inner.appendChild(inlineEditor(hit, inline, page));
+        }
       });
       inner.classList.add('hit-layer');
     }

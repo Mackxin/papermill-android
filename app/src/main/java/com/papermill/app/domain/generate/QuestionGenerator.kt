@@ -22,6 +22,15 @@ data class GenContext(
      */
     val term: Int = 0,
     /**
+     * 本卷已用过的「素材」指纹（v0.20.0）。
+     *
+     * 框架的去重看的是**题干 hash**，可同一道题往往有好几种措辞：
+     * 拼音题 31「拼音 tóng xué，对应的词语是（　）」与 34「根据拼音写出词语：tóng xué（　）」
+     * 题干不同、hash 不同，于是同一个词在一张卷子上印了两遍 —— 学生一眼就看出来了。
+     * 生成器把「我用掉了哪个词」登记进来，同一张卷子不再出第二次（宁少出、不重复）。
+     */
+    val usedMaterials: MutableSet<String> = mutableSetOf(),
+    /**
      * 题库型生成器专用：池子被 [blocked] 挡光时，是否允许放宽「历史避让」。
      *
      *  - 正常出卷 = true：题库就十几道题，连着出两张同年级卷子，第二张会被历史避让挡光，
@@ -124,6 +133,14 @@ abstract class BaseGenerator : QuestionGenerator {
         return out
     }
 }
+
+/**
+ * 这一级的素材在本卷已经出光了（词表 45 个词却要 60 题）。
+ *
+ * 抛出去让框架跳过这道，最终题量少几道；**绝不降级成「同一个词再换种问法」**，
+ * 那样印出来的就是两道重复题。
+ */
+class NoFreshMaterialException : IllegalStateException("本卷这类素材已经用完了")
 
 /**
  * 看图题的生成结果：题干 + 答案 + 图形数据三件套。

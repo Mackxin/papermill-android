@@ -1,5 +1,29 @@
 package com.papermill.app.domain.generate
 
+/**
+ * 从词池里取一个**本卷还没用过**的词。
+ *
+ * 池子里的词用光了就抛 [NoFreshMaterialException] —— BaseGenerator 会把它当成
+ * 「这一道没出来」跳过，最终这一大题少几道题，而不是在同一张卷子上印两遍同一个词。
+ * 这比「凑满题数」重要：重复题印出去，家长第一个发现。
+ */
+private fun <T> freshWord(
+    ctx: GenContext,
+    prefix: String,
+    pool: List<T>,
+    key: (T) -> String,
+): T {
+    val fresh = pool.filterNot { "$prefix|${key(it)}" in ctx.usedMaterials }
+    if (fresh.isEmpty()) throw NoFreshMaterialException()
+    val picked = fresh[ctx.rng.nextInt(fresh.size)]
+    ctx.usedMaterials += "$prefix|${key(picked)}"
+    return picked
+}
+
+private fun freshWord(ctx: GenContext, prefix: String, pool: List<CnWord>): CnWord =
+    freshWord(ctx, prefix, pool) { it.word }
+
+
 // ------------------------------------------------------------------ 语文
 
 object PinyinGenerator : BaseGenerator() {
@@ -8,9 +32,8 @@ object PinyinGenerator : BaseGenerator() {
     override val topic = "拼音与字词"
 
     override fun make(ctx: GenContext): Pair<String, String> {
-        val pool = WordBank.chineseFor(ctx.grade)
-        val w = pool[ctx.rng.nextInt(pool.size)]
-        // 多种题干模板：同一个词能出成不同的题，避免「词表 18 个词却要 30 题」时凑不满
+        val w = freshWord(ctx, "PINYIN", WordBank.chineseFor(ctx.grade))
+        // 多种题干模板只是措辞不同，素材仍是同一个词 —— 由 freshWord 保证本卷只出现一次
         val stem = when (ctx.rng.nextInt(3)) {
             0 -> "看拼音写词语：${w.pinyin} →（　　）"
             1 -> "根据拼音写出词语：${w.pinyin}（　　）"
@@ -26,8 +49,8 @@ object HanziGenerator : BaseGenerator() {
     override val topic = "字音"
 
     override fun make(ctx: GenContext): Pair<String, String> {
-        val pool = WordBank.chineseFor(ctx.grade)
-        val w = pool[ctx.rng.nextInt(pool.size)]
+        // 题干只露首字（「给「太」注音」），按首字记账：小鸟 / 小鱼 都出「小」就是重复题
+        val w = freshWord(ctx, "HANZI", WordBank.chineseFor(ctx.grade)) { it.word.take(1) }
         val syllable = w.pinyin.substringBefore(' ')
         val stem = when (ctx.rng.nextInt(3)) {
             0 -> "给「${w.word[0]}」注音（　　）"
@@ -44,8 +67,9 @@ object DictationGenerator : BaseGenerator() {
     override val topic = "词语积累"
 
     override fun make(ctx: GenContext): Pair<String, String> {
-        val pool = WordBank.chineseFor(ctx.grade).filter { it.word.length >= 2 }
-        val w = pool[ctx.rng.nextInt(pool.size)]
+        val w = freshWord(
+            ctx, "DICTATION", WordBank.chineseFor(ctx.grade).filter { it.word.length >= 2 },
+        ) { it.word.take(1) }
         val stem = when (ctx.rng.nextInt(3)) {
             0 -> "补全词语：${w.word[0]}（　）"
             1 -> "把词语补充完整：${w.word[0]}＿（　）"
@@ -63,8 +87,8 @@ object EnglishWordGenerator : BaseGenerator() {
     override val topic = "词汇"
 
     override fun make(ctx: GenContext): Pair<String, String> {
-        val pool = WordBank.englishFor(ctx.grade)
-        val w = pool[ctx.rng.nextInt(pool.size)]
+        // 英译汉 / 汉译英是同一素材的两面，同时出现在一张卷子上看着就是重复题
+        val w = freshWord(ctx, "ENGLISH_WORD", WordBank.englishFor(ctx.grade), key = { it.en })
         return when (ctx.rng.nextInt(4)) {
             0 -> "英译汉：${w.en} →（　　）" to w.zh
             1 -> "汉译英：${w.zh} →（　　）" to w.en

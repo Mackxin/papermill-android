@@ -21,7 +21,7 @@ import {
   CUSTOM_MODES, newCustomSheet, tiltFits, sectionTitle, titleFor,
 } from './core/composer.js';
 import { availableTypes, generatorOf, runGenerator, generatorCount } from './core/registry.js';
-import { renderPaper, assemble } from './core/renderer.js';
+import { renderPaper, assemble, repaintQuestion } from './core/renderer.js';
 import { renderPages, printPaper, describe, printNodes } from './ui/paper.js';
 import { exportPdf, exportPngs } from './ui/export.js';
 import { referenceSheet, practiceSheet } from './ui/sheets.js';
@@ -56,6 +56,10 @@ const state = {
   editor: false,
   editSel: null,
   editOpt: null,
+  // 是否在纸面上原地改（点一道题就弹出输入框，改完只重画这一题，别处不动）
+  editInline: false,
+  // 打开原地编辑时的原文：按 Esc / 点「还原」要能回到这一版
+  editOrigin: null,
 };
 
 // ------------------------------------------------------------------ 存储
@@ -551,8 +555,22 @@ function previewScreen() {
     info.textContent = describe(state.result);
     renderPages(pages, state.result, L.zoom, editOn ? {
       selected: state.editSel,
+      inline: state.editInline && state.editSel ? {
+        qid: state.editSel,
+        value: findQuestion(state.editSel)?.q.stem ?? '',
+        // 打字时只更新数据，**一次都不重排** —— 重排就是把整张卷子推乱，
+        // 用户改一个字就得重新找自己刚改的题（这是他说「不要破坏原来的布局」的由来）
+        onChange: (v) => {
+          const hit = findQuestion(state.editSel);
+          if (hit) hit.q.stem = v;
+        },
+        onCommit: (v) => commitInlineEdit(v),
+        onCancel: () => cancelInlineEdit(),
+      } : null,
       onHit: (qid) => {
         state.editSel = qid;
+        state.editInline = true;
+        state.editOrigin = findQuestion(qid)?.q.stem ?? '';
         if (panelHost) fillEditorPanel(panelHost);   // 右侧面板要跟着换内容
         draw();
       },
@@ -661,6 +679,48 @@ function scheduleStage() {
   }, 120);
 }
 
+/**
+ * 原地改完一道题：只把这题重画回它原来的格子，**不重跑排版**。
+ *
+ * 位置、栏数、页数全都不动 —— 用户改的字变多了，就缩这一题的字号；
+ * 缩到 70% 还塞不下就让它压进下面那点留白。总之不把后面的题推走。
+ */
+function commitInlineEdit(value) {
+  const hit = findQuestion(state.editSel);
+  state.editInline = false;
+  if (!hit) { stageCtx?.draw(); return; }
+  const next = String(value ?? '');
+  const changed = next !== state.editOrigin;
+  hit.q.stem = next;
+  if (changed) {
+    const res = repaintQuestion(state.result.pages, state.editSel, next);
+    if (res) {
+      stageCtx?.draw();
+      save();
+      if (res.overflow) toast('这道题变长了：字号已经缩到 70%，再长就会压到下面的留白');
+      return;
+    }
+  }
+  stageCtx?.draw();
+}
+
+/** 放弃这一改：把原文写回去（输入过程中数据已经被实时改过了） */
+function cancelInlineEdit() {
+  const hit = findQuestion(state.editSel);
+  if (hit && state.editOrigin != null) hit.q.stem = state.editOrigin;
+  state.editInline = false;
+  stageCtx?.draw();
+}
+
+/**
+ * 改的是「卷面结构」（标题要不要并成一行、页脚多高）—— 这类改动会改变卷头高度，
+ * 必须真的重排一次；只重建 DOM 的话纸面还是旧的（编辑模式下排版是冻结的）。
+ */
+function relayout() {
+  state.result = renderPaper(buildDoc());
+  render();
+}
+
 function baselineOpt() {
   const r = renderPaper(assemble(state.spec, state.paper));
   return {
@@ -678,7 +738,13 @@ function toggleEditor() {
   }
   state.editor = !state.editor;
   state.editSel = null;
-  if (state.editor) state.editOpt = baselineOpt();
+  state.editInline = false;
+  if (state.editor) {
+    state.editOpt = baselineOpt();
+    // 冻结当前这一版排版：编辑期间只在它上面改字，绝不重跑 FlowLayout。
+    // 这样用户点哪张纸、哪一栏，那一版就一直是那一版，不会因为改了一个字重新洗牌。
+    state.result = renderPaper(buildDoc());
+  }
   render();
 }
 
@@ -727,46 +793,86 @@ function fillEditorPanel(panel) {
   panel.innerHTML = '';
   panel.appendChild(h('div', { class: 'edit-head' }, [
     h('b', { text: '编辑排版' }),
-    h('span', { text: '拖动滑杆，纸面即时重排' }),
+    h('span', { text: '点纸面上的题，直接在原地改' }),
   ]));
 
-  const line = (label, control) => h('div', { class: 'edit-line' }, [h('span', { text: label }), control]);
+  const line = (label, control, hint) => h('div', { class: 'edit-line' }, [
+    h('span', { class: 'edit-label', text: label }),
+    control,
+    hint ? h('em', { class: 'edit-hint', text: hint }) : null,
+  ].flat());
+  const card = (title, children, extra = '') => h('div', { class: `edit-card${extra}` }, [
+    h('h3', {}, [h('i', { class: 'dot' }), h('span', { text: title })]),
+    ...children,
+  ]);
 
-  panel.appendChild(h('div', { class: 'edit-section' }, [
-    h('h3', { text: '整页' }),
+  // ---- 整页
+  panel.appendChild(card('整页', [
     line('正文字号', slider(o.scale, (v) => { o.scale = v; scheduleStage(); }, { min: 70, max: 130, unit: '%' })),
     line('题间行距', slider(o.gap, (v) => { o.gap = v; scheduleStage(); }, { min: 0, max: 20, unit: 'pt' })),
     line('每行栏数', chips([1, 2, 3, 4].map((n) => ({ value: n, label: `${n} 栏` })), o.cols, (v) => {
       o.cols = Number(v);
       render();
     })),
-    line('页边距', slider(o.margin, (v) => { o.margin = v; scheduleStage(); }, { min: 24, max: 60, unit: 'pt' })),
   ]));
 
+  // ---- 顶部与底部：这一组就是「怎么在同一张纸上放下更多字」
+  const spec = state.spec;
+  panel.appendChild(card('顶部与底部', [
+    line('页边距', slider(o.margin, (v) => { o.margin = v; scheduleStage(); }, { min: 10, max: 60, unit: 'pt' }),
+      '压小＝正文区更大'),
+    line('标题', chips([
+      { value: 'on', label: '同一行' },
+      { value: 'off', label: '分两行' },
+    ], spec.headerOneLine ? 'on' : 'off', (v) => {
+      spec.headerOneLine = v === 'on';
+      save();
+      relayout();
+    }), '「同一行」把题数并到标题右边，省掉一整行'),
+    line('页脚高度', chips(FOOTER_SIZES.map((f) => ({ value: f.key, label: f.label })), spec.footerSize, (v) => {
+      spec.footerSize = v;
+      save();
+      relayout();
+    })),
+  ]));
+
+  // ---- 选中的这一题
   const hit = findQuestion(state.editSel);
   if (hit) {
-    const ta = textarea(hit.q.stem, (v) => { hit.q.stem = v; scheduleStage(); }, 4);
-    panel.appendChild(h('div', { class: 'edit-section' }, [
-      h('h3', { text: `第 ${hit.q.no} 题` }),
-      ta,
+    const section = state.paper.sections[hit.si];
+    panel.appendChild(card(`第 ${hit.q.no} 题 · ${section.name ?? section.title ?? ''}`, [
+      h('p', { class: 'edit-quote', text: hit.q.stem }),
+      h('p', { class: 'edit-tip', text: '想改字：直接点纸面上这一题，光标就落在原地（Esc 还原、⌘↵ 完成）。' }),
+      line('这一大题', chips([1, 2, 3, 4].map((n) => ({ value: n, label: `${n} 栏` })), section.columns ?? 2, (v) => {
+        // 每大题单独定栏数：整卷栏数管不了「大计算题想窄、填空想宽」这种
+        section.columns = Number(v);
+        save();
+        scheduleStage();
+        setTimeout(() => render(), 60);
+      }), '只影响这一大题'),
       h('div', { class: 'edit-actions' }, [
         button('↑ 上移', 'ghost', () => moveQuestion(hit, -1)),
         button('↓ 下移', 'ghost', () => moveQuestion(hit, 1)),
         button('删除', 'ghost danger', () => removeQuestion(hit)),
       ]),
-      h('p', { class: 'hint', text: '改题干会立刻重排；变长了会自动挪到下一栏 / 下一页。' }),
-    ]));
+    ], ' is-selected'));
   } else {
-    panel.appendChild(h('p', { class: 'hint panel-tip', text: '点纸面上的任意一道题，就能改题干、上下挪位置、或者删掉它。' }));
+    panel.appendChild(h('p', { class: 'panel-tip', text: '点纸面上的任意一道题：光标会在那道题的位置出现，改完点别处就落纸。' }));
   }
 
   panel.appendChild(h('div', { class: 'edit-foot' }, [
     button('重置排版', 'ghost', () => {
       state.editOpt = baselineOpt();
       state.editSel = null;
+      state.editInline = false;
       render();
     }),
-    button('完成', 'primary', () => { state.editor = false; state.editSel = null; render(); }),
+    button('完成', 'primary', () => {
+      state.editor = false;
+      state.editSel = null;
+      state.editInline = false;
+      render();
+    }),
   ]));
 }
 

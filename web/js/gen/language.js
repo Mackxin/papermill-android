@@ -46,6 +46,43 @@ const CN_WORDS = [
   ['浩瀚', 'hào hàn', 7],
   ['沉淀', 'chén diàn', 8],
   ['严谨', 'yán jǐn', 9],
+  // ---- 低年级补充词（v0.20.0）----
+  // 拼音题改成按「素材」去重之后，一年级原本只有 8 个词，要 30 道就只能出 8 道；
+  // 补到 30 个才够出满一大题。**一律追加在末尾**：前面所有下标不变，
+  // rotatedPool 的轮换偏移与 Kotlin 端仍然一一对应。
+  ['大地', 'dà dì', 1],
+  ['山水', 'shān shuǐ', 1],
+  ['火车', 'huǒ chē', 1],
+  ['汽车', 'qì chē', 1],
+  ['水果', 'shuǐ guǒ', 1],
+  ['苹果', 'píng guǒ', 1],
+  ['西瓜', 'xī guā', 1],
+  ['铅笔', 'qiān bǐ', 1],
+  ['书包', 'shū bāo', 1],
+  ['黑板', 'hēi bǎn', 1],
+  ['爸爸', 'bà ba', 1],
+  ['妈妈', 'mā ma', 1],
+  ['眼睛', 'yǎn jing', 1],
+  ['小鸡', 'xiǎo jī', 1],
+  ['小鱼', 'xiǎo yú', 1],
+  ['树叶', 'shù yè', 1],
+  ['雨点', 'yǔ diǎn', 1],
+  ['雪花', 'xuě huā', 1],
+  ['早上', 'zǎo shang', 1],
+  ['中午', 'zhōng wǔ', 1],
+  ['种子', 'zhǒng zi', 1],
+  ['田野', 'tián yě', 1],
+  ['公园', 'gōng yuán', 2],
+  ['校园', 'xiào yuán', 2],
+  ['操场', 'cāo chǎng', 2],
+  ['故事', 'gù shi', 2],
+  ['图画', 'tú huà', 2],
+  ['音乐', 'yīn yuè', 2],
+  ['游戏', 'yóu xì', 2],
+  ['家乡', 'jiā xiāng', 2],
+  ['农村', 'nóng cūn', 2],
+  ['麦苗', 'mài miáo', 2],
+  ['稻谷', 'dào gǔ', 2],
 ].map(([word, pinyin, minGrade]) => ({ word, pinyin, minGrade }));
 
 const EN_WORDS = [
@@ -80,6 +117,24 @@ function rotatedPool(list, grade) {
   return pool.slice(offset).concat(pool.slice(0, offset));
 }
 
+/**
+ * 从池子里取一个**本卷还没用过**的词。
+ *
+ * 为什么不能靠框架去重：框架按题干 hash 拦重复，而这几道题各有 3~4 种问法 ——
+ * 「拼音 tóng xué，对应的词语是（　）」和「根据拼音写出词语：tóng xué（　）」
+ * 题干不一样、hash 不一样，可学生一眼就看出是同一道题（用户截图 31 与 34 撞的就是这个）。
+ * 所以这里按**素材本身**（词）记一份账：用过的踢出去；词用完了返回 null，
+ * 宁可这一大题少出两题，也不在同一张卷子上印两遍同一个词。
+ */
+function nextFreshWord(ctx, pool, keyOf = (w) => w.word) {
+  const used = (ctx.usedKeys ??= new Set());
+  const fresh = pool.filter((w) => !used.has(keyOf(w)));
+  if (!fresh.length) return null;
+  const w = fresh[ctx.rng.nextInt(fresh.length)];
+  used.add(keyOf(w));
+  return w;
+}
+
 // ------------------------------------------------------------------ 语文
 
 /** 看拼音写词语 */
@@ -92,8 +147,9 @@ export const pinyinGenerator = {
   make(ctx) {
     const pool = rotatedPool(CN_WORDS, ctx.grade);
     if (!pool.length) return null;
-    const w = pool[ctx.rng.nextInt(pool.length)];
-    // 三种问法：同一个词能出成不同的题，词表 45 个词要 60 题时也凑得满
+    const w = nextFreshWord(ctx, pool);
+    if (!w) return null;
+    // 三种问法只是措辞不同，素材还是同一个词 —— 靠 nextFreshWord 保证本卷只出现一次
     const stem = [
       `看拼音写词语：${w.pinyin} →（　　）`,
       `根据拼音写出词语：${w.pinyin}（　　）`,
@@ -113,7 +169,9 @@ export const hanziGenerator = {
   make(ctx) {
     const pool = rotatedPool(CN_WORDS, ctx.grade);
     if (!pool.length) return null;
-    const w = pool[ctx.rng.nextInt(pool.length)];
+    // 题干只露出首字（「给「太」注音」），所以按首字记账：小鸟 / 小鱼 都出「小」就是重复题
+    const w = nextFreshWord(ctx, pool, (x) => x.word.charAt(0));
+    if (!w) return null;
     // Kotlin substringBefore(' ') —— 拼音首音节，多音字也只看这一下
     const syllable = w.pinyin.split(' ')[0];
     const ch = w.word.charAt(0);
@@ -137,7 +195,9 @@ export const dictationGenerator = {
     // 只留两个字的词以上：单字词挖掉首字就成空题干
     const pool = rotatedPool(CN_WORDS, ctx.grade).filter((w) => w.word.length >= 2);
     if (!pool.length) return null;
-    const w = pool[ctx.rng.nextInt(pool.length)];
+    // 同理：题干是「补全词语：太（　）」，首字相同的词会撞题
+    const w = nextFreshWord(ctx, pool, (x) => x.word.charAt(0));
+    if (!w) return null;
     const head = w.word.charAt(0);
     const stem = [
       `补全词语：${head}（　）`,
@@ -160,7 +220,9 @@ export const englishWordGenerator = {
   make(ctx) {
     const pool = rotatedPool(EN_WORDS, ctx.grade);
     if (!pool.length) return null;
-    const w = pool[ctx.rng.nextInt(pool.length)];
+    // 同一个词只出一次：英译汉 / 汉译英 是同一素材的两面，同时出现学生看着像重复
+    const w = nextFreshWord(ctx, pool, (x) => x.en);
+    if (!w) return null;
     switch (ctx.rng.nextInt(4)) {
       case 0: return [`英译汉：${w.en} →（　　）`, w.zh];
       case 1: return [`汉译英：${w.zh} →（　　）`, w.en];
