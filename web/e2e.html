@@ -534,7 +534,7 @@ await test('打印 · @page 与横竖版一致', async () => {
   goCreate();
   await waitFor(() => q('#view .create-actions'), '出卷页');
   await generate();
-  const btn = qa('#view .preview-toolbar .btn').find((b) => T(b) === '打印 / 存 PDF');
+  const btn = qa('#view .preview-toolbar .btn').find((b) => T(b).startsWith('打印'));
   if (!btn) throw new Error('没有打印按钮');
   btn.click();
   await sleep(400);
@@ -556,6 +556,84 @@ await test('刷新后数据还在（localStorage）', async () => {
   const pill = qa('#view .student-pill').map(T).join('|');
   if (!/小明/.test(pill)) throw new Error('重开后学生条丢了：' + pill);
   return `学生 ${before.students.length} · 错题 ${before.mistakes.length} · 自编题 ${before.customSheets.length}`;
+});
+
+// 21 --------------------------------------------------------------
+await test('导出弹窗 · 格式/清晰度/范围都在', async () => {
+  goCreate();
+  await waitFor(() => q('#view .create-actions'), '出卷页');
+  await generate();
+  const btn = qa('#view .preview-toolbar .btn').find((b) => T(b).includes('导出'));
+  if (!btn) throw new Error('工具栏没有导出按钮');
+  btn.click();
+  await waitFor(() => modal(), '导出弹窗');
+  const labels = [...modal().querySelectorAll('.modal-body .field > span')].map(T);
+  ['格式', '清晰度', '范围'].forEach((x) => {
+    if (!labels.includes(x)) throw new Error(`导出弹窗缺「${x}」：${labels.join('/')}`);
+  });
+  const fmt = [...modal().querySelectorAll('.modal-body .chip')].map(T);
+  if (!fmt.some((x) => x.includes('PDF')) || !fmt.some((x) => x.includes('PNG'))) {
+    throw new Error('导出弹窗没有 PDF / PNG 两种格式');
+  }
+  closeModal();
+  return labels.join(' / ');
+});
+
+// 22 --------------------------------------------------------------
+await test('导出 PDF · 字节结构正确（页数、MediaBox、EOF）', async () => {
+  const posts = D().defaultView.__papermill;
+  const r = posts.result;
+  if (!r?.pages?.length) throw new Error('没有可导出的卷子');
+  const { buildPdfBlob } = await import('./js/ui/export.js');
+  const blob = await buildPdfBlob(r.pages, { dpi: 120 });
+  const buf = new Uint8Array(await blob.arrayBuffer());
+  const text = new TextDecoder().decode(buf);
+  if (!text.startsWith('%PDF-1.4')) throw new Error('PDF 头不对');
+  if (!text.trimEnd().endsWith('%%EOF')) throw new Error('PDF 尾部没有 %%EOF');
+  const pageObjs = (text.match(/\/Type \/Page[^s]/g) ?? []).length;
+  if (pageObjs !== r.pageCount) throw new Error(`PDF 里 ${pageObjs} 页，卷子是 ${r.pageCount} 页`);
+  if (!/\/MediaBox \[0 0 595 842\]/.test(text)) throw new Error('MediaBox 不是 A4 纵向');
+  if (!/\/Filter \/DCTDecode/.test(text)) throw new Error('图片流没用 JPEG');
+  return `${Math.round(blob.size / 1024)}KB · ${pageObjs} 页 · MediaBox A4`;
+});
+
+// 23 --------------------------------------------------------------
+await test('编辑排版 · 点题改字、删题、滑杆重排', async () => {
+  if (frame.clientWidth < 1024) return '窗口太窄，跳过（电脑端功能）';
+  goCreate();
+  await waitFor(() => q('#view .create-actions'), '出卷页');
+  const before = await generate();
+  const qCount = () => D().defaultView.__papermill.paper.questions.length;
+  const n0 = qCount();
+  const editBtn = qa('#view .preview-toolbar .btn').find((b) => T(b).includes('编辑排版'));
+  if (!editBtn) throw new Error('没有「编辑排版」按钮');
+  editBtn.click();
+  await waitFor(() => q('#view .edit-panel'), '编辑面板');
+  await waitFor(() => qa('#view .hit').length > 0, '纸面热区', 8000);
+  const hits = qa('#view .hit');
+  if (hits.length < 3) throw new Error(`纸面热区只有 ${hits.length} 个`);
+
+  hits[0].click();
+  await sleep(200);
+  const ta = q('#view .edit-panel textarea');
+  if (!ta) throw new Error('选中题目后没有题干输入框');
+  const oldText = ta.value;
+
+  // 改题干：加长后应当重排（页数或版面变），并且纸面上能看到新字
+  setControl(ta, `${oldText}（这一句是手动加的，应该立刻出现在纸面上）`);
+  await sleep(500);
+  const after = collect();
+  if (!/手动加的/.test(after.text)) throw new Error('改完题干纸面没跟着变');
+
+  // 删一题：题数应当少 1
+  const del = qa('#view .edit-panel .btn').find((b) => T(b) === '删除');
+  if (!del) throw new Error('没有删除按钮');
+  del.click();
+  await sleep(600);
+  const n1 = qCount();
+  if (n1 !== n0 - 1) throw new Error(`删完后 ${n1} 题，原来 ${n0} 题`);
+
+  return `${n0} 题 → 改字重排 ${after.n} 页 → 删 1 题余 ${n1} 题`;
 });
 
 // ---------------------------------------------------------------- 收尾

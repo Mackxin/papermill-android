@@ -299,6 +299,198 @@ main {
 
 .field > .chips { flex: 1; }
 
+.field input[type="number"] { flex: 0 0 120px; }
+
+/* ---------------------------------------------------------------- 下拉 / 数字框 */
+
+/* 原生 <select> 在 macOS 上是灰方框 + 系统蓝条，改不动，所以整个换掉 */
+.field select,
+.field .dd {
+  flex: 0 1 240px;
+  min-width: 0;
+}
+
+.dd {
+  position: relative;
+  display: inline-flex;
+  min-width: 132px;
+}
+
+/* 真的 <select> 留着当数据源（value / change 事件照旧），只是看不见 */
+.dd-native {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+  pointer-events: none;
+}
+
+.dd-btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #fff;
+  color: var(--ink);
+  font-size: 13px;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.dd-btn:hover { border-color: #d7d2ec; }
+
+.dd.open .dd-btn,
+.dd-btn:focus-visible {
+  border-color: #b9aef5;
+  box-shadow: 0 0 0 3px rgba(108, 92, 231, 0.14);
+  outline: none;
+}
+
+.dd-caret {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-right: 1.5px solid var(--ink-3);
+  border-bottom: 1.5px solid var(--ink-3);
+  transform: translateY(-2px) rotate(45deg);
+  transition: transform 0.15s;
+}
+
+.dd.open .dd-caret { transform: translateY(1px) rotate(-135deg); }
+
+.dd-pop {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 50;
+  display: none;
+  min-width: 100%;
+  max-height: 288px;
+  overflow: auto;
+  padding: 6px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 12px 34px rgba(40, 32, 80, 0.16);
+}
+
+.dd.open .dd-pop { display: block; }
+
+.dd-opt {
+  display: block;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink-2);
+  font-size: 13px;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.dd-opt:hover { background: #f6f4ff; color: var(--ink); }
+
+.dd-opt.on {
+  background: var(--brand-soft);
+  color: #4b3fc0;
+  font-weight: 600;
+}
+
+/* 数字框：macOS / Chrome 的那对上下小箭头又小又糊，一律不显示 */
+input[type="number"] {
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+/* 需要加减的地方用这个：− [数值] ＋ */
+.stepper {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+
+.stepper .num {
+  width: 52px;
+  padding: 5px 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 13px;
+  font-family: inherit;
+  text-align: center;
+  background: #fff;
+  color: var(--ink);
+}
+
+.stepper .num:focus {
+  outline: none;
+  border-color: #b9aef5;
+  box-shadow: 0 0 0 3px rgba(108, 92, 231, 0.12);
+}
+
+.step-btn {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ink-2);
+  font-size: 14px;
+  line-height: 1;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.step-btn:hover { background: #f6f4ff; border-color: #d7d2ec; color: #4b3fc0; }
+.step-btn:active { transform: translateY(1px); }
+
+/* 滑杆：编辑排版时拖着改，立刻看到纸面重排 */
+.slider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+}
+
+.slider input[type="range"] {
+  flex: 1;
+  min-width: 0;
+  accent-color: var(--brand);
+  height: 20px;
+}
+
+.slider b {
+  flex: 0 0 48px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #4b3fc0;
+  text-align: right;
+}
+
 /* ---------------------------------------------------------------- 题型列表 */
 
 .type-tools { display: flex; gap: 8px; margin-bottom: 8px; }
@@ -419,6 +611,120 @@ main {
   padding: 8px 0 40px;
   overflow: auto;
 }
+
+/* ---------------------------------------------------------------- 编辑排版（电脑端独占） */
+
+.edit-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 336px;
+  gap: 18px;
+  align-items: start;
+}
+
+.edit-body .paper-stage { padding-top: 0; }
+
+.edit-panel {
+  position: sticky;
+  top: 74px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: calc(100vh - 96px);
+  overflow: auto;
+  padding: 14px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+}
+
+.edit-head { display: flex; align-items: baseline; gap: 8px; }
+.edit-head b { font-size: 14px; }
+.edit-head span { font-size: 11px; color: var(--ink-3); }
+
+.edit-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.edit-section h3 {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--ink-3);
+}
+
+.edit-line { display: flex; align-items: center; gap: 10px; }
+
+.edit-line > span:first-child {
+  flex: 0 0 64px;
+  font-size: 12px;
+  color: var(--ink-2);
+}
+
+.edit-line .chips { flex: 1; gap: 6px; }
+.edit-line .chip { padding: 4px 10px; font-size: 12px; }
+
+.edit-section textarea {
+  width: 100%;
+  min-height: 88px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  font-size: 13px;
+  line-height: 1.6;
+  font-family: inherit;
+  resize: vertical;
+  color: var(--ink);
+}
+
+.edit-section textarea:focus {
+  outline: none;
+  border-color: #b9aef5;
+  box-shadow: 0 0 0 3px rgba(108, 92, 231, 0.12);
+}
+
+.edit-actions { display: flex; gap: 6px; }
+.edit-actions .btn { flex: 1; padding: 7px 8px; font-size: 12px; }
+
+.edit-foot {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.panel-tip { margin: 0; line-height: 1.7; }
+
+/* 纸面上每道题的透明热区：只用来点选，不占视觉 */
+.hit {
+  position: absolute;
+  border-radius: 4pt;
+  cursor: pointer;
+  background: transparent;
+  transition: background 0.12s, box-shadow 0.12s;
+}
+
+.hit:hover {
+  background: rgba(108, 92, 231, 0.07);
+  box-shadow: inset 0 0 0 1px rgba(108, 92, 231, 0.4);
+}
+
+.hit.on {
+  background: rgba(108, 92, 231, 0.1);
+  box-shadow: inset 0 0 0 1.5px var(--brand);
+}
+
+.toast.exporting { bottom: 148px; }
+
+/* 窄屏「更多」弹窗里的竖排操作 */
+.action-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+.action-list .btn { padding: 11px 14px; text-align: left; }
 
 /* ---------------------------------------------------------------- 打印纸 */
 
@@ -670,7 +976,15 @@ main.tab-create { padding-bottom: 190px; }
   .field input[type="text"],
   .field input[type="number"],
   .field select,
+  .field .dd,
   .field > .chips { width: 100%; }
+
+  /* .field 在手机上变成竖排，flex-basis 会去当高度用 —— 必须显式取消 */
+  .field .dd { flex: none; }
+  .field input[type="number"] { flex: none; }
+
+  /* 手机上数字加减器收窄一点，别把题型名挤没了 */
+  .step-btn { width: 22px; height: 24px; font-size: 13px; }
 
   .preview-toolbar { top: 53px; }
 

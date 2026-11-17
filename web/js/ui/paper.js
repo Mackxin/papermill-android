@@ -64,10 +64,13 @@ export function pageNode(page) {
  * @param {HTMLElement} container
  * @param {{pages:Array}} result renderPaper 的返回值
  * @param {number} zoom 缩放（1 = 实际大小）
+ * @param {{selected?:string, onHit?:Function}|null} edit 传入则进入「可点选」状态：
+ *        每道题上盖一层透明的点击热区，点一下就把 qid 交给 onHit。
  */
-export function renderPages(container, result, zoom = 1) {
+export function renderPages(container, result, zoom = 1, edit = null) {
   container.innerHTML = '';
   const stack = el('div', 'display:flex;flex-direction:column;align-items:center;gap:16px;');
+  const offset = new Map(); // qid → 这一题所在页码
   result.pages.forEach((page, i) => {
     const wrap = el('div', `width:${page.pageW * zoom}pt;height:${page.pageH * zoom}pt;`);
     wrap.className = 'paper-wrap';
@@ -75,10 +78,23 @@ export function renderPages(container, result, zoom = 1) {
     const inner = pageNode(page);
     inner.style.transform = `scale(${zoom})`;
     inner.style.transformOrigin = 'top left';
+    if (edit && page.hits?.length) {
+      page.hits.forEach((hit) => {
+        offset.set(hit.qid, i + 1);
+        const box = el('div',
+          `left:${hit.x}pt;top:${hit.y}pt;width:${hit.w}pt;height:${Math.max(6, hit.h)}pt;`);
+        box.className = `hit${hit.qid === edit.selected ? ' on' : ''}`;
+        box.title = '点一下编辑这一题';
+        box.onclick = (e) => { e.stopPropagation(); edit.onHit?.(hit.qid); };
+        inner.appendChild(box);
+      });
+      inner.classList.add('hit-layer');
+    }
     wrap.appendChild(inner);
     stack.appendChild(wrap);
   });
   container.appendChild(stack);
+  return offset;
 }
 
 /** 工具栏用：页数 / 缩放 / 是否缩过字号 */

@@ -23,10 +23,12 @@ import {
 import { availableTypes, generatorOf, runGenerator, generatorCount } from './core/registry.js';
 import { renderPaper, assemble } from './core/renderer.js';
 import { renderPages, printPaper, describe, printNodes } from './ui/paper.js';
+import { exportPdf, exportPngs } from './ui/export.js';
 import { referenceSheet, practiceSheet } from './ui/sheets.js';
 import { DATA, loadCoreData, loadCurriculumFor, curricUnits, CURRIC_META } from './data/store.js';
 import {
   openModal, closeModal, toast, confirmDialog, field, select, input, textarea, chips,
+  stepper, slider,
 } from './ui/dialogs.js';
 
 const STORE_KEY = 'papermill.web.v2';
@@ -48,6 +50,10 @@ const state = {
   sheetNode: null,
   sheetTab: 'ref',
   studentFilter: '',
+  // 编辑排版（电脑端独占）：只影响这一张卷，不改出卷设置
+  editor: false,
+  editSel: null,
+  editOpt: null,
 };
 
 // ------------------------------------------------------------------ 存储
@@ -101,7 +107,8 @@ function h(tag, attrs = {}, children = []) {
     else if (k.startsWith('on')) node.addEventListener(k.slice(2).toLowerCase(), v);
     else if (v !== false && v != null) node.setAttribute(k, v);
   });
-  (Array.isArray(children) ? children : [children]).forEach((c) => {
+  // flat() 不是多余：children 里常写成 list.map(...)，不摊平就会 appendChild(数组) 直接抛错
+  (Array.isArray(children) ? children : [children]).flat().forEach((c) => {
     if (c == null) return;
     node.appendChild(typeof c === 'string' ? document.createTextNode(c) : c);
   });
@@ -156,13 +163,20 @@ async function generatePaper(spec = ensureSpec()) {
     toast('这个组合一道题都没出出来，换个题型试试');
     return null;
   }
-  const doc = assemble(spec, paper);
-  const result = renderPaper(doc);
+  ensureUids(paper);
   state.paper = paper;
-  state.result = result;
+  state.result = renderPaper(buildDoc());
   state.previewKind = 'paper';
   history.lastSpec = spec;
-  return { paper, result };
+  return { paper, result: state.result };
+}
+
+/** 每道题一个稳定编号：编辑器靠它把「纸上点的那块」和「数据里那道题」对上 */
+function ensureUids(paper) {
+  let n = 0;
+  (paper?.sections ?? []).forEach((s) => s.questions.forEach((q) => {
+    if (!q.uid) { n += 1; q.uid = `q${n}`; }
+  }));
 }
 
 async function openPreview() {
@@ -347,18 +361,11 @@ function typesCard() {
       h('span', { text: def.label }),
       def.answerLines > 0 ? h('em', { text: `${def.columns} 栏` }) : null,
     ]));
-    item.appendChild(h('input', {
-      class: 'num',
-      type: 'number',
-      min: '0',
-      max: '200',
-      value: String(n),
-      onchange: (e) => {
-        spec.counts[t] = Math.max(0, Math.min(200, Number(e.target.value) || 0));
-        save();
-        render();
-      },
-    }));
+    item.appendChild(stepper(n, (v) => {
+      spec.counts[t] = v;
+      save();
+      render();
+    }, { min: 0, max: 200 }));
     list.appendChild(item);
   });
 
@@ -486,10 +493,46 @@ function previewScreen() {
   };
   const zoomNow = () => (state.zoomAuto ? fitZoom() : state.zoom);
   const zoomLabel = h('span', { class: 'zoom-label', text: `${Math.round(zoomNow() * 100)}%` });
+  const info = h('span', { class: 'grow', text: describe(state.result) });
 
-  const toolbar = h('div', { class: 'preview-toolbar' }, [
-    button('← 返回', 'ghost', () => { state.tab = 'create'; render(); }),
-    h('span', { class: 'grow', text: describe(state.result) }),
+  const editOn = state.editor;
+  const panelHost = editOn ? h('aside', { class: 'edit-panel' }) : null;
+  if (editOn) fillEditorPanel(panelHost);
+  const draw = () => {
+    const z = zoomNow();
+    zoomLabel.textContent = `${Math.round(z * 100)}%`;
+    info.textContent = describe(state.result);
+    renderPages(pages, state.result, z, editOn ? {
+      selected: state.editSel,
+      onHit: (qid) => {
+        state.editSel = qid;
+        if (panelHost) fillEditorPanel(panelHost);   // 右侧面板要跟着换内容
+        draw();
+      },
+    } : null);
+    stageCtx = { pages, draw, zoom: zoomNow };
+  };
+
+  const narrow = window.innerWidth < 900;
+  const actions = [
+    { label: '打印', run: () => printPaper(state.result) },
+    {
+      label: '换一套',
+      run: async () => {
+        state.spec.seed = Math.floor(Math.random() * 2147483647);
+        save();
+        const built = await generatePaper(state.spec);
+        if (built) render();
+      },
+    },
+    { label: '加一题', run: () => addQuestionDialog() },
+    { label: '批改', run: () => gradingDialog() },
+    { label: '存进试卷库', run: () => saveToLibrary() },
+  ];
+
+  const toolButtons = [
+    button('← 返回', 'ghost', () => { state.tab = 'create'; state.editor = false; render(); }),
+    info,
     button('－', 'ghost', () => {
       state.zoomAuto = false;
       state.zoom = Math.max(0.4, Math.round((zoomNow() - 0.1) * 100) / 100);
@@ -503,26 +546,269 @@ function previewScreen() {
       save();
       render();
     }),
-    button('打印 / 存 PDF', '', () => printPaper(state.result)),
-    button('换一套', 'ghost', async () => {
-      state.spec.seed = Math.floor(Math.random() * 2147483647);
-      save();
-      const built = await generatePaper(state.spec);
-      if (built) render();
-    }),
-    button('加一题', 'ghost', () => addQuestionDialog()),
-    button('批改', 'ghost', () => gradingDialog()),
-    button('存进试卷库', 'ghost', () => saveToLibrary()),
-  ]);
+    button('⬇ 导出', 'primary', () => exportDialog()),
+  ];
+  if (editOn || !narrow) {
+    toolButtons.push(button(editOn ? '✓ 完成编辑' : '✎ 编辑排版', 'ghost', () => toggleEditor()));
+  }
+  // 窄屏按钮一多就堆成三行，把次要操作收进「更多」
+  if (narrow) {
+    toolButtons.push(button('更多 ⋯', 'ghost', () => moreActionsDialog(actions)));
+  } else {
+    actions.forEach((a) => toolButtons.push(button(a.label, 'ghost', a.run)));
+  }
+  const toolbar = h('div', { class: 'preview-toolbar' }, toolButtons);
   view.appendChild(toolbar);
-  view.appendChild(pages);
+  if (editOn) {
+    view.classList.add('editing');
+    view.appendChild(h('div', { class: 'edit-body' }, [pages, panelHost]));
+  } else {
+    view.appendChild(pages);
+  }
   // 挂进文档后才量得到真实宽度：量完再画，并把百分比刷成实际用的值
-  setTimeout(() => {
-    const z = zoomNow();
-    zoomLabel.textContent = `${Math.round(z * 100)}%`;
-    renderPages(pages, state.result, z);
-  }, 0);
+  setTimeout(draw, 0);
   return view;
+}
+
+// ------------------------------------------------------------------ 编辑排版（电脑端独占）
+
+let stageCtx = null;
+let stageTimer = null;
+
+/** 带「手动覆盖」的文档：编辑器滑杆一动，就按手动值排，不再自动试排 */
+function buildDoc() {
+  const doc = assemble(state.spec, state.paper);
+  const o = state.editOpt;
+  if (state.editor && o) {
+    doc.forceTypeScale = o.scale / 100;
+    doc.forceItemGap = o.gap;
+    doc.forceColumns = o.cols;
+    doc.margin = o.margin;
+  }
+  return doc;
+}
+
+/** 只重排纸面，不动右侧面板 —— 不然用户正在打字，输入框会被重建、光标跑掉 */
+function scheduleStage() {
+  clearTimeout(stageTimer);
+  stageTimer = setTimeout(() => {
+    if (!stageCtx) return;
+    state.result = renderPaper(buildDoc());
+    stageCtx.draw();
+    const info = document.querySelector('#view .preview-toolbar .grow');
+    if (info) info.textContent = describe(state.result);
+  }, 120);
+}
+
+function baselineOpt() {
+  const r = renderPaper(assemble(state.spec, state.paper));
+  return {
+    scale: Math.round((r.typeScale ?? 1) * 100),
+    gap: Math.round(r.itemGap ?? 6),
+    cols: r.columns ?? 2,
+    margin: r.geometry.margin,
+  };
+}
+
+function toggleEditor() {
+  if (!state.editor && window.innerWidth < 1024) {
+    toast('编辑排版是电脑端功能，把窗口拉宽一点再用');
+    return;
+  }
+  state.editor = !state.editor;
+  state.editSel = null;
+  if (state.editor) state.editOpt = baselineOpt();
+  render();
+}
+
+function findQuestion(uid) {
+  if (!uid || !state.paper) return null;
+  for (let si = 0; si < state.paper.sections.length; si++) {
+    const list = state.paper.sections[si].questions;
+    const qi = list.findIndex((q) => q.uid === uid);
+    if (qi >= 0) return { si, qi, q: list[qi] };
+  }
+  return null;
+}
+
+/** 改完题序后：重编号 + 同步扁平的 questions（答案页、题数、存库都读它） */
+function syncPaper() {
+  let n = 0;
+  state.paper.sections.forEach((s) => {
+    s.questions.forEach((q) => { n += 1; q.no = n; });
+  });
+  state.paper.questions = state.paper.sections.flatMap((s) => s.questions.map((q) => ({ ...q })));
+}
+
+function moveQuestion(hit, dir) {
+  const list = state.paper.sections[hit.si].questions;
+  const to = hit.qi + dir;
+  if (to < 0 || to >= list.length) { toast('已经是这一大题的第一题 / 最后一题了'); return; }
+  [list[hit.qi], list[to]] = [list[to], list[hit.qi]];
+  syncPaper();
+  scheduleStage();
+  // 重排后纸面 DOM 会重建，选中态跟着走
+  setTimeout(() => render(), 0);
+}
+
+function removeQuestion(hit) {
+  const list = state.paper.sections[hit.si].questions;
+  if (list.length <= 1) { toast('这一大题只剩一道题了，删掉整段就空了'); return; }
+  list.splice(hit.qi, 1);
+  syncPaper();
+  state.editSel = null;
+  scheduleStage();
+  setTimeout(() => render(), 0);
+}
+
+function fillEditorPanel(panel) {
+  const o = state.editOpt;
+  panel.innerHTML = '';
+  panel.appendChild(h('div', { class: 'edit-head' }, [
+    h('b', { text: '编辑排版' }),
+    h('span', { text: '拖动滑杆，纸面即时重排' }),
+  ]));
+
+  const line = (label, control) => h('div', { class: 'edit-line' }, [h('span', { text: label }), control]);
+
+  panel.appendChild(h('div', { class: 'edit-section' }, [
+    h('h3', { text: '整页' }),
+    line('正文字号', slider(o.scale, (v) => { o.scale = v; scheduleStage(); }, { min: 70, max: 130, unit: '%' })),
+    line('题间行距', slider(o.gap, (v) => { o.gap = v; scheduleStage(); }, { min: 0, max: 20, unit: 'pt' })),
+    line('每行栏数', chips([1, 2, 3, 4].map((n) => ({ value: n, label: `${n} 栏` })), o.cols, (v) => {
+      o.cols = Number(v);
+      render();
+    })),
+    line('页边距', slider(o.margin, (v) => { o.margin = v; scheduleStage(); }, { min: 24, max: 60, unit: 'pt' })),
+  ]));
+
+  const hit = findQuestion(state.editSel);
+  if (hit) {
+    const ta = textarea(hit.q.stem, (v) => { hit.q.stem = v; scheduleStage(); }, 4);
+    panel.appendChild(h('div', { class: 'edit-section' }, [
+      h('h3', { text: `第 ${hit.q.no} 题` }),
+      ta,
+      h('div', { class: 'edit-actions' }, [
+        button('↑ 上移', 'ghost', () => moveQuestion(hit, -1)),
+        button('↓ 下移', 'ghost', () => moveQuestion(hit, 1)),
+        button('删除', 'ghost danger', () => removeQuestion(hit)),
+      ]),
+      h('p', { class: 'hint', text: '改题干会立刻重排；变长了会自动挪到下一栏 / 下一页。' }),
+    ]));
+  } else {
+    panel.appendChild(h('p', { class: 'hint panel-tip', text: '点纸面上的任意一道题，就能改题干、上下挪位置、或者删掉它。' }));
+  }
+
+  panel.appendChild(h('div', { class: 'edit-foot' }, [
+    button('重置排版', 'ghost', () => {
+      state.editOpt = baselineOpt();
+      state.editSel = null;
+      render();
+    }),
+    button('完成', 'primary', () => { state.editor = false; state.editSel = null; render(); }),
+  ]));
+}
+
+// ------------------------------------------------------------------ 导出
+
+/** 窄屏：把打印 / 换一套 / 加一题 / 批改 / 存库收进一个弹窗，工具栏别占掉半屏 */
+function moreActionsDialog(actions) {
+  const list = h('div', { class: 'action-list' });
+  actions.forEach((a) => {
+    list.appendChild(button(a.label, 'ghost', () => { closeModal(); a.run(); }));
+  });
+  openModal({
+    title: '更多操作',
+    body: h('div', {}, [
+      list,
+      h('p', { class: 'hint', text: '「编辑排版」是电脑端功能：把窗口拉宽到 1024px 以上，预览页就会出现。' }),
+    ]),
+  });
+}
+
+function fileNameOf(ext) {
+  const base = (state.spec?.title || '试卷').replace(/[\\/:*?"<>|·\s]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, '0');
+  return `${base || '试卷'}-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}.${ext}`;
+}
+
+function exportDialog() {
+  const r = state.result;
+  if (!r) { toast('先出一张卷子'); return; }
+  const opt = { format: 'PDF', dpi: 200, range: 'ALL' };
+  const body = h('div', {});
+  const answerPages = r.pageCount - r.contentPageCount;
+
+  const ranges = [{ value: 'ALL', label: `全部 ${r.pageCount} 页` }];
+  if (answerPages > 0) {
+    ranges.push({ value: 'BODY', label: `只要正文 ${r.contentPageCount} 页` });
+    ranges.push({ value: 'ANSWER', label: `只要答案 ${answerPages} 页` });
+  }
+
+  const fill = () => {
+    body.innerHTML = '';
+    body.append(
+      field('格式', chips([
+        { value: 'PDF', label: 'PDF（直接打印）' },
+        { value: 'PNG', label: '图片 PNG' },
+      ], opt.format, (v) => { opt.format = v; fill(); })),
+      field('清晰度', chips([
+        { value: 150, label: '标准 150dpi' },
+        { value: 200, label: '高清 200dpi' },
+        { value: 300, label: '印刷 300dpi' },
+      ], opt.dpi, (v) => { opt.dpi = Number(v); fill(); })),
+      field('范围', chips(ranges, opt.range, (v) => { opt.range = v; fill(); })),
+      h('p', {
+        class: 'hint',
+        text: opt.format === 'PDF'
+          ? 'PDF 是「每页一张图」的版本：双击就能打开、打印时选实际大小 100% 即可。想要可选文字的矢量版，用工具栏的「打印 → 另存为 PDF」。'
+          : 'PNG 一页一张，多页会逐页下载（浏览器一次只让存一个文件）。',
+      }),
+    );
+  };
+  fill();
+
+  openModal({
+    title: '导出',
+    body,
+    actions: [
+      { label: '取消', kind: 'ghost' },
+      {
+        label: '开始导出',
+        onClick: () => {
+          closeModal();
+          runExport(opt);
+        },
+      },
+    ],
+  });
+}
+
+async function runExport(opt) {
+  const r = state.result;
+  const from = opt.range === 'ANSWER' ? r.contentPageCount : 0;
+  const to = opt.range === 'BODY' ? r.contentPageCount : r.pageCount;
+  const name = fileNameOf(opt.format.toLowerCase()).replace(/\.(pdf|png)$/, '');
+
+  const bar = h('div', { class: 'toast exporting', text: '正在导出…' });
+  document.body.appendChild(bar);
+  const onProgress = (i, n) => { bar.textContent = `正在导出 ${i}/${n} 页…`; };
+
+  try {
+    if (opt.format === 'PDF') {
+      await exportPdf(r.pages, { dpi: opt.dpi, name, from, to, onProgress });
+      toast(`已导出 ${to - from} 页 PDF`);
+    } else {
+      await exportPngs(r.pages, { dpi: opt.dpi, name, from, to, onProgress });
+      toast(`已导出 ${to - from} 张图片`);
+    }
+  } catch (err) {
+    console.error(err);
+    toast(`导出失败：${err.message}`);
+  } finally {
+    bar.remove();
+  }
 }
 
 function addQuestionDialog() {
@@ -693,6 +979,7 @@ function mistakesScreen() {
         createdAt: Date.now(),
       };
       state.paper = paper;
+      ensureUids(paper);
       state.result = renderPaper(assemble(state.spec, paper));
       state.tab = 'preview';
       render();
@@ -741,6 +1028,9 @@ function libraryScreen() {
         button('打开', 'ghost', () => {
           state.spec = item.spec;
           state.paper = { spec: item.spec, sections: item.sections, questions: item.questions, createdAt: item.createdAt };
+          ensureUids(state.paper);
+          state.editor = false;
+          state.editSel = null;
           state.result = renderPaper(assemble(item.spec, state.paper));
           state.tab = 'preview';
           render();
@@ -1122,6 +1412,12 @@ function render() {
   const view = $('#view');
   view.innerHTML = '';
   view.className = state.tab === 'create' ? 'tab-create' : '';
+  stageCtx = null;
+  // 编辑排版只在预览页里存在，切走就收起来
+  if (state.tab !== 'preview' && state.editor) {
+    state.editor = false;
+    state.editSel = null;
+  }
   const spec = ensureSpec();
 
   switch (state.tab) {
@@ -1182,8 +1478,7 @@ function render() {
 async function boot() {
   try {
     await loadCoreData();
-  } catch (err) {
-    document.getElementById('view').innerHTML = `<div class="card"><h2>数据没加载上</h2>
+  } catch (err) {    document.getElementById('view').innerHTML = `<div class="card"><h2>数据没加载上</h2>
       <p class="hint">请用一个本地 http 服务打开这个目录（直接双击 index.html 读不到 data/*.json）。
       例如在 web 目录里执行 <code>python3 -m http.server 8778</code>，再访问 http://127.0.0.1:8778/</p>
       <p class="hint">${err.message}</p></div>`;
@@ -1205,6 +1500,9 @@ async function boot() {
     if (built) render();
   }
 }
+
+// 自检页 / 控制台调试用：拿到当前状态与渲染结果
+window.__papermill = state;
 
 // 窗口尺寸变了（拖动窗口 / 转屏 / 收起侧栏）：预览页重新按宽度铺满纸面
 let resizeTimer = null;

@@ -98,7 +98,7 @@ export function noteBlock(str, size = NOTE_SIZE) {
 
 // ------------------------------------------------------------------ 一道题
 
-export function questionBlock({ no, stem, answerLines = 0, size = BODY_SIZE, itemGap = 4, figure = null }) {
+export function questionBlock({ no, uid = null, stem, answerLines = 0, size = BODY_SIZE, itemGap = 4, figure = null }) {
   const NUMBER_W = 20;
   const ANSWER_LINE_FACTOR = 1.55;
   const FIGURE_GAP = 5;
@@ -124,6 +124,8 @@ export function questionBlock({ no, stem, answerLines = 0, size = BODY_SIZE, ite
     columnHint: 0,
     stem,
     no,
+    /** 编辑器用：这道题在 paper.sections 里的稳定序号；答案页为 null */
+    qid: uid,
     /** 这道题不折行需要多宽：排版拿它定栏数 */
     singleLineWidth(tp) {
       return numberWidth(tp) + tp.measure(stem, size);
@@ -271,6 +273,7 @@ export function fullWidth(block) {
     fullWidth: true,
     keepWithNext: block.keepWithNext ?? false,
     columnHint: block.columnHint ?? 0,
+    qid: block.qid ?? null,
     measure: (tp, w) => block.measure(tp, w),
     draw: (tp, x, y, w) => block.draw(tp, x, y, w),
   };

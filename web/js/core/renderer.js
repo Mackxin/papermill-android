@@ -50,9 +50,9 @@ const atBaseline = (x, baseline, str, size, opts = {}) => ({
   color: opts.color ?? COLOR_INK, h: size * 1.2,
 });
 
-export function geometryOf(orientation) {
+export function geometryOf(orientation, margin = 40) {
   const o = ORIENTATIONS.find((x) => x.key === orientation) ?? ORIENTATIONS[0];
-  return { pageW: o.w, pageH: o.h, margin: 40, contentW: o.w - 80, contentBottom: o.h - 40 };
+  return { pageW: o.w, pageH: o.h, margin, contentW: o.w - margin * 2, contentBottom: o.h - margin };
 }
 
 function fillColumns(widths, contentW, gap, floor, ceiling, strict = false) {
@@ -75,7 +75,7 @@ function fillColumns(widths, contentW, gap, floor, ceiling, strict = false) {
 export function assemble(spec, paper) {
   const sections = paper.sections.map((s) => ({
     title: s.title,
-    questions: s.questions.map((q) => ({ no: q.no, stem: q.stem, figure: q.figure ?? null })),
+    questions: s.questions.map((q) => ({ no: q.no, uid: q.uid ?? null, stem: q.stem, answer: q.answer, figure: q.figure ?? null })),
     columns: s.columns,
     answerLines: s.answerLines,
     instruction: s.instruction,
@@ -86,7 +86,7 @@ export function assemble(spec, paper) {
   if (spec.answerMode === 'LAST_PAGE' && paper.questions.length) {
     sections.push({
       title: '参考答案（家长核对用）',
-      questions: paper.questions.map((q) => ({ no: q.no, stem: q.answer, figure: null })),
+      questions: paper.questions.map((q) => ({ no: q.no, uid: null, stem: q.answer, figure: null })),
       columns: 4,
       answerLines: 0,
       instruction: '',
@@ -143,13 +143,19 @@ function coverHeight(doc) {
 
 /** 主渲染：返回可直接交给 DOM 的页面数组 */
 export function renderPaper(doc, tp = TP) {
-  const g = geometryOf(doc.orientation);
+  const g = geometryOf(doc.orientation, doc.margin ?? 40);
   const gap = gapOf(doc);
   const footerSize = FOOTER_SIZES.find((x) => x.key === doc.footerSize) ?? FOOTER_SIZES[1];
   const footerH = doc.hasFooter === false ? 0 : footerSize.height;
   const bottomSafe = g.contentBottom - footerH;
   const contentHFirst = bottomSafe - (g.margin + coverHeight(doc));
   const contentHOther = bottomSafe - (g.margin + RUNNING_H);
+
+  // 编辑器手动定过的参数：不再走任何「自动试排」，否则用户拖滑杆拖出来的结果会被优化回去
+  const manual = doc.forceTypeScale != null || doc.forceItemGap != null || doc.forceColumns != null;
+  const fScale = doc.forceTypeScale ?? 1;
+  const fGap = doc.forceItemGap ?? gap.base;
+  const fCols = doc.forceColumns ?? 0;
 
   let bodyColumns = 2;
 
@@ -182,7 +188,7 @@ export function renderPaper(doc, tp = TP) {
           ? section.answerLines + (section.padWithLines ? extraLines : 0)
           : 0;
         const qb = questionBlock({
-          no: q.no, stem: q.stem, answerLines: lines,
+          no: q.no, uid: q.uid ?? null, stem: q.stem, answerLines: lines,
           size: BODY_SIZE * typeScale, itemGap, figure: q.figure,
         });
         blocks.push((forceFullWidth || q.figure) ? fullWidth(qb) : qb);
@@ -217,7 +223,7 @@ export function renderPaper(doc, tp = TP) {
     return worst;
   };
 
-  let pages = layoutBody(buildBody({}));
+  let pages = layoutBody(buildBody({ typeScale: fScale, itemGap: fGap, forceColumns: fCols }));
 
   // ---- 单页速查表铺满整页（乘法表 / 语法表只占上半张的问题） ----
   const bodySections = doc.sections.filter((s) => !s.isAnswer);
@@ -237,8 +243,8 @@ export function renderPaper(doc, tp = TP) {
   const bodyBudget = doc.targetPages > 0
     ? Math.max(1, doc.targetPages - (hasAnswerPage ? 1 : 0))
     : 0;
-  let typeScale = 1;
-  if (bodyBudget > 0 && pages.length > bodyBudget) {
+  let typeScale = fScale;
+  if (!manual && bodyBudget > 0 && pages.length > bodyBudget) {
     let lo = MIN_TYPE_SCALE;
     let hi = 1;
     let best = null;
@@ -274,8 +280,8 @@ export function renderPaper(doc, tp = TP) {
   }
 
   // ---- 按高度挑栏数（正文刚好一页时试排 1..6 栏，取填充率最高的） ----
-  let chosenColumns = 0;
-  if (pages.length === 1) {
+  let chosenColumns = fCols;
+  if (!manual && pages.length === 1) {
     const candidates = doc.sections.filter((s) => !s.isAnswer && s.columns > 1 && s.questions.length);
     const minCols = candidates.length ? Math.max(...candidates.map((s) => s.columns)) : 1;
     const widthCeil = candidates.length
@@ -300,9 +306,9 @@ export function renderPaper(doc, tp = TP) {
   }
 
   // 先加答题线，再微调行距（顺序反了会把填满的页又撑出去）
-  pages = fillWithAnswerLines(pages, chosenColumns);
+  if (!manual) pages = fillWithAnswerLines(pages, chosenColumns);
 
-  if (bodyFillOf(pages) < BODY_FILL_TARGET && gap.max > gap.base) {
+  if (!manual && bodyFillOf(pages) < BODY_FILL_TARGET && gap.max > gap.base) {
     pages = stretchGap(pages, gap.base, gap.max, layoutBody, buildBody, worstFillOf, typeScale, chosenColumns);
   }
 
@@ -357,14 +363,26 @@ export function renderPaper(doc, tp = TP) {
   const outPages = pages.map((page, index) => {
     const nodes = [];
     const contentTop = index === 0 ? drawCover(nodes, doc, g, tp) : drawRunning(nodes, doc, g);
+    const hits = [];
     page.items.forEach((placed) => {
       const prims = placed.block.draw(tp, g.margin + placed.x, contentTop + placed.y, placed.w);
+      if (placed.block.qid) {
+        // 带上题目身份：编辑器靠它把「纸上这块」和「paper 里那道题」对上
+        prims.forEach((p) => { p.q = placed.block.qid; });
+        hits.push({
+          qid: placed.block.qid,
+          x: g.margin + placed.x,
+          y: contentTop + placed.y,
+          w: placed.w,
+          h: placed.block.measure(tp, placed.w),
+        });
+      }
       nodes.push(...prims);
     });
     drawFooter(nodes, doc, g, footerSize, index + 1, total, tp);
     return {
       index, pageW: g.pageW, pageH: g.pageH, margin: g.margin,
-      cover: index === 0, nodes,
+      cover: index === 0, nodes, hits,
     };
   });
 
@@ -373,6 +391,8 @@ export function renderPaper(doc, tp = TP) {
     pageCount: total,
     contentPageCount: firstAnswerPage > 0 ? firstAnswerPage : total,
     typeScale,
+    columns: chosenColumns || bodyColumns,
+    itemGap: fGap,
     fillRatios,
     geometry: g,
   };
