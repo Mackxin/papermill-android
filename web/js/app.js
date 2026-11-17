@@ -1593,9 +1593,14 @@ function render() {
 async function boot() {
   try {
     await loadCoreData();
-  } catch (err) {    document.getElementById('view').innerHTML = `<div class="card"><h2>数据没加载上</h2>
-      <p class="hint">请用一个本地 http 服务打开这个目录（直接双击 index.html 读不到 data/*.json）。
-      例如在 web 目录里执行 <code>python3 -m http.server 8778</code>，再访问 http://127.0.0.1:8778/</p>
+  } catch (err) {
+    // 两种打开方式要分开说话：file:// 打开了开发目录 → 指去单文件版；http 打开却失败 → 才是真出错
+    const byFile = location.protocol === 'file:';
+    const hint = byFile
+      ? '你打开的是开发目录里的 index.html，它要靠 http 才读得到 data/*.json。请改用单文件版「试卷工坊.html」（双击即开、不用起服务）。'
+      : '请用一个本地 http 服务打开这个目录，例如在 web 目录执行 <code>python3 -m http.server 8778</code>，再访问 http://127.0.0.1:8778/';
+    document.getElementById('view').innerHTML = `<div class="card"><h2>数据没加载上</h2>
+      <p class="hint">${hint}</p>
       <p class="hint">${err.message}</p></div>`;
     return;
   }

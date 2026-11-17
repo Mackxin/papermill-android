@@ -26,7 +26,30 @@ export const DATA = {
 
 const subjectKey = (s) => String(s).toLowerCase();
 
+/**
+ * 单文件版（双击 .html，走 file://）没有 http 服务，fetch 一律失败。
+ * 构建脚本 tools/build-single.py 会把 data/ 下每个 JSON 塞成
+ *   <script type="application/json" data-pm="data/content.json">{…}</script>
+ * 这里按路径找标签、解析一次就缓存 —— 启动时一个字节都不解析，用到哪科解哪科。
+ */
+const inlineCache = new Map();
+function inlineJson(path) {
+  const key = String(path).replace(/^\.\//, '');
+  if (inlineCache.has(key)) return inlineCache.get(key);
+  const node = document.querySelector(`script[type="application/json"][data-pm="${key}"]`);
+  let value = null;
+  if (node) {
+    try { value = JSON.parse(node.textContent); } catch (err) {
+      throw new Error(`内置数据 ${key} 解析失败：${err.message}`);
+    }
+  }
+  inlineCache.set(key, value);
+  return value;
+}
+
 async function getJson(path) {
+  const hit = inlineJson(path);
+  if (hit) return hit;
   const res = await fetch(new URL(path, document.baseURI));
   if (!res.ok) throw new Error(`读取 ${path} 失败：${res.status}`);
   return res.json();
