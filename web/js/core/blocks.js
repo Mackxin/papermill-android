@@ -53,19 +53,45 @@ export function figureLayout(spec, width) {
 
 // ------------------------------------------------------------------ 大题标题
 
-export function sectionHeader(title, size = SECTION_SIZE, columnHint = 0) {
+/**
+ * 大题标题，如「一、口算（每题 2 分，共 20 分）」。
+ *
+ * [note] 是「跟标题排在同一行」的那句话（低年级科学：家长读题、孩子口头作答）。
+ * 以前它是一条独立说明块，占掉整整一行高度；这类一句话提示本来就只该是标题的尾巴。
+ * 一行放不下（窄纸 / 大字号）时才退化成第二行 —— 不会压到右边出血。
+ */
+export function sectionHeader(title, size = SECTION_SIZE, columnHint = 0, note = '') {
   const TOP_PAD = 10;
   const BOTTOM_PAD = 6;
   const lh = size * 1.5;
+  const noteSize = size * 0.78;
+  const noteGap = 10;
+  const fitsInline = (tp, width) => !!note
+    && tp.measure(title, size, true) + noteGap + tp.measure(note, noteSize) <= width;
+
   return {
     type: 'header',
     fullWidth: true,
     keepWithNext: true,
     columnHint,
-    measure() { return lh + TOP_PAD + BOTTOM_PAD; },
+    note,
+    measure(tp, width) {
+      // 只有真的会换到第二行时才多算一行 —— 否则这条提示等于白吃一行纸
+      const extra = note && !fitsInline(tp, width ?? 1e9) ? noteSize * 1.4 : 0;
+      return lh + TOP_PAD + BOTTOM_PAD + extra;
+    },
     // 注意签名要和其它块一致：(tp, x, y, width) —— 少了 tp 就会把 tp 当成 x
-    draw(tp, x, y) {
-      return [text(x, y + TOP_PAD, title, size, { bold: true, h: lh })];
+    draw(tp, x, y, width) {
+      const out = [text(x, y + TOP_PAD, title, size, { bold: true, h: lh })];
+      if (note) {
+        if (fitsInline(tp, width ?? 1e9)) {
+          const tw = tp.measure(title, size, true);
+          out.push(text(x + tw + noteGap, y + TOP_PAD + (lh - noteSize * 1.2) / 2, note, noteSize, { color: '#777', h: noteSize * 1.2 }));
+        } else {
+          out.push(text(x, y + TOP_PAD + lh, note, noteSize, { color: '#777', h: noteSize * 1.4 }));
+        }
+      }
+      return out;
     },
   };
 }

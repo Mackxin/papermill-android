@@ -155,7 +155,7 @@ export const pinyinGenerator = {
       // 这类长句会把结尾的「）」单独挤到下一行（用户当场指着 17、25 问为什么换行）。
       `看拼音写词 ${w.pinyin}（　　）`,
       `读拼音写词 ${w.pinyin}（　　）`,
-      `拼音 ${w.pinyin} →（　　）`,
+      `拼音 ${w.pinyin}（　　）`,
     ][ctx.rng.nextInt(3)];
     return [stem, w.word];
   },

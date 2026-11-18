@@ -39,6 +39,7 @@ import com.papermill.app.domain.content.TextbookCatalog
 import com.papermill.app.domain.generate.AnswerMode
 import com.papermill.app.domain.generate.BankQuestionSource
 import com.papermill.app.domain.generate.CustomSheet
+import com.papermill.app.domain.generate.Density
 import com.papermill.app.domain.generate.GenContext
 import com.papermill.app.domain.generate.GeneratedPaper
 import com.papermill.app.domain.generate.GeneratedQuestion
@@ -264,6 +265,36 @@ class AppState(private val rawContext: Context) {
      * 只约束正文，答案页另算。
      */
     var targetPages by mutableStateOf(0)
+
+    // ---------------- v0.22.0 排版自由度 ----------------
+
+    /**
+     * 纸边留白（pt）：12 极窄 / 20 窄 / 28 中 / 40 标准。
+     *
+     * 为什么它比「缩字号」更该先给用户：同样题量要少印一页，收窄页边距只损失四周空白，
+     * 缩字号却直接损失可读性。所以「排版密度」预设里第一个动的就是它。
+     */
+    var margin by mutableStateOf(40f)
+
+    /** 正文字号（pt）：9 / 10 / 11 / 12。大题标题与说明按固定比例跟随，不会比例失衡 */
+    var bodySize by mutableStateOf(11f)
+
+    /**
+     * 当前这组「页边距 / 字号 / 行距」落在哪个密度档上。
+     *
+     * 只用于界面高亮：三个值分别存，用户单独微调任何一项都会自然落到「自定义」，
+     * 不会出现「界面说紧凑、实际已经改了字号」的假开关。
+     */
+    val density: Density
+        get() = Density.of(margin, bodySize, lineGap)
+
+    /** 一键套用密度：三个数一起摆好，之后仍可单独改 */
+    fun applyDensity(d: Density) {
+        margin = d.margin
+        bodySize = d.bodySize
+        lineGap = d.lineGap
+        saveSettings()
+    }
 
     // ---------------- v0.19.0 学生档案 / 学期 / 自编题 ----------------
 
@@ -571,6 +602,8 @@ class AppState(private val rawContext: Context) {
                     footerSize = footerSize.name,
                     dockTabs = dockTabs.joinToString(",") { it.name },
                     targetPages = targetPages,
+                    margin = margin,
+                    bodySize = bodySize,
                     layoutVersion = LAYOUT_VERSION,
                     activeStudentId = activeStudentId,
                     term = term,
@@ -593,6 +626,8 @@ class AppState(private val rawContext: Context) {
         footerSize = FooterSize.of(s.footerSize)
         dockTabs = parseDockTabs(s.dockTabs)
         targetPages = s.targetPages.coerceIn(0, 8)
+        margin = s.margin.coerceIn(8f, 60f)
+        bodySize = s.bodySize.coerceIn(8f, 14f)
         activeStudentId = s.activeStudentId
         term = s.term.coerceIn(0, 2)
 
@@ -1384,6 +1419,9 @@ class AppState(private val rawContext: Context) {
             lineGap = lineGap,
             lineGapCustom = lineGapCustom,
             targetPages = targetPages,
+            // v0.22.0：排版自由度（纸边留白 / 正文字号）
+            margin = margin,
+            bodySize = bodySize,
             // v0.19.0：学期 / 卷头姓名 / 自编题
             term = term,
             studentName = activeStudent?.name.orEmpty(),
@@ -1670,6 +1708,8 @@ class AppState(private val rawContext: Context) {
         lineGap = lineGap,
         lineGapCustom = lineGapCustom,
         targetPages = targetPages,
+        margin = margin,
+        bodySize = bodySize,
     )
 
     suspend fun reopen(saved: SavedPaper) {

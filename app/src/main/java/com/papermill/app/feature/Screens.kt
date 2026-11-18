@@ -88,6 +88,7 @@ import com.papermill.app.domain.content.TextbookCatalog
 import com.papermill.app.domain.generate.AnswerMode
 import com.papermill.app.domain.generate.CustomMode
 import com.papermill.app.domain.generate.CustomSheet
+import com.papermill.app.domain.generate.Density
 import com.papermill.app.domain.generate.GeneratorRegistry
 import com.papermill.app.domain.generate.FooterSize
 import com.papermill.app.domain.generate.GradeProfiles
@@ -1256,6 +1257,8 @@ private fun CreateScreen(state: AppState, scope: CoroutineScope) {
         append(state.showPageNo).append('|').append(state.footerSize.name).append('|')
         // v0.18.3：页数上限会改变正文压缩比，缩略图必须跟着重排
         append(state.targetPages).append('|')
+        // v0.22.0：页边距与正文字号直接改纸张几何，缩略图必须重排
+        append(state.margin).append('|').append(state.bodySize).append('|')
         // v0.19.0：学期 / 自编题 / 卷头姓名都会改变纸上内容，缩略图必须跟着重排
         append(state.term).append('|').append(state.activeStudentId).append('|')
         append(state.visibleCustomSheets.joinToString(";") {
@@ -1371,8 +1374,9 @@ private fun CreateScreen(state: AppState, scope: CoroutineScope) {
         )
         Spacer(Modifier.height(9.dp))
         SettingRow("用哪种") {
-            // v0.20.1：默认文案（题目由本 App 程序生成…）已去掉，这一档只剩右侧的时间与页码
-            ChoiceChip("只印时间/页码", state.footerMode == 0) {
+            // v0.22.0：默认印「学生名 · 每日一练」—— 用户每天给孩子打一张，
+            // 署名正好分清是谁的卷子；不选学生档案时那句就只剩「每日一练」
+            ChoiceChip("学生名 · 每日一练", state.footerMode == 0) {
                 state.footerMode = 0
                 state.saveSettings()
             }
@@ -1672,6 +1676,52 @@ private fun CreateScreen(state: AppState, scope: CoroutineScope) {
                 lineHeight = 15.sp,
             )
             Divider()
+            // v0.22.0 排版密度：一次把「页边距 + 字号 + 行距」摆好。
+            // 三个滑杆分开调是给微调用的；用户心里那句话是「我要一张更紧的卷子」。
+            SettingRowFlow("排版密度") {
+                Density.values().forEach { d ->
+                    ChoiceChip(d.label, state.density == d, enabled = d != Density.CUSTOM) {
+                        state.applyDensity(d)
+                    }
+                }
+            }
+            Text(
+                if (state.density == Density.CUSTOM) {
+                    "你自己调的参数：" + "${state.margin.toInt()}pt 纸边 · ${state.bodySize.toInt()}pt 字 · " +
+                        "行距「${state.lineGap.label}」。点上面任意一档就能回到预设。"
+                } else {
+                    state.density.hint
+                },
+                fontSize = PaperDimens.TinySp,
+                color = PaperColors.OnSurfaceVariant,
+                lineHeight = 15.sp,
+            )
+            Divider()
+            // 页边距 / 字号：密度预设之外的两个单旋钮。
+            // 12pt ≈ 4.2mm，已经贴到家用打印机不可打印边界，所以最小只给到 12。
+            SettingRowFlow("页边距") {
+                listOf(12f, 20f, 28f, 40f).forEach { m ->
+                    ChoiceChip("${m.toInt()}pt", state.margin == m) {
+                        state.margin = m
+                        state.saveSettings()
+                    }
+                }
+            }
+            SettingRowFlow("正文字号") {
+                listOf(9f, 10f, 11f, 12f).forEach { sz ->
+                    ChoiceChip("${sz.toInt()}pt", state.bodySize == sz) {
+                        state.bodySize = sz
+                        state.saveSettings()
+                    }
+                }
+            }
+            Text(
+                "收窄页边距只损失四周空白，缩字号却直接损失可读性 —— 想少印一页先动页边距。",
+                fontSize = PaperDimens.TinySp,
+                color = PaperColors.OnSurfaceVariant,
+                lineHeight = 15.sp,
+            )
+            Divider()
             SettingRow("纸张利用") {
                 ChoiceChip("自动补满整页", state.autoFillPage) { state.autoFillPage = true }
                 ChoiceChip("严格按题量", !state.autoFillPage) { state.autoFillPage = false }
@@ -1690,7 +1740,7 @@ private fun CreateScreen(state: AppState, scope: CoroutineScope) {
                     state.targetPages = 0
                     state.saveSettings()
                 }
-                listOf(1, 2, 3, 4).forEach { n ->
+                listOf(1, 2, 3, 4, 5, 6).forEach { n ->
                     ChoiceChip("$n 页", state.targetPages == n) {
                         state.targetPages = n
                         state.saveSettings()
@@ -1843,7 +1893,7 @@ private fun CreateScreen(state: AppState, scope: CoroutineScope) {
         // 折叠态也把当前卷面配置说清楚，不展开就能确认
         Spacer(Modifier.height(6.dp))
         Text(
-            "${state.columns} 栏 · ${state.orientation.shortLabel} · ${state.answerMode.label} · " +
+            "${state.columns} 栏 · ${state.orientation.shortLabel} · 纸边 ${state.margin.toInt()}pt · 字 ${state.bodySize.toInt()}pt · ${state.answerMode.label} · " +
                 when (state.difficulty) { 1 -> "基础"; 3 -> "提高"; else -> "标准" } +
                 " · " + if (state.autoFillPage) "自动补满整页" else "严格按题量",
             fontSize = PaperDimens.CaptionSp,

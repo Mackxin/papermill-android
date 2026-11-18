@@ -13,8 +13,13 @@ object PaperComposer {
 
     private val CN_NUM = arrayOf("一", "二", "三", "四", "五", "六", "七", "八", "九", "十")
 
-    /** 一二年级科学：题干里的字大多超出识字量，印在大题说明里请家长读题 */
-    const val LOW_GRADE_SCIENCE_NOTE = "低年级科学以观察和口头表达为主：请家长读题，孩子口头作答即可。"
+    /**
+     * 一二年级科学：题干里的字大多超出识字量，印在大题标题后面请家长读题。
+     *
+     * 刻意压到 12 个字：它要跟标题挤在同一行，长句会把整行顶到第二行，
+     * 反而比单独一条说明更占地方。
+     */
+    const val LOW_GRADE_SCIENCE_NOTE = "请家长读题，孩子口头作答"
 
     fun compose(spec: PaperSpec, historyHashes: Set<Long> = emptySet()): GeneratedPaper {
         val blocked = historyHashes.toMutableSet()
@@ -67,12 +72,13 @@ object PaperComposer {
                     instruction = listOfNotNull(
                         type.instruction.takeIf { it.isNotBlank() },
                         hoisted,
-                        // 一二年级科学题干里的字超出识字量：明说一句请家长读题、口头作答
-                        LOW_GRADE_SCIENCE_NOTE.takeIf {
-                            spec.grade <= 2 && type.name.startsWith("SCIENCE")
-                        },
                     ).joinToString("　"),
                     prefix = prefix,
+                    // 一二年级科学题干里的字超出识字量：明说一句请家长读题、口头作答。
+                    // 挂在标题同一行，不再单占一行纸面
+                    titleNote = LOW_GRADE_SCIENCE_NOTE.takeIf {
+                        spec.grade <= 2 && type.name.startsWith("SCIENCE")
+                    } ?: "",
                 )
             )
         }
@@ -153,6 +159,7 @@ object PaperComposer {
         ordinal: Int,
         instruction: String = type.instruction,
         prefix: String = "",
+        titleNote: String = "",
     ): GeneratedSection = GeneratedSection(
         index = ordinal,
         title = sectionTitle(type, questions.size, ordinal, prefix),
@@ -173,6 +180,7 @@ object PaperComposer {
         },
         answerLines = type.answerLines,
         instruction = instruction,
+        titleNote = titleNote,
     )
 
     /** 多学科交叉时大题标题的科目前缀；跨科题型（题库混装）不加，见 [compose] */

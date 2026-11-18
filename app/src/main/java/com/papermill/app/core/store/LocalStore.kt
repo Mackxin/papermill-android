@@ -86,6 +86,10 @@ data class AppSettings(
     val activeStudentId: String = "",
     /** 学期：0 全学年 / 1 上册 / 2 下册（没选学生档案时也记住） */
     val term: Int = 1,
+    /** 纸边留白（pt，v0.22.0）：12 / 20 / 28 / 40 */
+    val margin: Float = 40f,
+    /** 正文字号（pt，v0.22.0）：9 / 10 / 11 / 12 */
+    val bodySize: Float = 11f,
 )
 
 /**
@@ -173,6 +177,8 @@ object LocalStore {
                 layoutVersion = o.optInt("layoutVersion", 0),
                 activeStudentId = o.optString("activeStudentId", ""),
                 term = o.optInt("term", 1).coerceIn(0, 2),
+                margin = o.optDouble("margin", 40.0).toFloat().coerceIn(8f, 60f),
+                bodySize = o.optDouble("bodySize", 11.0).toFloat().coerceIn(8f, 14f),
             )
         }.getOrDefault(AppSettings())
     }
@@ -196,6 +202,8 @@ object LocalStore {
                     .put("layoutVersion", settings.layoutVersion)
                     .put("activeStudentId", settings.activeStudentId)
                     .put("term", settings.term)
+                    .put("margin", settings.margin.toDouble())
+                    .put("bodySize", settings.bodySize.toDouble())
                     .toString(2)
             )
         }

@@ -16,7 +16,7 @@
 import { TP } from './measure.js';
 import { questionBlock, sectionHeader, noteBlock, tableBlock, fullWidth, figureLayout } from './blocks.js';
 import { FlowLayout } from './flow.js';
-import { LINE_GAPS, FOOTER_SIZES, ORIENTATIONS } from './models.js';
+import { LINE_GAPS, FOOTER_SIZES, ORIENTATIONS, defaultFooter } from './models.js';
 
 const COLUMN_GAP = 20;
 const ANSWER_GAP = 4;
@@ -79,6 +79,7 @@ export function assemble(spec, paper) {
     columns: s.columns,
     answerLines: s.answerLines,
     instruction: s.instruction,
+    titleNote: s.titleNote ?? '',
     padWithLines: s.padWithLines !== false,
     isAnswer: false,
   }));
@@ -109,9 +110,8 @@ export function assemble(spec, paper) {
     showNameRow: spec.showNameRow !== false,
     studentName: spec.studentName ?? '',
     sections,
-    // 默认**不印**左边那句版权说明 —— 家长要的是一张干净的练习卷，
-    // 需要署字就自己在「页脚 → 自定义」里写。右侧的生成时间与页码照旧。
-    footerText: spec.footerText ?? '',
+    // 页脚左边那句：用户没写就印「学生名 · 每日一练」，整条关掉（''）仍走 footerOff
+    footerText: spec.footerText ?? defaultFooter(spec),
     footerStamp: spec.showCreatedAt && !footerOff ? `生成 ${stamp(paper.createdAt)}` : '',
     showPageNo: spec.showPageNo !== false && !footerOff,
     footerSize: spec.footerSize ?? 'NORMAL',
@@ -119,6 +119,10 @@ export function assemble(spec, paper) {
     lineGapCustom: spec.lineGapCustom ?? 8,
     orientation: spec.orientation ?? 'PORTRAIT',
     targetPages: spec.targetPages ?? 0,
+    /** 纸边留白：直接决定可用排版宽度，是最省纸的一个旋钮 */
+    margin: spec.margin ?? 40,
+    /** 正文字号：题号、题干、大题标题、说明全部按它等比缩放 */
+    bodySize: spec.bodySize ?? 11,
     createdAt: paper.createdAt,
   };
 }
@@ -148,6 +152,11 @@ function coverHeight(doc) {
 export function renderPaper(doc, tp = TP) {
   const g = geometryOf(doc.orientation, doc.margin ?? 40);
   const gap = gapOf(doc);
+  // 字号三兄弟：正文由用户定，标题与说明按固定比例跟着走 ——
+  // 只调正文会让大标题压在 9pt 的小字上，比例一失衡整张纸就散了
+  const bodySize = doc.bodySize ?? BODY_SIZE;
+  const sectionSize = bodySize * (SECTION_SIZE / BODY_SIZE);
+  const noteSize = bodySize * (NOTE_SIZE / BODY_SIZE);
   const footerSize = FOOTER_SIZES.find((x) => x.key === doc.footerSize) ?? FOOTER_SIZES[1];
   const footerH = doc.hasFooter === false ? 0 : footerSize.height;
   const bottomSafe = g.contentBottom - footerH;
@@ -174,7 +183,7 @@ export function renderPaper(doc, tp = TP) {
           hint = section.answerLines > 0 ? section.columns : forceColumns;
         } else {
           hint = fillColumns(
-            section.questions.map((q) => questionBlock({ no: q.no, stem: q.stem, size: BODY_SIZE * typeScale }).singleLineWidth(tp)),
+            section.questions.map((q) => questionBlock({ no: q.no, stem: q.stem, size: bodySize * typeScale }).singleLineWidth(tp)),
             g.contentW, COLUMN_GAP, Math.max(1, section.columns),
             section.answerLines > 0 ? Math.min(Math.max(section.columns, 2), MAX_BODY_COLUMNS) : MAX_BODY_COLUMNS,
           );
@@ -182,9 +191,9 @@ export function renderPaper(doc, tp = TP) {
       }
       if (firstHint === 0 && hint > 0) firstHint = hint;
 
-      blocks.push(sectionHeader(section.title, SECTION_SIZE * typeScale, hint));
+      blocks.push(sectionHeader(section.title, sectionSize * typeScale, hint, section.titleNote));
       if (section.instruction && section.instruction.trim()) {
-        blocks.push(noteBlock(section.instruction, NOTE_SIZE * typeScale));
+        blocks.push(noteBlock(section.instruction, noteSize * typeScale));
       }
       section.questions.forEach((q) => {
         const lines = section.answerLines > 0
@@ -192,7 +201,7 @@ export function renderPaper(doc, tp = TP) {
           : 0;
         const qb = questionBlock({
           no: q.no, uid: q.uid ?? null, stem: q.stem, answerLines: lines,
-          size: BODY_SIZE * typeScale, itemGap, figure: q.figure,
+          size: bodySize * typeScale, itemGap, figure: q.figure,
         });
         blocks.push((forceFullWidth || q.figure) ? fullWidth(qb) : qb);
       });
@@ -289,7 +298,7 @@ export function renderPaper(doc, tp = TP) {
     const minCols = candidates.length ? Math.max(...candidates.map((s) => s.columns)) : 1;
     const widthCeil = candidates.length
       ? Math.min(...candidates.map((s) => fillColumns(
-        s.questions.map((q) => questionBlock({ no: q.no, stem: q.stem, size: BODY_SIZE * typeScale }).singleLineWidth(tp)),
+        s.questions.map((q) => questionBlock({ no: q.no, stem: q.stem, size: bodySize * typeScale }).singleLineWidth(tp)),
         g.contentW, COLUMN_GAP, 1, MAX_BODY_COLUMNS, true,
       )))
       : MAX_BODY_COLUMNS;
@@ -382,7 +391,7 @@ export function renderPaper(doc, tp = TP) {
           w: placed.w,
           h: placed.block.measure(tp, placed.w),
           // 重画这一题时要用的原件：字号 / 答题线 / 题间距 / 配图
-          size: placed.block.size ?? BODY_SIZE * typeScale,
+          size: placed.block.size ?? bodySize * typeScale,
           lines: placed.block.answerLines ?? 0,
           itemGap: placed.block.itemGap ?? gap.base,
           figure: placed.block.figure ?? null,
@@ -410,6 +419,9 @@ export function renderPaper(doc, tp = TP) {
     pageCount: total,
     contentPageCount: firstAnswerPage > 0 ? firstAnswerPage : total,
     typeScale,
+    /** 这卷实际用的纸边留白与正文字号：自检页与「描述」都靠它对齐口径 */
+    margin: g.margin,
+    bodySize,
     columns: chosenColumns || bodyColumns,
     itemGap: fGap,
     fillRatios,

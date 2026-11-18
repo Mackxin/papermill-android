@@ -34,6 +34,8 @@ object PaperAssembler {
                     // 竖式该加（多一条就多写一道），应用题不该加（会变成满页空横线）
                     padWithLines = s.type.padWithLines,
                     instruction = s.instruction,
+                    // 跟标题同一行的短提示（低年级科学：请家长读题）
+                    titleNote = s.titleNote,
                 )
             )
         }
@@ -64,7 +66,7 @@ object PaperAssembler {
             showNameRow = spec.showNameRow,
             studentName = spec.studentName,
             sections = sections,
-            footerText = spec.footerText,
+            footerText = spec.footerText ?: defaultFooter(spec),
             // 生成时间印在页脚右侧：家长要能看出这是哪天的卷子，
             // 又不该为它多占一行 —— 页脚本来就要印东西。
             // 页脚整条关掉（footerText == ""）时时间也一起不印：
@@ -79,6 +81,17 @@ object PaperAssembler {
             lineGapCustom = spec.lineGapCustom,
             orientation = spec.orientation,
             targetPages = spec.targetPages,
+            margin = spec.margin,
+            bodySize = spec.bodySize,
         )
     }
+
+    /**
+     * 页脚左下角的默认那句：「学生名 · 每日一练」（v0.22.0）。
+     *
+     * 用户的实际用法是「每天给自家孩子打一张」：署个名字正好分得清是谁的卷子。
+     * 没选学生档案就只印「每日一练」；用户在页脚里写过字，以他写的为准（走 spec.footerText）。
+     */
+    private fun defaultFooter(spec: PaperSpec): String =
+        if (spec.studentName.isBlank()) "每日一练" else "${spec.studentName} · 每日一练"
 }

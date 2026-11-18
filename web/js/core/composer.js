@@ -30,7 +30,7 @@ export function sectionTitle(type, count, ordinal, prefix = '') {
  * 用一组现成题目拼出一道大题：序号、标题、栏数、答题线、说明全按题型规则来。
  * 「加一题」也要走这里 —— 两处各写一遍就会出现「每题 2 分共 6 分」底下印 4 道题。
  */
-export function sectionOf(spec, type, questions, ordinal, instruction = TYPE[type].instruction, prefix = '') {
+export function sectionOf(spec, type, questions, ordinal, instruction = TYPE[type].instruction, prefix = '', titleNote = '') {
   const t = TYPE[type];
   return {
     index: ordinal,
@@ -44,6 +44,8 @@ export function sectionOf(spec, type, questions, ordinal, instruction = TYPE[typ
     columns: t.columns <= 1 ? 1 : t.answerLines > 0 ? t.columns : Math.max(t.columns, spec.columns),
     answerLines: t.answerLines,
     instruction,
+    // 跟大题标题排在同一行的短提示（低年级科学：家长读题、孩子口头作答）
+    titleNote,
     padWithLines: t.padWithLines !== false,
   };
 }
@@ -112,13 +114,14 @@ export function compose(spec, historyHashes = new Set()) {
     const prefix = subjectPrefixFor(spec, type);
     const [hoisted, trimmed] = hoistInstruction(drawn);
     // 一年级 / 二年级的科学题，题干里的字（植物、观察、舌头…）大多超出识字量。
-    // 卷子照出，但在大题下面明说一句：让家长读题、孩子口头答，别让孩子干瞪着。
+    // 卷子照出，但在大题标题后面明说一句：让家长读题、孩子口头答，别让孩子干瞪着。
+    // 刻意压到 11 个字并挂在标题同一行 —— 单独占一行的说明会把整张卷子撑长一截。
     const lowGradeScience = spec.grade <= 2 && String(type).startsWith('SCIENCE')
-      ? '低年级科学以观察和口头表达为主：请家长读题，孩子口头作答即可。'
+      ? '请家长读题，孩子口头作答'
       : '';
-    const instruction = [TYPE[type].instruction, hoisted, lowGradeScience]
+    const instruction = [TYPE[type].instruction, hoisted]
       .filter((x) => x && x.trim()).join('　');
-    sections.push(sectionOf(spec, type, trimmed, sections.length + 1, instruction, prefix));
+    sections.push(sectionOf(spec, type, trimmed, sections.length + 1, instruction, prefix, lowGradeScience));
   });
 
   // 自编题：用户自己写的内容，原样接在常规大题后面（不走随机出题，但排版规则一模一样）

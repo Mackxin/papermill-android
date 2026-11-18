@@ -181,7 +181,13 @@ object PaperRenderer {
         doc.sections.firstOrNull()?.grid?.let { return renderPracticeGrid(doc, it) }
 
         val tp = TextPainter()
-        val g = PageGeometry.of(doc.orientation)
+        // 纸边留白由用户定：它直接决定内容区宽高，是最省纸也最温和的一个旋钮
+        val g = PageGeometry.of(doc.orientation).copy(margin = doc.margin)
+        // 字号三兄弟：正文由用户定，大题标题与说明按固定比例跟着走 ——
+        // 只调正文会让 11.5pt 的标题压在 9pt 的小字上，比例一失衡整张纸就散了
+        val bodySize = doc.bodySize
+        val sectionSize = bodySize * (SECTION_SIZE / BODY_SIZE)
+        val noteSize = bodySize * (NOTE_SIZE / BODY_SIZE)
 
         // 首页被卷头占掉，后续页只有窄页眉 —— 两页可用高度不同。
         // 页脚被关掉时把那 26pt 还给正文：用户既然说「别浪费纸」，
@@ -239,7 +245,7 @@ object PaperRenderer {
                     fitColumns(
                         widths = section.questions.map {
                             QuestionBlock(
-                                no = it.no, stem = it.stem, size = BODY_SIZE * typeScale,
+                                no = it.no, stem = it.stem, size = bodySize * typeScale,
                             ).singleLineWidth(tp)
                         },
                         contentW = g.contentW,
@@ -263,14 +269,15 @@ object PaperRenderer {
                 out.add(
                     SectionHeaderBlock(
                         section.title,
-                        size = SECTION_SIZE * typeScale,
+                        size = sectionSize * typeScale,
                         columnHint = hint,
+                        note = section.titleNote,
                     )
                 )
                 // 做题指令只印一次：以前「用竖式计算：」是拼在每道题题干里的，
                 // 一页 20 道题就重复 20 遍
                 if (section.instruction.isNotBlank()) {
-                    out.add(NoteBlock(section.instruction, size = NOTE_SIZE * typeScale))
+                    out.add(NoteBlock(section.instruction, size = noteSize * typeScale))
                 }
                 val table = section.table
                 if (table != null) {
@@ -296,7 +303,7 @@ object PaperRenderer {
                             } else {
                                 0
                             },
-                            size = BODY_SIZE * typeScale,
+                            size = bodySize * typeScale,
                             itemGap = itemGap,
                             // 看图题带图；答案页那一路不传（答案不需要再印一遍图）
                             figure = q.figure,
@@ -464,7 +471,7 @@ object PaperRenderer {
                     fitColumns(
                         widths = section.questions.map {
                             QuestionBlock(
-                                no = it.no, stem = it.stem, size = BODY_SIZE * typeScale,
+                                no = it.no, stem = it.stem, size = bodySize * typeScale,
                             ).singleLineWidth(tp)
                         },
                         contentW = g.contentW,
@@ -651,7 +658,8 @@ object PaperRenderer {
     /** 练习纸：一页 A4，卷头 + 铺满的格子 + 页脚，天然 100% 利用纸张 */
     private fun renderPracticeGrid(doc: PaperDocument, grid: PaperGrid): RenderedPdf {
         val tp = TextPainter()
-        val g = PageGeometry.of(doc.orientation)
+        // 纸边留白由用户定：它直接决定内容区宽高，是最省纸也最温和的一个旋钮
+        val g = PageGeometry.of(doc.orientation).copy(margin = doc.margin)
         val out = ByteArrayOutputStream()
         val pdf = PdfDocument()
         try {

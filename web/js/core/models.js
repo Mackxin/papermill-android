@@ -288,6 +288,62 @@ export const FOOTER_SIZES = [
   { key: 'TALL', label: '高', height: 32, fontSize: 9 },
 ];
 
+/**
+ * 页边距（pt）。
+ *
+ * 12pt ≈ 4.2mm，已经贴到家用打印机的不可打印边界附近（多数喷墨机四周留 3~5mm）。
+ * 再往下就不给了：打出来缺一条边，用户会以为是软件把字裁掉了。
+ */
+export const MARGINS = [
+  { key: 12, label: '极窄' },
+  { key: 20, label: '窄' },
+  { key: 28, label: '中' },
+  { key: 40, label: '标准' },
+];
+
+/**
+ * 正文字号（pt）。
+ *
+ * 9pt 是小学练习册小字注释的下限；再小家长第一反应就是「这卷子看不清」，
+ * 所以不提供 8pt —— 想再省纸请缩页边距，别缩字。
+ */
+export const BODY_SIZES = [9, 10, 11, 12];
+
+/**
+ * 排版密度：一次同时改「页边距 + 正文字号 + 题间距」三个数。
+ *
+ * 三个数分开调是给微调用的；但用户心里的诉求是「我要一张更紧的卷子」，
+ * 让他自己去凑三个滑杆太费事。预设点一下就把三个都摆好，之后仍可单独改 ——
+ * 改到跟任何预设都不一致时，界面自动显示「自定义」，不会假装还停在某一档。
+ */
+export const DENSITIES = [
+  { key: 'TIGHT', label: '极紧', margin: 12, bodySize: 10, lineGap: 'TIGHT', hint: '纸边 12pt、字 10pt、题挨着排 —— 一页塞最多，适合纯口算' },
+  { key: 'COMPACT', label: '紧凑', margin: 20, bodySize: 10, lineGap: 'COMPACT', hint: '纸边 20pt、字 10pt、行距紧凑 —— 省纸又不挤眼' },
+  { key: 'NORMAL', label: '标准', margin: 40, bodySize: 11, lineGap: 'COMPACT', hint: '纸边 40pt、字 11pt、行距紧凑 —— 与 App 出厂一致的那套' },
+  { key: 'LOOSE', label: '宽松', margin: 40, bodySize: 12, lineGap: 'LOOSE', hint: '字 12pt、行距宽松 —— 低年级写字大，留白多一点' },
+];
+
+/** 当前这套参数落在哪个密度档上；都不匹配就是「自定义」 */
+export function densityOf(spec) {
+  const margin = spec.margin ?? 40;
+  const bodySize = spec.bodySize ?? 11;
+  const gap = spec.lineGap ?? 'NORMAL';
+  const hit = DENSITIES.find((d) => d.margin === margin && d.bodySize === bodySize && d.lineGap === gap);
+  return hit ? hit.key : 'CUSTOM';
+}
+
+/**
+ * 页脚左下角的默认那句：「学生名 · 每日一练」。
+ *
+ * 以前默认是空白（家长要干净纸面），但用户的实际用法是「每天给自家孩子打一张」，
+ * 页脚署个名字正好能分清是谁的卷子、攒没攒够。选了学生档案就自动带上名字；
+ * 用户在「页脚 → 自定义」里写过字，就以他写的为准（这里只是兜底）。
+ */
+export function defaultFooter(spec) {
+  const name = String(spec?.studentName ?? '').trim();
+  return name ? `${name} · 每日一练` : '每日一练';
+}
+
 export const TERM = { BOTH: 0, FIRST: 1, SECOND: 2 };
 const TERM_CN = ['一', '二', '三', '四', '五', '六', '七', '八', '九'];
 
@@ -430,9 +486,15 @@ export const DEFAULT_SPEC = {
   showCreatedAt: true,
   showPageNo: true,
   footerSize: 'NORMAL',
-  lineGap: 'NORMAL',
+  // 行距出厂用「紧凑」而不是「标准」：App 侧早就是这个默认值，
+  // 两端同一张密度表才能让「标准」在两处是同一张纸
+  lineGap: 'COMPACT',
   lineGapCustom: 8,
   targetPages: 0,
+  /** 纸边留白（pt）：12 极窄 / 20 窄 / 28 中 / 40 标准 */
+  margin: 40,
+  /** 正文字号（pt）：9 / 10 / 11 / 12，题号题干一起变 */
+  bodySize: 11,
   term: TERM.FIRST,
   studentName: '',
   customSheets: [],

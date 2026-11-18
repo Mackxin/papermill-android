@@ -41,6 +41,8 @@ data class PaperSection(
     val answerLines: Int = 0,
     /** 大题说明：印在标题下面、只印一次（做题指令不要去每道题里重复） */
     val instruction: String = "",
+    /** 跟标题同一行的短提示（低年级科学：请家长读题）；放不下才退化成第二行 */
+    val titleNote: String = "",
     /** 非空时本 section 渲染成网格表格，忽略 questions */
     val table: PaperTable? = null,
     /** 非空时整份文档渲染成一页铺满的练习纸，忽略 sections 的其它内容 */
@@ -92,6 +94,10 @@ data class PaperDocument(
      * [com.papermill.app.core.pdf.render.PaperRenderer]。只约束正文，答案页另计。
      */
     val targetPages: Int = 0,
+    /** 纸边留白（pt）：12 / 20 / 28 / 40，直接决定内容区宽高 */
+    val margin: Float = 40f,
+    /** 正文字号（pt）：9 / 10 / 11 / 12；标题与说明按比例跟随 */
+    val bodySize: Float = 11f,
 ) {
     /**
      * 题间距下界（撑开算法的起点）。

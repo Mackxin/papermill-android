@@ -38,7 +38,7 @@ object PinyinGenerator : BaseGenerator() {
             // 题干刻意压短：两栏时单栏只有 ~247pt，长句会把结尾的「）」单独挤到下一行
             0 -> "看拼音写词 ${w.pinyin}（　　）"
             1 -> "读拼音写词 ${w.pinyin}（　　）"
-            else -> "拼音 ${w.pinyin} →（　　）"
+            else -> "拼音 ${w.pinyin}（　　）"
         }
         return stem to w.word
     }

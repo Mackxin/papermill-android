@@ -187,6 +187,9 @@ export function renderPages(container, result, zoom = 1, edit = null, cols = 1) 
     const wrap = el('div', `width:${page.pageW * zoom}pt;height:${page.pageH * zoom}pt;`);
     wrap.className = 'paper-wrap';
     wrap.dataset.page = String(i + 1);
+    // 只改缩放时靠这两个数就地算新尺寸，不用把整页 SVG 重建一遍
+    wrap.dataset.pw = String(page.pageW);
+    wrap.dataset.ph = String(page.pageH);
     const inner = pageNode(page);
     inner.style.transform = `scale(${zoom})`;
     inner.style.transformOrigin = 'top left';
@@ -221,6 +224,26 @@ export function renderPages(container, result, zoom = 1, edit = null, cols = 1) 
   });
   container.appendChild(stack);
   return offset;
+}
+
+/**
+ * 只改缩放比例：改每张纸的外框尺寸和内部 transform。
+ *
+ * 为什么值得单独写一个：一张 7 页的卷子有上千个 SVG 节点，点一次「＋」就
+ * innerHTML 重建一遍，手机上能卡半秒。而缩放本来只是 CSS 的事 ——
+ * 纸上的字一个都没变，没理由重画。命中热区在 inner 里，跟着 transform 一起缩放，
+ * 所以也不用重算坐标。
+ */
+export function applyZoom(container, zoom) {
+  container.querySelectorAll('.paper-wrap').forEach((wrap) => {
+    const inner = wrap.firstElementChild;
+    const pw = Number(wrap.dataset.pw);
+    const ph = Number(wrap.dataset.ph);
+    if (!inner || !pw || !ph) return;
+    wrap.style.width = `${pw * zoom}pt`;
+    wrap.style.height = `${ph * zoom}pt`;
+    inner.style.transform = `scale(${zoom})`;
+  });
 }
 
 /** 工具栏用：页数 / 缩放 / 是否缩过字号 */

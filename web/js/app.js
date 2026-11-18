@@ -14,6 +14,7 @@
 import {
   DEFAULT_SPEC, SUBJECT_ALL, SUBJECT_LABEL, QUESTION_TYPES, TYPE, TILTS, PAPER_KINDS, KIND,
   kindOf, kindFits, ANSWER_MODES, ORIENTATIONS, LINE_GAPS, FOOTER_SIZES, TERM, Term, GradeProfiles,
+  MARGINS, BODY_SIZES, DENSITIES, densityOf, defaultFooter,
   subjectAvailableFor, effectiveSubjects, stableHash, Rng,
 } from './core/models.js';
 import {
@@ -22,7 +23,7 @@ import {
 } from './core/composer.js';
 import { availableTypes, generatorOf, runGenerator, generatorCount } from './core/registry.js';
 import { renderPaper, assemble, repaintQuestion, repaintAnswer } from './core/renderer.js';
-import { renderPages, printPaper, describe, printNodes } from './ui/paper.js';
+import { renderPages, applyZoom, printPaper, describe, printNodes } from './ui/paper.js';
 import { exportPdf, exportPngs } from './ui/export.js';
 import { referenceSheet, practiceSheet } from './ui/sheets.js';
 import { DATA, loadCoreData, loadCurriculumFor, curricUnits, CURRIC_META } from './data/store.js';
@@ -447,8 +448,37 @@ function defaultCountFor(t) {
 function layoutCard() {
   const spec = state.spec;
   const footerMode = spec.footerText === '' ? 'off' : spec.footerText == null ? 'default' : 'custom';
+  const density = densityOf(spec);
+
+  // 密度预设：一下把「页边距 / 字号 / 行距」三个数同时摆好。
+  // 之后仍可单独改任何一项 —— 改到跟预设不匹配时这里自动显示「自定义」，
+  // 不会让用户以为还停在「紧凑」上。
+  const densityChips = chips(
+    [...DENSITIES.map((d) => ({ value: d.key, label: d.label })), { value: 'CUSTOM', label: '自定义' }],
+    density,
+    (v) => {
+      const d = DENSITIES.find((x) => x.key === v);
+      if (d) {
+        spec.margin = d.margin;
+        spec.bodySize = d.bodySize;
+        spec.lineGap = d.lineGap;
+      }
+      save();
+      render();
+      if (d) toast(`${d.label}：${d.hint}`);
+    },
+  );
 
   return card('卷面定制',
+    field('排版密度', densityChips),
+    h('p', { class: 'hint', text: DENSITIES.find((d) => d.key === density)?.hint
+      ?? '你自己调的参数。想回到某一档预设，点上面任意一档即可。' }),
+    field('页边距', chips(MARGINS.map((m) => ({ value: m.key, label: `${m.label} ${m.key}pt` })), spec.margin ?? 40, (v) => {
+      spec.margin = Number(v); save(); render();
+    })),
+    field('正文字号', chips(BODY_SIZES.map((n) => ({ value: n, label: `${n}pt` })), spec.bodySize ?? 11, (v) => {
+      spec.bodySize = Number(v); save(); render();
+    })),
     field('标题', input('text', spec.title, (v) => { spec.title = v; save(); })),
     field('副标题', input('text', spec.subtitle, (v) => { spec.subtitle = v; save(); })),
     field('姓名栏', chips([{ value: 'on', label: '印姓名/班级/日期' }, { value: 'off', label: '不印' }],
@@ -456,7 +486,7 @@ function layoutCard() {
     field('标题一行', chips([{ value: 'off', label: '两行' }, { value: 'on', label: '标题+题数一行' }],
       spec.headerOneLine ? 'on' : 'off', (v) => { spec.headerOneLine = v === 'on'; save(); render(); })),
     field('页脚', chips([
-      { value: 'default', label: '只印时间/页码' },
+      { value: 'default', label: '默认（学生名 · 每日一练）' },
       { value: 'custom', label: '自定义' },
       { value: 'off', label: '整条不印' },
     ], footerMode, (v) => {
@@ -464,6 +494,9 @@ function layoutCard() {
       save();
       render();
     })),
+    h('p', { class: 'hint', text: footerMode === 'default'
+      ? `现在会印「${defaultFooter(spec)}」；在「学生档案」里换个学生，这句自动跟着换。`
+      : (footerMode === 'off' ? '页脚整条不印：文字、时间、页码、分隔线一起收掉。' : '印你写的这句。') }),
     footerMode === 'custom'
       ? field('页脚文字', input('text', spec.footerText ?? '', (v) => { spec.footerText = v; save(); }))
       : null,
@@ -479,7 +512,7 @@ function layoutCard() {
     field('栏数', chips([1, 2, 3, 4].map((n) => ({ value: n, label: `${n} 栏` })), spec.columns, (v) => {
       spec.columns = Number(v); save(); render();
     })),
-    field('页数上限', chips([0, 1, 2, 3, 4].map((n) => ({ value: n, label: n === 0 ? '不限' : `${n} 页` })), spec.targetPages, (v) => {
+    field('页数上限', chips([0, 1, 2, 3, 4, 5, 6].map((n) => ({ value: n, label: n === 0 ? '不限' : `${n} 页` })), spec.targetPages, (v) => {
       spec.targetPages = Number(v); save(); render();
     })),
     field('答案', chips(ANSWER_MODES.map((a) => ({ value: a.key, label: a.label })), spec.answerMode, (v) => {
@@ -643,6 +676,18 @@ function previewScreen() {
     stageCtx = { pages, draw, zoom: zoomNow };
   };
 
+  // 缩放只改 CSS：7 页的卷子有上千个 SVG 节点，重建一次手机上要卡半秒，
+  // 而纸上的字一个都没变 —— 没有理由重画。
+  const zoomStep = (delta) => {
+    state.zoomAuto = false;
+    state.zoom = Math.max(0.35, Math.min(2, Math.round((zoomNow() + delta) * 100) / 100));
+    save();
+    const L = layoutNow();
+    applyZoom(pages, L.zoom);
+    zoomLabel.textContent = `${Math.round(L.zoom * 100)}%${L.cols > 1 ? ` · ${L.cols} 栏` : ''}`;
+    zoomLabel.classList.add('manual');
+  };
+
   const narrow = window.innerWidth < 900;
   const actions = [
     { label: '打印', run: () => printPaper(state.result) },
@@ -663,19 +708,9 @@ function previewScreen() {
   const toolButtons = [
     button('← 返回', 'ghost', () => { state.tab = 'create'; state.editor = false; render(); }),
     info,
-    button('－', 'ghost', () => {
-      state.zoomAuto = false;
-      state.zoom = Math.max(0.4, Math.round((zoomNow() - 0.1) * 100) / 100);
-      save();
-      render();
-    }),
+    button('－', 'ghost', () => zoomStep(-0.1)),
     zoomLabel,
-    button('＋', 'ghost', () => {
-      state.zoomAuto = false;
-      state.zoom = Math.min(2, Math.round((zoomNow() + 0.1) * 100) / 100);
-      save();
-      render();
-    }),
+    button('＋', 'ghost', () => zoomStep(0.1)),
     button('⬇ 导出', 'primary', () => exportDialog()),
   ];
   if (editOn || !narrow) {

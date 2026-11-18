@@ -424,6 +424,13 @@ data class GeneratedSection(
     /** 印在大题标题下面、只印一次的做题说明（见 [QuestionType.instruction]） */
     val instruction: String = "",
     /**
+     * 跟大题标题排在**同一行**的短提示（v0.22.0）。
+     *
+     * 低年级科学那句「请家长读题，孩子口头作答」原来是一条独立说明块，
+     * 白占整整一行高度、还把整张卷子撑长一截；这类一句话提示本来就只是标题的尾巴。
+     */
+    val titleNote: String = "",
+    /**
      * 大题名（不含「一、」和「共 N 分」）。删题后要重印标题，只能靠它复原 ——
      * 自编题的名字是用户起的（「本周生词」），照 [type] 重算会变回「自编题」。
      */
@@ -471,6 +478,37 @@ enum class LineGap(val label: String, val base: Float, val max: Float) {
 
     companion object {
         fun of(name: String?): LineGap = values().firstOrNull { it.name == name } ?: NORMAL
+    }
+}
+
+/**
+ * 排版密度（v0.22.0）：一次同时改「页边距 + 正文字号 + 题间距」三个数。
+ *
+ * 三个数分开调是给微调用的；但用户心里的诉求是「我要一张更紧的卷子」，
+ * 让他自己去凑三个滑杆太费事。预设点一下就把三个都摆好，之后仍可单独改 ——
+ * 改到跟任何预设都不一致时，界面自动显示「自定义」，不会假装还停在某一档。
+ */
+enum class Density(
+    val label: String,
+    val margin: Float,
+    val bodySize: Float,
+    val lineGap: LineGap,
+    val hint: String,
+) {
+    TIGHT("极紧", 12f, 10f, LineGap.TIGHT, "纸边 12pt、字 10pt、题挨着排 —— 一页塞最多，适合纯口算"),
+    COMPACT("紧凑", 20f, 10f, LineGap.COMPACT, "纸边 20pt、字 10pt、行距紧凑 —— 省纸又不挤眼"),
+    NORMAL("标准", 40f, 11f, LineGap.COMPACT, "纸边 40pt、字 11pt、行距紧凑 —— 出厂就是这套"),
+    LOOSE("宽松", 40f, 12f, LineGap.LOOSE, "字 12pt、行距宽松 —— 低年级写字大，留白多一点"),
+    CUSTOM("自定义", 0f, 0f, LineGap.NORMAL, "你自己调的参数"),
+    ;
+
+    companion object {
+        /** 这组参数落在哪一档；都不匹配就是 [CUSTOM] */
+        fun of(margin: Float, bodySize: Float, gap: LineGap): Density =
+            values().firstOrNull {
+                it != CUSTOM && kotlin.math.abs(it.margin - margin) < 0.5f &&
+                    kotlin.math.abs(it.bodySize - bodySize) < 0.05f && it.lineGap == gap
+            } ?: CUSTOM
     }
 }
 
@@ -567,6 +605,19 @@ data class PaperSpec(
      * 实现在 PaperRenderer：拿不到就二分缩小正文字号，下限 [MIN_TYPE_SCALE]。
      */
     val targetPages: Int = 0,
+
+    // ---------------- v0.22.0 排版自由度 ----------------
+
+    /**
+     * 纸边留白（pt）：12 极窄 / 20 窄 / 28 中 / 40 标准。
+     *
+     * 直接改内容区宽度 —— 这是「同样题量少印一页」最有效的一个旋钮，
+     * 比缩字号温和得多。12pt ≈ 4.2mm，已经贴到家用打印机不可打印边界，不再往下给。
+     */
+    val margin: Float = 40f,
+
+    /** 正文字号（pt）：9 / 10 / 11 / 12。大题标题与说明按固定比例跟着变，不会失衡 */
+    val bodySize: Float = 11f,
 
     // ---------------- v0.19.0 学生档案 / 学期 / 自编题 ----------------
 

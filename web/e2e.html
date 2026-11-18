@@ -253,16 +253,18 @@ await test('生成卷子 · 页数 / 姓名栏 / 页脚页码', async () => {
 });
 
 // 3 ---------------------------------------------------------------
-await test('页脚 · 默认不印版权说明，只留时间与页码', async () => {
+await test('页脚 · 默认印「学生名 · 每日一练」，不印版权说明', async () => {
   goCreate();
   await waitFor(() => q('#view .create-actions'), '出卷页');
-  viewChip('页脚', '只印时间/页码').click();
+  viewChip('页脚', '默认（学生名 · 每日一练）').click();
   await sleep(80);
   const r = await generate();
-  // 用户点名：那张「题目由本程序生成，非官方教材配套」别默认印出来
+  // 用户点名：那张「题目由本程序生成，非官方教材配套」别默认印出来；
+  // 但左下角要留一句能认出「这是谁的哪张卷」的话
   if (/非官方教材配套/.test(r.text)) throw new Error('默认页脚还印着版权说明');
+  if (!/每日一练/.test(r.text)) throw new Error('默认页脚没印「每日一练」');
   if (!/第\s*1\s*\/\s*\d+\s*页/.test(r.text)) throw new Error('页脚连页码都没了');
-  return '无版权说明 · 页码仍在';
+  return '印「每日一练」· 无版权说明 · 页码仍在';
 });
 
 // 4 ---------------------------------------------------------------
@@ -289,7 +291,7 @@ await test('页脚 · 自定义文字', async () => {
   if (!/三班数学/.test(r.text)) throw new Error('自定义页脚没印出来');
   goCreate();
   await waitFor(() => q('#view .create-actions'), '出卷页');
-  viewChip('页脚', '只印时间/页码').click();
+  viewChip('页脚', '默认（学生名 · 每日一练）').click();
   return '印出「三班数学 · 每日一练」';
 });
 
@@ -1059,6 +1061,81 @@ await test('一年级科学 · 大题印「请家长读题」', async () => {
   if (!/请家长读题/.test(r.text)) throw new Error('一年级科学没有印读题提示：' + r.text.slice(0, 120));
   if (!r.text.match(/科学/)) throw new Error('这一卷根本没出科学题');
   return '一年级科学卷已印「请家长读题，孩子口头作答」';
+});
+
+// ---------------------------------------------------------------- 排版自由度
+
+/** 纸面左上第一列的 x（= 页边距）与最大正文字号 —— 排版参数最直接的两个证据 */
+function metricsOf(r) {
+  const nodes = [...r.pages[0].querySelectorAll('[data-q]')];
+  if (!nodes.length) throw new Error('第一页上没有题');
+  const left = Math.min(...nodes.map((n) => parseFloat(n.style.left) || 0));
+  const font = Math.max(...nodes.map((n) => parseFloat(n.style.fontSize) || 0));
+  return { left, font };
+}
+
+await test('排版密度 · 紧凑一次改页边距/字号/行距，纸边真的收窄', async () => {
+  goCreate();
+  await waitFor(() => q('#view .create-actions'), '出卷页');
+  // 上一组用例停在一一年级科学卷：先回到三年级数学
+  setControl(q('#view .field select'), '3');
+  await sleep(320);
+  const subj = () => [...findField(q('#view'), '科目（可多选）').querySelectorAll('.chip')];
+  const sci = subj().find((c) => T(c) === '科学' && c.classList.contains('on'));
+  if (sci) { sci.click(); await sleep(220); }
+  qa('#view .type-tools .btn').find((b) => T(b) === '全选常用')?.click();
+  await sleep(150);
+  viewChip('卷型', '练习题').click();
+  await sleep(120);
+  viewChip('页数上限', '不限').click();
+  await sleep(80);
+
+  viewChip('排版密度', '标准').click();
+  await sleep(150);
+  const std = await generate();
+  const mStd = metricsOf(std);
+
+  goCreate();
+  await waitFor(() => q('#view .create-actions'), '出卷页');
+  viewChip('排版密度', '紧凑').click();
+  await sleep(150);
+  const cmp = await generate();
+  const mCmp = metricsOf(cmp);
+
+  if (Math.abs(mStd.left - 40) > 1) throw new Error(`标准档页边距是 ${mStd.left}pt，应该是 40pt`);
+  if (Math.abs(mCmp.left - 20) > 1) throw new Error(`紧凑档页边距是 ${mCmp.left}pt，应该是 20pt`);
+  if (Math.abs(mStd.font - 11) > 0.3) throw new Error(`标准档正文字号是 ${mStd.font}pt，应该是 11pt`);
+  if (Math.abs(mCmp.font - 10) > 0.3) throw new Error(`紧凑档正文字号是 ${mCmp.font}pt，应该是 10pt`);
+  if (cmp.n > std.n) throw new Error(`紧凑反而多印了一页：${std.n} → ${cmp.n}`);
+
+  goCreate();
+  await waitFor(() => q('#view .create-actions'), '出卷页');
+  viewChip('排版密度', '标准').click();
+  await sleep(150);
+  return `标准 ${mStd.left}pt/${mStd.font}pt ${std.n} 页 → 紧凑 ${mCmp.left}pt/${mCmp.font}pt ${cmp.n} 页`;
+});
+
+await test('排版自由 · 正文字号 12pt、页数上限能选 6 页', async () => {
+  goCreate();
+  await waitFor(() => q('#view .create-actions'), '出卷页');
+  const pageChips = [...findField(q('#view'), '页数上限').querySelectorAll('.chip')].map(T);
+  if (!pageChips.includes('6 页')) throw new Error(`页数上限只有：${pageChips.join('/')}`);
+  // 页边距四档都要在，且标着具体 pt —— 只说「窄/宽」用户对不上自己打印机的边距
+  const marginChips = [...findField(q('#view'), '页边距').querySelectorAll('.chip')].map(T);
+  if (marginChips.length !== 4) throw new Error(`页边距档位有 ${marginChips.length} 个：${marginChips.join('/')}`);
+
+  viewChip('正文字号', '12pt').click();
+  await sleep(150);
+  const big = await generate();
+  const m = metricsOf(big);
+  if (Math.abs(m.font - 12) > 0.3) throw new Error(`选了 12pt，纸上还是 ${m.font}pt`);
+  if (big.n > 6) throw new Error(`不限页数时印了 ${big.n} 页，用例前提不成立`);
+
+  goCreate();
+  await waitFor(() => q('#view .create-actions'), '出卷页');
+  viewChip('正文字号', '11pt').click();
+  await sleep(120);
+  return `12pt 生效 · 页数上限含 6 页 · 页边距 4 档`;
 });
 
 // ---------------------------------------------------------------- 收尾
