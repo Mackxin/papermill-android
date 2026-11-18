@@ -229,6 +229,8 @@ object PaperComposer {
             answerLines = type.answerLines,
             // 竖式那三个知识点需要「用竖式计算」这句说明；口算、比大小本来就没有说明
             instruction = type.instruction,
+            // 「π 取 3.14」这类常量说明提到标题行，题干就不用每题重复一遍
+            titleNote = point.note,
         )
     }
 

@@ -69,7 +69,14 @@ data class AppSettings(
      * 数组要额外处理空值/脏值，字符串简单过滤一下就够了。
      * 顺序即展示顺序 —— 用户想「错题本放第一格」也在这一串里表达。
      */
-    val dockTabs: String = "HOME,REFERENCE,MISTAKES,HISTORY,TEXTBOOK,MORE",
+    val dockTabs: String = "HOME,REFERENCE,MISTAKES,HISTORY,PAPERS,TEXTBOOK,MORE",
+    /**
+     * 页签表的「出厂版本」。解析存档时拿它判断要不要补上新版加的页签（v0.24.0）。
+     *
+     * 没有这个数字就会出现：老用户升级后新页面**永远不出现** —— 存档里那串
+     * 名字是旧版本写的，里面根本没有新页签，parse 出来自然也没有。
+     */
+    val dockTabsVersion: Int = 0,
     /** 正文页数上限（v0.18.3）：0 = 不限制；>0 时渲染器缩字号把内容压进去 */
     val targetPages: Int = 0,
     /**
@@ -181,7 +188,8 @@ object LocalStore {
                 lineGapCustom = o.optDouble("lineGapCustom", 8.0).toFloat(),
                 showPageNo = o.optBoolean("showPageNo", true),
                 footerSize = o.optString("footerSize", "NORMAL"),
-                dockTabs = o.optString("dockTabs", "HOME,REFERENCE,MISTAKES,HISTORY,TEXTBOOK,MORE"),
+                dockTabs = o.optString("dockTabs", "HOME,REFERENCE,MISTAKES,HISTORY,PAPERS,TEXTBOOK,MORE"),
+                dockTabsVersion = o.optInt("dockTabsVersion", 0),
                 targetPages = o.optInt("targetPages", 0),
                 layoutVersion = o.optInt("layoutVersion", 0),
                 activeStudentId = o.optString("activeStudentId", ""),
@@ -209,6 +217,7 @@ object LocalStore {
                     .put("showPageNo", settings.showPageNo)
                     .put("footerSize", settings.footerSize)
                     .put("dockTabs", settings.dockTabs)
+                    .put("dockTabsVersion", settings.dockTabsVersion)
                     .put("targetPages", settings.targetPages)
                     .put("layoutVersion", settings.layoutVersion)
                     .put("activeStudentId", settings.activeStudentId)

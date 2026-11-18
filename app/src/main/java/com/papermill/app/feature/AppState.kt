@@ -34,6 +34,7 @@ import com.papermill.app.core.store.SessionState
 import com.papermill.app.core.update.UpdateChecker
 import com.papermill.app.domain.content.CurricUnit
 import com.papermill.app.domain.content.CurriculumBank
+import com.papermill.app.domain.content.PaperLibrary
 import com.papermill.app.domain.content.ScienceBank
 import com.papermill.app.domain.content.TextbookCatalog
 import com.papermill.app.domain.generate.AnswerMode
@@ -85,7 +86,7 @@ data class LocalPdf(
     val landscape: Boolean,
 )
 
-enum class Screen { HOME, CREATE, PREVIEW, MISTAKES, HISTORY, HELP, REFERENCE, MORE, TEXTBOOK, LOCAL_PDF, STUDENTS }
+enum class Screen { HOME, CREATE, PREVIEW, MISTAKES, HISTORY, HELP, REFERENCE, MORE, TEXTBOOK, PAPERS, LOCAL_PDF, STUDENTS }
 
 /**
  * 底部 dock 的页签。
@@ -102,6 +103,7 @@ enum class NavTab(val label: String, val screen: Screen) {
     REFERENCE("打印纸", Screen.REFERENCE),
     MISTAKES("错题本", Screen.MISTAKES),
     HISTORY("试卷库", Screen.HISTORY),
+    PAPERS("名卷", Screen.PAPERS),
     TEXTBOOK("课本", Screen.TEXTBOOK),
     MORE("更多", Screen.MORE),
 }
@@ -166,6 +168,14 @@ private const val EXPORT_IMAGE_SCALE = 2.2f
  * 里写对应的迁移。只改字段默认值对老用户是无效的 —— 他磁盘上那份设置会被原样读回来。
  */
 private const val LAYOUT_VERSION = 1
+
+/**
+ * 页签表的版本（v0.24.0）。
+ *
+ * 每加一个新页签就 +1：老存档里那串页签名是旧版本写的，里面新页签根本不存在，
+ * 不补的话升级上来的用户永远看不到这个入口（[parseDockTabs] 里按版本补一次）。
+ */
+private const val DOCK_TABS_VERSION = 1
 
 class AppState(private val rawContext: Context) {
 
@@ -312,6 +322,25 @@ class AppState(private val rawContext: Context) {
     /** 专项卷里每个知识点出几题（网站的范围 5~50） */
     var pointCount by mutableStateOf(20)
         private set
+
+    // ------------------------------------------------------------------
+    // 名卷库的筛选（v0.24.0）
+    //
+    // 只活在内存里、不落盘：这页的常态是「进来看看有什么」，默认「全部」最省事。
+    // 上次筛了「五年级 · 英语」这种状态留着，下次进来一片空白反而像坏了。
+    // ------------------------------------------------------------------
+
+    /** 0 = 全部年级 */
+    var paperGrade by mutableStateOf(0)
+
+    /** "" = 全科；否则 MATH / CHINESE / ENGLISH / SCIENCE */
+    var paperSubject by mutableStateOf("")
+
+    /** "" = 全类型 */
+    var paperType by mutableStateOf("")
+
+    /** 只搜标题，不搜正文（这站的标题本身就是「版本+年级+册次+类型」） */
+    var paperQuery by mutableStateOf("")
 
     fun choosePointCount(n: Int) {
         pointCount = n.coerceIn(5, 50)
@@ -657,6 +686,7 @@ class AppState(private val rawContext: Context) {
                     showPageNo = showPageNo,
                     footerSize = footerSize.name,
                     dockTabs = dockTabs.joinToString(",") { it.name },
+                    dockTabsVersion = DOCK_TABS_VERSION,
                     targetPages = targetPages,
                     margin = margin,
                     bodySize = bodySize,
@@ -682,7 +712,7 @@ class AppState(private val rawContext: Context) {
         lineGapCustom = s.lineGapCustom.coerceIn(0f, 24f)
         showPageNo = s.showPageNo
         footerSize = FooterSize.of(s.footerSize)
-        dockTabs = parseDockTabs(s.dockTabs)
+        dockTabs = parseDockTabs(s.dockTabs, s.dockTabsVersion)
         targetPages = s.targetPages.coerceIn(0, 8)
         margin = s.margin.coerceIn(8f, 60f)
         bodySize = s.bodySize.coerceIn(8f, 14f)
@@ -705,7 +735,10 @@ class AppState(private val rawContext: Context) {
 
     /** 把档案里的年级 / 学期 / 科目搬到参数上（不动题型配比） */
     private fun applyProfile(s: Student) {
-        grade = s.grade.coerceIn(1, 9)
+        // 勾着知识点时年级跟知识点走（v0.24.0）：学生档案是三年级、勾的却是六年级
+        // 「圆的周长与面积」，按学生的年级把卷头印成三年级就说不通了 —— 题本身是六年级的。
+        // 知识点的年级更具体，所以它优先；没勾知识点时才用学生档案的年级。
+        grade = if (points.isNotEmpty()) points.maxOf { it.grade } else s.grade.coerceIn(1, 9)
         term = s.term.coerceIn(0, 2)
         subjects = s.subjects.filter { it.availableFor(grade) }.ifEmpty { listOf(Subject.MATH) }
         subject = subjects.first()
@@ -798,11 +831,23 @@ class AppState(private val rawContext: Context) {
      * 全部解析失败或被清空（回落到默认全集，绝不留一个空 dock 让用户无路可走）。
      * 「更多」一定要在：它是这套开关的入口。
      */
-    private fun parseDockTabs(raw: String): List<NavTab> {
+    private fun parseDockTabs(raw: String, version: Int): List<NavTab> {
         val parsed = raw.split(',').mapNotNull { name ->
             NavTab.entries.firstOrNull { it.name == name.trim() }
         }.distinct().filter { it != NavTab.MORE }
-        val withMore = (parsed + NavTab.MORE).distinct()
+
+        // v0.24.0 加了「名卷」页签。老存档里那串名字是旧版本写的，里面没有 PAPERS，
+        // 光靠 parse 它永远不会出现 —— 升上来的用户会觉得「说好的新页面呢」。
+        // 按版本号补一次：用户不可能主动隐藏一个还没发布的页签，所以补进去是对的。
+        // 补完把版本号一起落盘，下次就不会再补（那时他真隐藏了也要尊重）。
+        val upgraded = if (version < DOCK_TABS_VERSION) {
+            (parsed + NavTab.entries.filter { it !in parsed && it != NavTab.MORE })
+                .sortedBy { it.ordinal }
+        } else {
+            parsed
+        }
+
+        val withMore = (upgraded + NavTab.MORE).distinct()
         return if (withMore.size < 2) DEFAULT_DOCK_TABS else withMore
     }
 
@@ -899,6 +944,7 @@ class AppState(private val rawContext: Context) {
         Screen.MORE.name -> Screen.MORE
         Screen.CREATE.name -> Screen.CREATE
         Screen.HISTORY.name -> Screen.HISTORY
+        Screen.PAPERS.name -> Screen.PAPERS
         Screen.TEXTBOOK.name -> Screen.TEXTBOOK
         Screen.HELP.name -> Screen.HELP
         else -> Screen.HOME
@@ -960,7 +1006,7 @@ class AppState(private val rawContext: Context) {
                 true
             }
             // 页签页：返回键先回首页，首页再按才退出 App
-            Screen.REFERENCE, Screen.MISTAKES, Screen.HISTORY, Screen.TEXTBOOK,
+            Screen.REFERENCE, Screen.MISTAKES, Screen.HISTORY, Screen.PAPERS, Screen.TEXTBOOK,
             Screen.MORE, Screen.STUDENTS -> {
                 screen = Screen.HOME
                 true
@@ -1039,6 +1085,8 @@ class AppState(private val rawContext: Context) {
         val t3 = android.os.SystemClock.elapsedRealtime()
         TextbookCatalog.init(ctx)
         val t4 = android.os.SystemClock.elapsedRealtime()
+        // 名卷库：776 条外站下载索引，只读标题和链接，不影响出卷
+        PaperLibrary.init(ctx)
         // 卷面样式（姓名栏 / 一行标题 / 页脚 / 行距）跟着设置一起读回来，
         // 用户上次调好的版式下次开 App 还是那样
         applySettings(LocalStore.loadSettings(ctx))

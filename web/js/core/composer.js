@@ -79,7 +79,8 @@ function pointSection(spec, point, questions, ordinal) {
     answerLines: t.answerLines,
     // 竖式那三个知识点需要「用竖式计算」这句说明；口算、比大小本来就没有说明
     instruction: t.instruction,
-    titleNote: '',
+    // 「π 取 3.14」这类常量说明印在标题行，题干就不必每题重复（v0.24.0）
+    titleNote: point.note ?? '',
     padWithLines: t.padWithLines !== false,
   };
 }

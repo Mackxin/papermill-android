@@ -359,6 +359,13 @@ enum class MathPoint(
     val defaultCount: Int,
     val hint: String,
     val webKey: String,
+    /**
+     * 印在大题标题同一行右边的灰字（v0.24.0）。
+     *
+     * 像「圆的周长与面积」每题都要写「π 取 3.14」，印 20 遍就把两栏宽的题干撑到折行；
+     * 提到标题行说一次，题干短了、也不挤。
+     */
+    val note: String = "",
 ) {
     G1_COMPARE("10以内数的比较", 1, 1, QuestionType.COMPARE, 20, "两个 0~10 的数比大小，填 ＞ ＜ ＝", "g1.compare"),
     G1_ADD10("10以内加法", 1, 2, QuestionType.ORAL, 20, "两个数相加不超过 10", "g1.add10"),
@@ -375,6 +382,23 @@ enum class MathPoint(
     G3_PERIMETER("长方形正方形周长", 3, 3, QuestionType.WORD_PROBLEM, 10, "给长宽算周长，边长与周长都不超过 200 厘米", "g3.perimeter"),
     G3_FRACTIONADDSUB("分数简单加减法", 3, 4, QuestionType.FRACTION, 20, "同分母分数加减，结果要约成最简", "g3.fractionAddSub"),
     G3_MULTWO("两位数乘两位数", 3, 5, QuestionType.VERTICAL, 12, "两个两位数相乘，积不超过 9999", "g3.mulTwo"),
+    G4_MULTHREE("三位数乘两位数", 4, 1, QuestionType.VERTICAL, 12, "三位数乘两位数，积是五位数，留竖式空", "g4.mulThree"),
+    G4_DIVTWO("除数是两位数的除法", 4, 2, QuestionType.VERTICAL, 12, "除数 11~89，商是两位数，一定除得尽", "g4.divTwo"),
+    G4_DECIMALADDSUB("一位小数加减法", 4, 3, QuestionType.ORAL, 20, "一位小数相加减，结果不出 100，小数点对齐", "g4.decimalAddSub"),
+    G4_MIXEDCALC("整数四则混合运算", 4, 4, QuestionType.EXPRESSION, 12, "先乘除后加减、带括号先算括号，结果都是整数", "g4.mixedCalc"),
+    G4_BIGCOMPARE("万以上数的比较", 4, 5, QuestionType.COMPARE, 20, "五位数 / 六位数比大小，填 ＞ ＜ ＝", "g4.bigCompare"),
+    G5_DECIMALMUL("小数乘整数", 5, 1, QuestionType.ORAL, 20, "一位小数乘整数，积仍是一位小数", "g5.decimalMul"),
+    G5_DECIMALDIV("小数除以整数", 5, 2, QuestionType.ORAL, 20, "一位小数除以一位数，全部除得尽", "g5.decimalDiv"),
+    G5_GCDLCM("最大公因数与最小公倍数", 5, 3, QuestionType.ORAL, 20, "只出真有公因数的两个数，问最大公因数或最小公倍数", "g5.gcdLcm"),
+    G5_REDUCE("约分", 5, 4, QuestionType.FRACTION, 20, "把分数约成最简，结果能约成整数就印整数", "g5.reduce"),
+    G5_FRACTIONADDSUBADV("异分母分数加减", 5, 5, QuestionType.FRACTION, 20, "分母是倍数关系，通分只变一个分母", "g5.fractionAddSubAdv"),
+    G5_POLYGONAREA("平行四边形三角形梯形面积", 5, 6, QuestionType.WORD_PROBLEM, 10, "给底和高算面积，三角形与梯形的答案一定是整数", "g5.polygonArea"),
+    G5_CUBOIDVOLUME("长方体正方体体积", 5, 7, QuestionType.WORD_PROBLEM, 10, "给棱长或长宽高算体积，单位立方厘米", "g5.cuboidVolume"),
+    G5_EQUATION("解简易方程", 5, 8, QuestionType.EQUATION, 10, "ax±b=c 两种形态，解是 2~20 的整数", "g5.equation"),
+    G6_FRACTIONMUL("分数乘法", 6, 1, QuestionType.FRACTION, 20, "两个真分数相乘，结果约成最简", "g6.fractionMul"),
+    G6_FRACTIONDIV("分数除法", 6, 2, QuestionType.FRACTION, 20, "除以一个分数等于乘它的倒数，结果约成最简", "g6.fractionDiv"),
+    G6_PERCENT("求一个数的百分之几", 6, 3, QuestionType.ORAL, 20, "百分数只出 10/20/25/40/50/60/75/80 这几个，全部口算得出", "g6.percent"),
+    G6_CIRCLE("圆的周长与面积", 6, 4, QuestionType.WORD_PROBLEM, 10, "给半径或直径求周长 / 面积，π 统一取 3.14", "g6.circle", "π 取 3.14"),
     ;
 
     companion object {

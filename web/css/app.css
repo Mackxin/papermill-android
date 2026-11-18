@@ -591,6 +591,29 @@ input[type="number"]::-webkit-inner-spin-button {
 
 .answer, .meta { font-size: 11px; color: var(--ink-3); }
 
+/* 名卷库的搜索框：跟筛选 chip 排在同一张卡里，占满一行 */
+.search-box {
+  width: 100%;
+  margin-top: 10px;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--ink-1);
+  background: #fff;
+}
+
+.search-box:focus {
+  outline: none;
+  border-color: #b9b0f0;
+  box-shadow: 0 0 0 3px rgba(137, 122, 232, 0.12);
+}
+
+/* 776 条标题都很长，一行放不下就让它折两行，别把右边按钮挤出卡片 */
+.lib-item > div:first-child { min-width: 0; }
+.lib-item b { word-break: break-word; }
+
 /* ---------------------------------------------------------------- 预览 */
 
 .preview-toolbar {
