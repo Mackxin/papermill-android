@@ -8,7 +8,7 @@
 
 import {
   DEFAULT_SPEC, TYPE, QUESTION_TYPES, Subject, SUBJECT_LABEL, Term,
-  GradeProfiles, effectiveSubjects, makeContext,
+  GradeProfiles, effectiveSubjects, makeContext, kindOf,
 } from './models.js';
 import { Rng, sectionSeed } from './models.js';
 import { availableTypes, generatorOf, isCrossSubject, runGenerator, subjectOf, generatorCount } from './registry.js';
@@ -98,7 +98,7 @@ export function compose(spec, historyHashes = new Set()) {
     const ctx = makeContext({
       grade: spec.grade,
       count,
-      difficulty: spec.difficulty,
+      difficulty: kindDifficulty(spec),
       rng,
       blocked,
       subjects: effectiveSubjects(spec),
@@ -153,25 +153,70 @@ export function compose(spec, historyHashes = new Set()) {
   };
 }
 
+/** 卷型自带的难度加成（竞赛 / 奥数 / 小升初 +1）：和用户选的难度相加，1~3 封顶 */
+export function kindDifficulty(spec) {
+  const boost = kindOf(spec.kind).boost ?? 0;
+  return Math.min(Math.max((spec.difficulty ?? 2) + boost, 1), 3);
+}
+
+/**
+ * 卷型在卷头上印的那几个字。
+ *
+ * 用户点一下「期末测试」，卷头立刻变成「小学 · 三年级 · 数学期末测试」——
+ * 这是最快的反馈：不用回头看配比也知道点上了。
+ */
+const KIND_WORD = {
+  ALL: '综合练习',
+  UNIT: '单元测试',
+  MIDTERM: '期中测试',
+  FINAL: '期末测试',
+  PRACTICE: '练习',
+  PINYIN: '拼音专项',
+  REVIEW: '复习卷',
+  COMPREHENSIVE: '综合测试',
+  CONTEST: '竞赛卷',
+  OLYMPIAD: '奥数卷',
+  GRADUATION: '小升初冲刺',
+};
+
+export function autoTitleFor(grade, subjects, kind) {
+  const word = KIND_WORD[kindOf(kind).key] ?? '练习';
+  const head = `${GradeProfiles.stageLabel(grade)} · ${GradeProfiles.gradeLabel(grade)}`;
+  const list = Array.isArray(subjects) ? subjects : [subjects];
+  return list.length > 1 ? `${head} · ${word}` : `${head} · ${SUBJECT_LABEL[list[0]] || ''}${word}`;
+}
+
 // ------------------------------------------------------------------ 默认规格
 
-function countFor(t, index, purpose) {
-  const table = purpose === 'DAILY' ? [30, 10, 8, 8] : purpose === 'UNIT' ? [18, 10, 8, 6] : [16, 10, 8, 6];
-  const want = table[Math.min(Math.max(index, 0), table.length - 1)];
+/** 每种卷型铺几种题型、第一种出多少题，全在 PAPER_KINDS 表里；这里只负责按答题线兜上限 */
+function countFor(t, index, kind) {
+  const sizes = kindOf(kind).sizes ?? [16, 10, 8, 6];
+  const want = sizes[Math.min(Math.max(index, 0), sizes.length - 1)];
   const al = TYPE[t].answerLines;
   const cap = al >= 3 ? 8 : al === 2 ? 10 : al === 1 ? 16 : Number.MAX_SAFE_INTEGER;
   return Math.min(want, cap);
 }
 
-function orderByTilt(types, tilt) {
+const TILT_LABEL = { CHOICE: '选择', BLANK: '填空', JUDGE: '判断', CALC: '计算', APPLY: '应用', READING: '阅读' };
+
+/**
+ * 按「卷型 + 题型倾向」排序。
+ *
+ * 卷型自带的偏好题型（拼音卷的看拼音写词语、竞赛卷的找规律…）排在**最前**，
+ * 其次才是题型倾向偏好的大类。两层都只排序不过滤 —— 这一年级没有那类题时，
+ * 卷子总得能出，退化成原顺序即可。
+ */
+function orderByTilt(types, tilt, kind) {
   const prefer = TILTS_PREFER[tilt];
-  if (!prefer) return types;
-  const label = { CHOICE: '选择', BLANK: '填空', JUDGE: '判断', CALC: '计算', APPLY: '应用', READING: '阅读' }[prefer];
+  const label = prefer ? TILT_LABEL[prefer] : '';
+  const picked = kindOf(kind).prefer ?? [];
   return types
-    .map((t) => ({
-      t,
-      score: TYPE[t].label.includes(label) ? 2 : TYPE[t].family === prefer ? 1 : 0,
-    }))
+    .map((t) => {
+      const i = picked.indexOf(t);
+      let score = i >= 0 ? 100 - i : 0;
+      if (prefer) score += TYPE[t].label.includes(label) ? 2 : TYPE[t].family === prefer ? 1 : 0;
+      return { t, score };
+    })
     .sort((a, b) => b.score - a.score)
     .map((x) => x.t);
 }
@@ -181,22 +226,23 @@ const TILTS_PREFER = {
   CALC: 'CALC', APPLY: 'APPLY', READING: 'READING',
 };
 
-const PURPOSE_KINDS = { DAILY: 1, UNIT: 3, REVIEW: 4 };
-
-/** 科学卷的三块配比：题库每级每型只有 12 道，上限就是 12 */
-function scienceCounts(tilt, purpose) {
+/** 科学卷的三块配比：题库每级每型只有 12 道，上限就是 12；卷型只决定铺两块还是三块 */
+function scienceCounts(tilt, kind) {
+  const k = kindOf(kind);
   const prefer = TILTS_PREFER[tilt];
   const main = prefer === 'CHOICE' ? 'SCIENCE_CHOICE'
     : prefer === 'BLANK' ? 'SCIENCE_BLANK' : 'SCIENCE_JUDGE';
   const others = ['SCIENCE_CHOICE', 'SCIENCE_JUDGE', 'SCIENCE_BLANK'].filter((t) => t !== main);
   const out = {};
-  if (purpose === 'DAILY') {
+  if (k.kinds <= 2) {
+    // 练习题 / 单元测试：主型刷满 + 一个陪衬，一页刚好
     out[main] = 12;
     out[others[0]] = 8;
-  } else if (purpose === 'UNIT') {
+  } else if (k.kinds === 3) {
     out[main] = 12;
     others.forEach((t) => { out[t] = 8; });
   } else {
+    // 期中 / 期末 / 综合：三块都按题库上限压满
     out[main] = 12;
     others.forEach((t) => { out[t] = 10; });
   }
@@ -207,15 +253,15 @@ function scienceCounts(tilt, purpose) {
 export function tiltFits(grade, subjects, tilt) {
   const prefer = TILTS_PREFER[tilt];
   if (!prefer) return true;
-  const label = { CHOICE: '选择', BLANK: '填空', JUDGE: '判断', CALC: '计算', APPLY: '应用', READING: '阅读' }[prefer];
+  const label = TILT_LABEL[prefer];
   return availableTypes(grade, subjects).some((t) => TYPE[t].family === prefer || TYPE[t].label.includes(label));
 }
 
-function pickForSubjects(types, subjects, tilt, purpose) {
+function pickForSubjects(types, subjects, tilt, kind) {
   const out = [];
-  const target = PURPOSE_KINDS[purpose] + Math.max(subjects.length - 1, 0);
+  const target = kindOf(kind).kinds + Math.max(subjects.length - 1, 0);
   subjects.forEach((s) => {
-    const mine = orderByTilt(types.filter((t) => subjectOf(t) === s), tilt);
+    const mine = orderByTilt(types.filter((t) => subjectOf(t) === s), tilt, kind);
     if (mine[0] && !out.includes(mine[0])) out.push(mine[0]);
   });
   let round = 0;
@@ -223,7 +269,7 @@ function pickForSubjects(types, subjects, tilt, purpose) {
     let added = false;
     for (const s of subjects) {
       if (out.length >= target) break;
-      const mine = orderByTilt(types.filter((t) => subjectOf(t) === s), tilt);
+      const mine = orderByTilt(types.filter((t) => subjectOf(t) === s), tilt, kind);
       const next = mine.find((t) => !out.includes(t));
       if (next) { out.push(next); added = true; }
     }
@@ -233,41 +279,39 @@ function pickForSubjects(types, subjects, tilt, purpose) {
   return out;
 }
 
-export function specWith({ grade, subject, counts, seed, title, isMistakePaper = false, subjects = [], tilt = 'BALANCED', purpose = 'DAILY', term }) {
+export function specWith({ grade, subject, counts, seed, title, isMistakePaper = false, subjects = [], tilt = 'BALANCED', kind = 'ALL', term }) {
   const total = Object.values(counts).reduce((a, b) => a + b, 0);
-  const autoTitle = subjects.length > 1
-    ? `${GradeProfiles.stageLabel(grade)} · ${GradeProfiles.gradeLabel(grade)} · 综合练习`
-    : `${GradeProfiles.stageLabel(grade)} · ${GradeProfiles.gradeLabel(grade)} · ${SUBJECT_LABEL[subject] || ''}练习`;
+  const list = subjects.length ? subjects : [subject];
   return {
     ...DEFAULT_SPEC,
     grade,
     subject,
-    title: title ?? autoTitle,
+    title: title ?? autoTitleFor(grade, list, kind),
     subtitle: `共 ${total} 题　满分 ${total * 2} 分`,
     counts,
     seed: seed ?? (Date.now() % 2147483647),
     isMistakePaper,
     subjects,
     tilt,
-    purpose,
+    kind: kindOf(kind).key,
     term: term ?? Term.FIRST,
   };
 }
 
 /** 默认规格：打开就能直接出一份 */
-export function defaultSpec(grade, subjects, tilt = 'BALANCED', purpose = 'DAILY', term = Term.FIRST) {
+export function defaultSpec(grade, subjects, tilt = 'BALANCED', kind = 'ALL', term = Term.FIRST) {
   const list = Array.isArray(subjects) ? subjects : [subjects];
   const primary = list[0] ?? Subject.MATH;
   const types = availableTypes(grade, list);
   const counts = {};
   if (list.length === 1 && primary === Subject.SCIENCE) {
-    Object.assign(counts, scienceCounts(tilt, purpose));
+    Object.assign(counts, scienceCounts(tilt, kind));
   } else if (list.length > 1) {
-    pickForSubjects(types, list, tilt, purpose).forEach((t, i) => { counts[t] = countFor(t, i, purpose); });
+    pickForSubjects(types, list, tilt, kind).forEach((t, i) => { counts[t] = countFor(t, i, kind); });
   } else {
-    orderByTilt(types, tilt).slice(0, PURPOSE_KINDS[purpose]).forEach((t, i) => { counts[t] = countFor(t, i, purpose); });
+    orderByTilt(types, tilt, kind).slice(0, kindOf(kind).kinds).forEach((t, i) => { counts[t] = countFor(t, i, kind); });
   }
-  return specWith({ grade, subject: primary, counts, subjects: list, tilt, purpose, term });
+  return specWith({ grade, subject: primary, counts, subjects: list, tilt, kind, term });
 }
 
 // ------------------------------------------------------------------ 自编题

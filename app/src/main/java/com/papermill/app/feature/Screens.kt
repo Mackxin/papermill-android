@@ -93,7 +93,7 @@ import com.papermill.app.domain.generate.FooterSize
 import com.papermill.app.domain.generate.GradeProfiles
 import com.papermill.app.domain.generate.LineGap
 import com.papermill.app.domain.generate.PageOrientation
-import com.papermill.app.domain.generate.PaperPurpose
+import com.papermill.app.domain.generate.PaperKind
 import com.papermill.app.domain.generate.PaperTemplates
 import com.papermill.app.domain.generate.QuestionType
 import com.papermill.app.domain.generate.Subject
@@ -1534,18 +1534,32 @@ private fun CreateScreen(state: AppState, scope: CoroutineScope) {
             )
         }
         Divider()
-        SettingRow("卷面用途") {
-            PaperPurpose.values().forEach { p ->
-                ChoiceChip(p.label, state.purpose == p) { state.applyPreference(newPurpose = p) }
+        // 11 个卷型一行塞不下：FlowRow 自然折行，两行也整齐
+        SettingRowFlow("卷型") {
+            PaperKind.values().forEach { k ->
+                // 拼音只到六年级、小升初只在五六年级；其余按年级都能选
+                val usable = k.fits(state.grade)
+                ChoiceChip(k.label, state.kind == k, enabled = usable) {
+                    state.applyPreference(newKind = k)
+                }
             }
         }
         Text(
-            state.purpose.hint + "　当前配比：" +
+            state.kind.hint + "　当前配比：" +
                 state.counts.entries.joinToString("、") { "${it.key.label} ${it.value}" },
             fontSize = PaperDimens.TinySp,
             color = PaperColors.OnSurfaceVariant,
             lineHeight = 15.sp,
         )
+        if (state.kind != PaperKind.ALL) {
+            Text(
+                "换了卷型会重算题型与题量；已经手动调过的题量会被覆盖，点卷型就是重新开始配比。",
+                fontSize = PaperDimens.TinySp,
+                color = PaperColors.Muted,
+                lineHeight = 15.sp,
+                modifier = Modifier.padding(top = 3.dp),
+            )
+        }
     }
 
     // v0.6.0 题型库：搜索 + 按科目筛选，点「＋10」就能加进组合
@@ -2006,6 +2020,23 @@ private fun SettingRow(label: String, content: @Composable () -> Unit) {
         modifier = Modifier.padding(bottom = 7.dp, top = 4.dp),
     )
     Row(horizontalArrangement = Arrangement.spacedBy(PaperDimens.GapSmall)) { content() }
+    Spacer(Modifier.height(10.dp))
+}
+
+/** 同 [SettingRow]，但内容会自动折行 —— 11 个卷型硬塞一行会被挤出屏幕 */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun SettingRowFlow(label: String, content: @Composable () -> Unit) {
+    Text(
+        label,
+        fontSize = PaperDimens.CaptionSp,
+        color = PaperColors.OnSurfaceVariant,
+        modifier = Modifier.padding(bottom = 7.dp, top = 4.dp),
+    )
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(PaperDimens.GapSmall),
+        verticalArrangement = Arrangement.spacedBy(PaperDimens.GapSmall),
+    ) { content() }
     Spacer(Modifier.height(10.dp))
 }
 

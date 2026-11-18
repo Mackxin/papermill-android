@@ -172,11 +172,96 @@ export const TILTS = [
   { key: 'READING', label: '阅读理解偏多', hint: '连词成句 / 选词填空这类语英阅读题占大头', prefer: 'READING' },
 ];
 
-export const PURPOSES = [
-  { key: 'DAILY', label: '日常巩固', hint: '一两种题型大量练，一页盯住一个知识点', kinds: 1 },
-  { key: 'UNIT', label: '单元检测', hint: '三四种题型均衡，覆盖一个单元', kinds: 3 },
-  { key: 'REVIEW', label: '综合复习', hint: '题型铺满、题量更大，按整册复习', kinds: 4 },
+/**
+ * 卷型（试卷类型）—— 参照常见试卷库的栏目分类：
+ * 单元测试 / 期中测试 / 期末测试 / 练习题 / 拼音 / 复习题 / 综合测试 / 竞赛 / 奥数 / 小升初。
+ * 第一项「全部」= 不限定卷型，题型都来一点。
+ *
+ * 每一项都必须**真的改变出什么题**，否则又变成「点了有反应、反应是假的」：
+ *   kinds     铺几种题型
+ *   sizes     第 1、2、3… 种题型各出多少题（按顺序取，超出部分沿用最后一个）
+ *   prefer    这种卷优先挑的题型（排到最前）；空 = 只看「题型倾向」
+ *   boost     题库选题难度上调几档（和用户选的难度相加，1~3 封顶）
+ *   only      只能按这个科目出（拼音 = 语文，奥数 = 数学）
+ *   minGrade / maxGrade   这种卷有意义的年级区间（拼音只到小学；小升初从五年级起）
+ */
+const THINKING = [
+  'NUMBER_PATTERN', 'COMPARE', 'FILL_BLANK', 'WORD_PROBLEM', 'CHAIN_CALC',
+  'EXPRESSION', 'FRACTION', 'EQUATION', 'BAR_CHART', 'COUNTING',
 ];
+const BASIC = [
+  'ORAL', 'PINYIN', 'DICTATION', 'HANZI', 'ENGLISH_WORD', 'FILL_BLANK',
+  'UNIT_CONVERT', 'KNOWLEDGE', 'CURRIC_BLANK', 'SCIENCE_JUDGE',
+];
+const PINYIN_TYPES = ['PINYIN', 'THEME_PINYIN', 'DICTATION', 'HANZI', 'TEXTBOOK_HANZI'];
+
+export const PAPER_KINDS = [
+  {
+    key: 'ALL', label: '全部', kinds: 4, sizes: [16, 10, 8, 6], prefer: [],
+    hint: '不限定卷型：四类题型各来一点，按年级常规配比',
+  },
+  {
+    key: 'UNIT', label: '单元测试', kinds: 3, sizes: [18, 10, 8], prefer: [],
+    hint: '三四种题型均衡，覆盖一个单元，中等题量',
+  },
+  {
+    key: 'MIDTERM', label: '期中测试', kinds: 4, sizes: [18, 10, 10, 8], prefer: [],
+    hint: '四种题型均衡，覆盖前半册，题量偏大',
+  },
+  {
+    key: 'FINAL', label: '期末测试', kinds: 5, sizes: [18, 12, 10, 8, 6], prefer: [],
+    hint: '五种题型铺满全册，题量最大，适合期末总练',
+  },
+  {
+    key: 'PRACTICE', label: '练习题', kinds: 1, sizes: [30, 12, 8], prefer: [],
+    hint: '一两种题型大量练，一页盯住一个知识点',
+  },
+  {
+    key: 'PINYIN', label: '拼音', kinds: 3, sizes: [20, 10, 8], only: 'CHINESE',
+    prefer: PINYIN_TYPES, maxGrade: 6,
+    hint: '语文拼音专项：看拼音写词语 / 生字注音 / 补全词语（自动切到语文）',
+  },
+  {
+    key: 'REVIEW', label: '复习题', kinds: 4, sizes: [16, 12, 10, 8], prefer: BASIC,
+    hint: '题型铺满但以基础题为主，考前查漏补缺',
+  },
+  {
+    key: 'COMPREHENSIVE', label: '综合测试', kinds: 6, sizes: [16, 12, 10, 8, 6, 6], prefer: [],
+    hint: '六种题型尽可能铺满，多题型混合检测',
+  },
+  {
+    key: 'CONTEST', label: '竞赛', kinds: 4, sizes: [10, 6, 6, 4], prefer: THINKING, boost: 1,
+    hint: '题量少而难：以找规律 / 应用题 / 巧算为主，题库难度上调一档',
+  },
+  {
+    key: 'OLYMPIAD', label: '奥数', kinds: 3, sizes: [8, 6, 6], prefer: THINKING, boost: 1,
+    only: 'MATH',
+    hint: '数学思维专项：找规律、巧算、应用题（自动切到数学，难度上调一档）',
+  },
+  {
+    key: 'GRADUATION', label: '小升初', kinds: 6, sizes: [16, 12, 10, 8, 6, 6],
+    prefer: THINKING, boost: 1, minGrade: 5, maxGrade: 6,
+    hint: '五六年级升学衔接：题型铺满、综合度最高，难度上调一档',
+  },
+];
+
+export const KIND = {};
+PAPER_KINDS.forEach((k) => { KIND[k.key] = k; });
+
+/** 老存档里的 purpose（DAILY / UNIT / REVIEW）映射到新卷型，别让更新后的人打开就崩 */
+const LEGACY_KIND = { DAILY: 'PRACTICE', UNIT: 'UNIT', REVIEW: 'REVIEW' };
+
+export function kindOf(key) {
+  return KIND[key] ?? KIND[LEGACY_KIND[key]] ?? KIND.ALL;
+}
+
+/** 这个年级有没有这种卷（拼音只到六年级、小升初从五年级起） */
+export function kindFits(grade, key) {
+  const k = kindOf(key);
+  const lo = k.minGrade ?? 1;
+  const hi = k.maxGrade ?? 9;
+  return grade >= lo && grade <= hi;
+}
 
 export const ANSWER_MODES = [
   { key: 'NONE', label: '不带答案' },
@@ -336,7 +421,8 @@ export const DEFAULT_SPEC = {
   isMistakePaper: false,
   subjects: [],
   tilt: 'BALANCED',
-  purpose: 'DAILY',
+  /** 卷型：全部 / 单元测试 / 期中测试 / 期末测试 / 练习题 / 拼音 / 复习题 / 综合测试 / 竞赛 / 奥数 / 小升初 */
+  kind: 'ALL',
   orientation: 'PORTRAIT',
   topicIds: [],
   headerOneLine: false,

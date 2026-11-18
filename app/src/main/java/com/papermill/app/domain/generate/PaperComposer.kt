@@ -34,7 +34,7 @@ object PaperComposer {
             val ctx = GenContext(
                 grade = spec.grade,
                 count = count,
-                difficulty = spec.difficulty,
+                difficulty = kindDifficulty(spec),
                 rng = rng,
                 blocked = blocked,
                 subjects = spec.effectiveSubjects().toSet(),
@@ -186,26 +186,28 @@ object PaperComposer {
     /**
      * 默认规格：打开就能直接出一份。
      *
-     * v0.12.0 起由「卷面用途」决定铺多宽、「题型倾向」决定以哪类题为主：
-     *  - 日常巩固：一两种题型大量练，一页盯住一个知识点（原来就是这个行为）
-     *  - 单元检测：三四种题型均衡
-     *  - 综合复习：题型铺满、题量更大
+     * v0.21.0 起由「卷型」决定铺多宽、题量多大、优先挑哪类题（见 [PaperKind]）：
+     *  - 全部：四类题型各来一点，按年级常规配比
+     *  - 单元 / 期中 / 期末：3 → 4 → 5 种题型，题量依次加大
+     *  - 练习题：一两种题型大量练，一页盯住一个知识点（原来的 DAILY，单题型卷的道理没变：
+     *    每个大题另起一页，「口算 20 + 竖式 4」会白占两张纸）
+     *  - 拼音 / 奥数：语文、数学的专项卷，卷型自带科目
+     *  - 竞赛 / 小升初：题量少、思维题多、题库难度上调一档
      *
-     * 单题型卷仍然有它的道理：每个大题另起一页，「口算 20 + 竖式 4」会白占两张纸。
-     * 所以 DAILY 只给一种题型，靠自动补题把整页填满。
+     * 「题型倾向」仍然管以哪类题为主，两者叠加排序（卷型偏好在前，倾向在后）。
      */
     fun defaultSpec(
         grade: Int,
         subject: Subject,
         tilt: Tilt = Tilt.BALANCED,
-        purpose: PaperPurpose = PaperPurpose.DAILY,
-    ): PaperSpec = defaultSpec(grade, listOf(subject), tilt, purpose)
+        kind: PaperKind = PaperKind.ALL,
+    ): PaperSpec = defaultSpec(grade, listOf(subject), tilt, kind)
 
     fun defaultSpec(
         grade: Int,
         subjects: List<Subject>,
         tilt: Tilt = Tilt.BALANCED,
-        purpose: PaperPurpose = PaperPurpose.DAILY,
+        kind: PaperKind = PaperKind.ALL,
     ): PaperSpec {
         val primary = subjects.firstOrNull() ?: Subject.MATH
         val types = GeneratorRegistry.availableFor(grade, subjects)
@@ -214,17 +216,17 @@ object PaperComposer {
             // 科学是知识型科目，一份卷子本来就是「选择 + 判断 + 填空」三块，
             // 不像数学那样一种题型刷 30 道。而且题库每个年级每型只有 12 道，
             // 默认开 30 题会印出一张只有 12 题的卷子，标题和实际对不上。
-            scienceCounts(tilt, purpose).forEach { (t, n) -> counts[t] = n }
+            scienceCounts(tilt, kind).forEach { (t, n) -> counts[t] = n }
         } else if (subjects.size > 1) {
             // 多学科：每个科目至少要有一个题型，否则勾了英语却一道英语题都没有
-            pickForSubjects(types, subjects, tilt, purpose).forEachIndexed { i, t ->
-                counts[t] = countFor(t, i, purpose)
+            pickForSubjects(types, subjects, tilt, kind).forEachIndexed { i, t ->
+                counts[t] = countFor(t, i, kind)
             }
         } else {
-            val picked = orderByTilt(types, tilt).take(purpose.kinds)
-            picked.forEachIndexed { i, t -> counts[t] = countFor(t, i, purpose) }
+            val picked = orderByTilt(types, tilt, kind).take(kind.kinds)
+            picked.forEachIndexed { i, t -> counts[t] = countFor(t, i, kind) }
         }
-        return specWith(grade, primary, counts, subjects = subjects, tilt = tilt, purpose = purpose)
+        return specWith(grade, primary, counts, subjects = subjects, tilt = tilt, kind = kind)
     }
 
     /**
@@ -234,9 +236,9 @@ object PaperComposer {
      * 写成 30 会印出一张只有 12 题的卷子，卷头写着 30 题。
      *
      * v0.12.0 之前这里写死 8/10/8，把倾向和用途整个吞了：用户在科学卷上连点七种倾向，
-     * 配比一个数字都不动。现在让倾向决定「主型」，用途决定「铺多宽」。
+     * 配比一个数字都不动。现在让倾向决定「主型」，卷型决定「铺多宽」。
      */
-    private fun scienceCounts(tilt: Tilt, purpose: PaperPurpose): Map<QuestionType, Int> {
+    private fun scienceCounts(tilt: Tilt, kind: PaperKind): Map<QuestionType, Int> {
         // 主型：倾向指哪儿打哪儿；均衡搭配 / 该倾向科学上不适用时，默认判断题（科学最常用的辨析形式）
         val main = when (tilt.prefer) {
             QuestionFamily.CHOICE -> QuestionType.SCIENCE_CHOICE
@@ -250,19 +252,19 @@ object PaperComposer {
             QuestionType.SCIENCE_BLANK,
         ).filter { it != main }
         val out = LinkedHashMap<QuestionType, Int>()
-        when (purpose) {
-            // 日常巩固：主型刷满 + 一个陪衬，一页刚好
-            PaperPurpose.DAILY -> {
+        when {
+            // 练习题 / 只铺一两种：主型刷满 + 一个陪衬，一页刚好
+            kind.kinds <= 2 -> {
                 out[main] = 12
                 out[others.first()] = 8
             }
-            // 单元检测：三块都有，主型略多
-            PaperPurpose.UNIT -> {
+            // 单元测试：三块都有，主型略多
+            kind.kinds == 3 -> {
                 out[main] = 12
                 others.forEach { out[it] = 8 }
             }
-            // 综合复习：三块都按题库上限压满
-            PaperPurpose.REVIEW -> {
+            // 期中 / 期末 / 综合：三块都按题库上限压满
+            else -> {
                 out[main] = 12
                 others.forEach { out[it] = 10 }
             }
@@ -285,44 +287,49 @@ object PaperComposer {
     }
 
     /**
-     * 按倾向排序：**题型名字更贴切的优先**，其次才看大类。
+     * 按「卷型 + 倾向」排序：卷型自带的偏好题型排最前（拼音卷的看拼音写词语、
+     * 竞赛卷的找规律…），其次才看题型倾向 —— 名字更贴切的优先，再其次看大类。
      *
      * 只按大类排会挑出「自编题库」这种混装题当选择题代表；
      * 名字里直接带「选择 / 填空 / 判断 / 应用」的题型才是这个倾向的正解。
      * 只排序不过滤 —— 这一年级压根没有该类题时，卷子总得能出，退化成原顺序即可。
      */
-    private fun orderByTilt(types: List<QuestionType>, tilt: Tilt): List<QuestionType> {
-        val prefer = tilt.prefer ?: return types
+    private fun orderByTilt(types: List<QuestionType>, tilt: Tilt, kind: PaperKind): List<QuestionType> {
+        val prefer = tilt.prefer
         return types.sortedByDescending { t ->
-            when {
-                t.label.contains(prefer.label) -> 2
-                t.family == prefer -> 1
-                else -> 0
+            var score = kind.preferTypes.indexOf(t).let { i -> if (i >= 0) 100 - i else 0 }
+            if (prefer != null) {
+                score += when {
+                    t.label.contains(prefer.label) -> 2
+                    t.family == prefer -> 1
+                    else -> 0
+                }
             }
+            score
         }
     }
 
-    /** 多学科时，每个科目按倾向挑一个代表题型，凑够 [PaperPurpose.kinds] 种 */
+    /** 多学科时，每个科目按「卷型 + 倾向」挑一个代表题型，凑够 [PaperKind.kinds] 种 */
     private fun pickForSubjects(
         types: List<QuestionType>,
         subjects: List<Subject>,
         tilt: Tilt,
-        purpose: PaperPurpose,
+        kind: PaperKind,
     ): List<QuestionType> {
         val out = LinkedHashMap<QuestionType, Unit>()
         val perSubject = LinkedHashMap<Subject, Int>()
         // 先保证每科一个（挑该科里最贴合倾向的那个）
         subjects.forEach { s ->
-            val mine = orderByTilt(types.filter { GeneratorRegistry.subjectOf(it) == s }, tilt)
+            val mine = orderByTilt(types.filter { GeneratorRegistry.subjectOf(it) == s }, tilt, kind)
             mine.firstOrNull()?.let { out[it] = Unit; perSubject[s] = 1 }
         }
         // 再按倾向补足到目标数量，轮流照顾每个科目，避免全给第一科
         var round = 0
-        while (out.size < purpose.kinds + (subjects.size - 1).coerceAtLeast(0) && round < 8) {
+        while (out.size < kind.kinds + (subjects.size - 1).coerceAtLeast(0) && round < 8) {
             var added = false
             subjects.forEach { s ->
-                if (out.size >= purpose.kinds + (subjects.size - 1).coerceAtLeast(0)) return@forEach
-                val mine = orderByTilt(types.filter { GeneratorRegistry.subjectOf(it) == s }, tilt)
+                if (out.size >= kind.kinds + (subjects.size - 1).coerceAtLeast(0)) return@forEach
+                val mine = orderByTilt(types.filter { GeneratorRegistry.subjectOf(it) == s }, tilt, kind)
                 val next = mine.firstOrNull { it !in out }
                 if (next != null) {
                     out[next] = Unit
@@ -337,19 +344,16 @@ object PaperComposer {
     }
 
     /**
-     * 第 [index] 个题型的默认题量。
+     * 第 [index] 个题型的默认题量。卷型表里给了每个位置的题量（[PaperKind.sizes]），
+     * 这里再按答题线兜一道上限。
      *
      * 两重约束：
      *  - 靠前的大题题量更大，靠后的递减，否则「两大题各 30 道」直接把卷子拉成三页；
      *  - 带答题线的题一道占好几行，按行数封顶 —— 应用题给 16 道，一页根本装不下。
      */
-    private fun countFor(t: QuestionType, index: Int, purpose: PaperPurpose): Int {
-        val table = when (purpose) {
-            PaperPurpose.DAILY -> intArrayOf(30, 10, 8, 8)
-            PaperPurpose.UNIT -> intArrayOf(18, 10, 8, 6)
-            PaperPurpose.REVIEW -> intArrayOf(16, 10, 8, 6)
-        }
-        val want = table[index.coerceIn(0, table.lastIndex)]
+    private fun countFor(t: QuestionType, index: Int, kind: PaperKind): Int {
+        val sizes = kind.sizes
+        val want = sizes[index.coerceIn(0, sizes.lastIndex)]
         val cap = when {
             t.answerLines >= 3 -> 8
             t.answerLines == 2 -> 10
@@ -368,18 +372,13 @@ object PaperComposer {
         isMistakePaper: Boolean = false,
         subjects: List<Subject> = emptyList(),
         tilt: Tilt = Tilt.BALANCED,
-        purpose: PaperPurpose = PaperPurpose.DAILY,
+        kind: PaperKind = PaperKind.ALL,
     ): PaperSpec {
         val total = counts.values.sum()
-        val autoTitle = if (subjects.size > 1) {
-            "${GradeProfiles.stageLabel(grade)} · ${GradeProfiles.gradeLabel(grade)} · 综合练习"
-        } else {
-            "${GradeProfiles.stageLabel(grade)} · ${GradeProfiles.gradeLabel(grade)} · ${subject.label}练习"
-        }
         return PaperSpec(
             grade = grade,
             subject = subject,
-            title = title ?: autoTitle,
+            title = title ?: autoTitle(grade, subjects.ifEmpty { listOf(subject) }, kind),
             subtitle = "共 $total 题　满分 ${total * 2} 分",
             counts = counts,
             difficulty = 2,
@@ -391,9 +390,42 @@ object PaperComposer {
             isMistakePaper = isMistakePaper,
             subjects = subjects,
             tilt = tilt,
-            purpose = purpose,
+            kind = kind,
         )
     }
+
+    /**
+     * 自动标题：「小学 · 三年级 · 数学期末测试」。
+     *
+     * 点一下卷型，卷头那几个字立刻跟着变 —— 这是最快的反馈：不用回头看配比，
+     * 也知道这一次点上了（只有「配比真的变了」还不够，用户得看得见）。
+     */
+    fun autoTitle(grade: Int, subjects: List<Subject>, kind: PaperKind): String {
+        val head = "${GradeProfiles.stageLabel(grade)} · ${GradeProfiles.gradeLabel(grade)}"
+        return if (subjects.size > 1) {
+            "$head · ${kindWord(kind)}"
+        } else {
+            "$head · ${subjects.firstOrNull()?.label ?: ""}${kindWord(kind)}"
+        }
+    }
+
+    /** 卷头上印的卷型名：跟网页端 KIND_WORD 一字不差 */
+    fun kindWord(kind: PaperKind): String = when (kind) {
+        PaperKind.ALL -> "综合练习"
+        PaperKind.UNIT -> "单元测试"
+        PaperKind.MIDTERM -> "期中测试"
+        PaperKind.FINAL -> "期末测试"
+        PaperKind.PRACTICE -> "练习"
+        PaperKind.PINYIN -> "拼音专项"
+        PaperKind.REVIEW -> "复习卷"
+        PaperKind.COMPREHENSIVE -> "综合测试"
+        PaperKind.CONTEST -> "竞赛卷"
+        PaperKind.OLYMPIAD -> "奥数卷"
+        PaperKind.GRADUATION -> "小升初冲刺"
+    }
+
+    /** 卷型自带的难度加成（竞赛 / 奥数 / 小升初 +1）：与用户选的难度相加，1~3 封顶 */
+    fun kindDifficulty(spec: PaperSpec): Int = (spec.difficulty + spec.kind.boost).coerceIn(1, 3)
 
     /**
      * 把「每道题都重复一遍的做题指令」抽出来，作为大题说明只印一次。

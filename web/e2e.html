@@ -163,6 +163,86 @@ await test('出卷页 · 题型 / 模板 / 卷面定制', () => {
 });
 
 // 2 ---------------------------------------------------------------
+await test('卷型 · 11 个类型都在，点「期末测试」标题与题型数一起变', async () => {
+  const f = findField(q('#view'), '卷型');
+  if (!f) throw new Error('出卷页没有「卷型」这一项');
+  const labels = [...f.querySelectorAll('.chip')].map(T);
+  const need = ['全部', '单元测试', '期中测试', '期末测试', '练习题', '拼音', '复习题', '综合测试', '竞赛', '奥数', '小升初'];
+  if (labels.length !== need.length) throw new Error(`卷型有 ${labels.length} 个：${labels.join('/')}`);
+  const miss = need.filter((x) => !labels.includes(x));
+  if (miss.length) throw new Error('缺卷型：' + miss.join('、'));
+  viewChip('卷型', '期末测试').click();
+  await sleep(150);
+  const paper = await generate();
+  if (!/期末测试/.test(paper.text)) throw new Error('卷头没印「期末测试」：' + paper.text.slice(0, 60));
+  const sections = (paper.text.match(/（每题 \d+ 分/g) ?? []).length;
+  if (sections < 5) throw new Error(`期末测试只排了 ${sections} 个大题，应该有 5 个`);
+  return `11 个卷型 · 期末测试 ${sections} 个大题`;
+});
+
+// 3 ---------------------------------------------------------------
+await test('卷型 · 练习题只出一个大题、竞赛换成思维题', async () => {
+  goCreate();
+  await waitFor(() => q('#view .create-actions'), '出卷页');
+  viewChip('卷型', '练习题').click();
+  await sleep(150);
+  let p = await generate();
+  let n = (p.text.match(/（每题 \d+ 分/g) ?? []).length;
+  if (n !== 1) throw new Error(`练习题排了 ${n} 个大题，应该只有 1 个`);
+  goCreate();
+  await waitFor(() => q('#view .create-actions'), '出卷页');
+  viewChip('卷型', '竞赛').click();
+  await sleep(150);
+  p = await generate();
+  n = (p.text.match(/（每题 \d+ 分/g) ?? []).length;
+  if (n < 3) throw new Error(`竞赛只排了 ${n} 个大题`);
+  if (!/找规律|应用题|比大小|填括号/.test(p.text)) throw new Error('竞赛卷里没有一道思维题：' + p.text.slice(0, 120));
+  return `练习题 1 个大题 · 竞赛 ${n} 个大题且含思维题`;
+});
+
+// 4 ---------------------------------------------------------------
+await test('卷型 · 拼音自动切到语文，题全是字词拼音', async () => {
+  goCreate();
+  await waitFor(() => q('#view .create-actions'), '出卷页');
+  viewChip('卷型', '拼音').click();
+  await sleep(200);
+  const on = [...findField(q('#view'), '科目（可多选）').querySelectorAll('.chip.on')].map(T);
+  if (on.join() !== '语文') throw new Error('点了拼音卷，科目还是：' + (on.join('、') || '空'));
+  const p = await generate();
+  if (!/看拼音写词语/.test(p.text)) throw new Error('拼音卷里没有「看拼音写词语」');
+  if (/口算|竖式|脱式/.test(p.text)) throw new Error('拼音卷里混进了数学题');
+  // 收尾：卷型退回全部、科目退回数学，后面的用例还要按默认来
+  goCreate();
+  await waitFor(() => q('#view .create-actions'), '出卷页');
+  viewChip('卷型', '全部').click();
+  await sleep(150);
+  const chips = () => [...findField(q('#view'), '科目（可多选）').querySelectorAll('.chip')];
+  chips().find((c) => T(c) === '数学').click();
+  await sleep(180);
+  const zh = chips().find((c) => T(c) === '语文' && c.classList.contains('on'));
+  if (zh) { zh.click(); await sleep(180); }
+  return '自动切语文 · 只有拼音字词题';
+});
+
+// 5 ---------------------------------------------------------------
+await test('卷型 · 拼音只到六年级、小升初从五年级起', async () => {
+  const gradeSel = () => findField(q('#view'), '年级').querySelector('select');
+  setControl(gradeSel(), '3');
+  await sleep(220);
+  if (!viewChip('卷型', '小升初').disabled) throw new Error('三年级竟然能选「小升初」');
+  setControl(gradeSel(), '7');
+  await sleep(240);
+  if (!viewChip('卷型', '拼音').disabled) throw new Error('七年级竟然能选「拼音」');
+  setControl(gradeSel(), '6');
+  await sleep(240);
+  if (viewChip('卷型', '小升初').disabled) throw new Error('六年级选不了「小升初」');
+  if (viewChip('卷型', '拼音').disabled) throw new Error('六年级选不了「拼音」');
+  setControl(gradeSel(), '3');
+  await sleep(240);
+  return '三年级无小升初 · 七年级无拼音 · 六年级两个都能选';
+});
+
+// 6 ---------------------------------------------------------------
 let base = null;
 await test('生成卷子 · 页数 / 姓名栏 / 页脚页码', async () => {
   base = await generate();
@@ -217,6 +297,11 @@ await test('页脚 · 自定义文字', async () => {
 await test('页数上限 2 页 · 自动缩字号压进去', async () => {
   goCreate();
   await waitFor(() => q('#view .create-actions'), '出卷页');
+  // 先切到「练习题」：只有一个大题，页数好控制。
+  // 默认「全部」铺四类题型、本来就 4 页，缩字号有 0.72 的下限，压不进 2 页 ——
+  // 那是设计如此，不是 bug，拿它测「压进去」只会一直红。
+  viewChip('卷型', '练习题').click();
+  await sleep(120);
   viewChip('页数上限', '不限').click();
   await sleep(80);
   // 默认卷本来就 2 页，限 2 页什么也测不出来 —— 先把第一类题型加到刚过 3 页
@@ -257,6 +342,7 @@ await test('页数上限 2 页 · 自动缩字号压进去', async () => {
   goCreate();
   await waitFor(() => q('#view .create-actions'), '出卷页');
   viewChip('页数上限', '不限').click();
+  viewChip('卷型', '全部').click();
   const reset = qa('#view .type-tools .btn').find((b) => T(b) === '全选常用');
   if (reset) reset.click();
   return `${used} 题：不限 ${free.n} 页 → 限 2 页 ${capped.n} 页${shrunk ? `（字号缩到 ${shrunk[1]}%）` : '（压不下去，按设计保留）'} · 题目没丢`;

@@ -48,7 +48,7 @@ import com.papermill.app.domain.generate.GeneratorRegistry
 import com.papermill.app.domain.generate.GradeProfiles
 import com.papermill.app.domain.generate.LineGap
 import com.papermill.app.domain.generate.PaperComposer
-import com.papermill.app.domain.generate.PaperPurpose
+import com.papermill.app.domain.generate.PaperKind
 import com.papermill.app.domain.generate.PaperSpec
 import com.papermill.app.domain.generate.PageOrientation
 import com.papermill.app.domain.generate.QuestionType
@@ -200,8 +200,11 @@ class AppState(private val rawContext: Context) {
     var difficulty by mutableStateOf(2)
     /** 题型倾向：决定这份卷以哪类题为主 */
     var tilt by mutableStateOf(Tilt.BALANCED)
-    /** 卷面用途：日常巩固 / 单元检测 / 综合复习 */
-    var purpose by mutableStateOf(PaperPurpose.DAILY)
+    /**
+     * 卷型：全部 / 单元测试 / 期中测试 / 期末测试 / 练习题 / 拼音 / 复习题 /
+     * 综合测试 / 竞赛 / 奥数 / 小升初（决定铺多宽、题量多大、优先挑哪类题）
+     */
+    var kind by mutableStateOf(PaperKind.ALL)
     var columns by mutableStateOf(2)
     var answerMode by mutableStateOf(AnswerMode.LAST_PAGE)
     var showNameRow by mutableStateOf(true)
@@ -626,10 +629,11 @@ class AppState(private val rawContext: Context) {
         val changed = grade != s.grade || subjects.toSet() != s.subjects.toSet() || term != s.term
         activeStudentId = id
         applyProfile(s)
+        normalizeKind()
         titleOverride = null
         clearUnitFilter()
         if (changed || counts.isEmpty()) {
-            counts = PaperComposer.defaultSpec(grade, subjects, tilt, purpose).counts
+            counts = PaperComposer.defaultSpec(grade, subjects, tilt, kind).counts
         }
         saveSettings()
         if (totalQuestions <= 0) {
@@ -652,7 +656,8 @@ class AppState(private val rawContext: Context) {
                 prev.subjects.toSet() != s.subjects.toSet()
             activeStudentId = s.id
             applyProfile(s)
-            if (recollect) counts = PaperComposer.defaultSpec(grade, subjects, tilt, purpose).counts
+            normalizeKind()
+            if (recollect) counts = PaperComposer.defaultSpec(grade, subjects, tilt, kind).counts
         }
         saveSettings()
     }
@@ -952,7 +957,7 @@ class AppState(private val rawContext: Context) {
         // 否则会渲染一个既不在 pager 里、又不是子页面的空白界面
         if (screen in ALL_TAB_SCREENS && !isTabScreen(screen)) screen = Screen.HOME
         val t5 = android.os.SystemClock.elapsedRealtime()
-        counts = PaperComposer.defaultSpec(grade, subjects, tilt, purpose).counts
+        counts = PaperComposer.defaultSpec(grade, subjects, tilt, kind).counts
         val t6 = android.os.SystemClock.elapsedRealtime()
         refreshLists()
         val t7 = android.os.SystemClock.elapsedRealtime()
@@ -1059,6 +1064,17 @@ class AppState(private val rawContext: Context) {
         if (!PaperComposer.fits(grade, subjects, tilt)) tilt = Tilt.BALANCED
     }
 
+    /**
+     * 换年级 / 换科目后，原来选的卷型可能就落空了：拼音只到六年级、小升初只在五六年级，
+     * 拼音卷认语文、奥数卷认数学。落空就回落到「全部」——
+     * 留着一个名不副实的卷型比不选更误导。
+     */
+    private fun normalizeKind() {
+        if (!kind.fits(grade)) kind = PaperKind.ALL
+        val forced = kind.forceSubject
+        if (forced != null && forced !in subjects) kind = PaperKind.ALL
+    }
+
     fun selectGrade(g: Int) {
         clearUnitFilter()
         grade = g
@@ -1066,7 +1082,8 @@ class AppState(private val rawContext: Context) {
         subjects = kept
         subject = kept.first()
         normalizeTilt()
-        counts = PaperComposer.defaultSpec(g, kept, tilt, purpose).counts
+        normalizeKind()
+        counts = PaperComposer.defaultSpec(g, kept, tilt, kind).counts
         titleOverride = null
         previewSeed = System.currentTimeMillis()
     }
@@ -1101,23 +1118,32 @@ class AppState(private val rawContext: Context) {
         subjects = list
         subject = list.first()
         normalizeTilt()
-        counts = PaperComposer.defaultSpec(grade, list, tilt, purpose).counts
+        normalizeKind()
+        counts = PaperComposer.defaultSpec(grade, list, tilt, kind).counts
         titleOverride = null
         previewSeed = System.currentTimeMillis()
     }
 
     /**
-     * 改「题型倾向 / 卷面用途」后重新配比。
+     * 改「题型倾向 / 卷型」后重新配比。
      *
      * 只重算题型与题量，不动难度、栏数、纸向 —— 这两个参数决定「出什么题」，
      * 不决定「怎么印」，混在一起改会让人以为只是换了个标签。
+     *
+     * 卷型认科目时（拼音 = 语文、奥数 = 数学）顺手把科目切过去：留着「英语 + 拼音」
+     * 会出一张一道拼音题都没有的拼音卷 —— 那正是「点了有反应、反应是假的」。
      */
-    fun applyPreference(newTilt: Tilt = tilt, newPurpose: PaperPurpose = purpose) {
+    fun applyPreference(newTilt: Tilt = tilt, newKind: PaperKind = kind) {
         clearUnitFilter()
         // 该科做不出来的倾向直接不接 —— 接了就变成「点了没反应」的假控件
         tilt = if (newTilt == tilt || canUseTilt(newTilt)) newTilt else tilt
-        purpose = newPurpose
-        counts = PaperComposer.defaultSpec(grade, subjects, tilt, purpose).counts
+        kind = newKind
+        val forced = newKind.forceSubject
+        if (forced != null && forced.availableFor(grade) && subjects != listOf(forced)) {
+            subjects = listOf(forced)
+            subject = forced
+        }
+        counts = PaperComposer.defaultSpec(grade, subjects, tilt, kind).counts
         titleOverride = null
         previewSeed = System.currentTimeMillis()
     }
@@ -1323,10 +1349,8 @@ class AppState(private val rawContext: Context) {
         val autoTitle = when {
             // 按单元出卷：标题直接写单元名，家长一眼知道这张卷考的是哪一课
             unitTitle.isNotEmpty() -> "$gradeText · $unitTitle"
-            subjects.size > 1 ->
-                "${GradeProfiles.stageLabel(grade)} · $gradeText · 综合练习"
-            else ->
-                "${GradeProfiles.stageLabel(grade)} · $gradeText · ${subject.label}练习"
+            // 卷型直接进标题（「数学期末测试」），点一下就看得见效果
+            else -> PaperComposer.autoTitle(grade, subjects.ifEmpty { listOf(subject) }, kind)
         }
         val current = titleOverride?.takeIf { it.isNotBlank() } ?: autoTitle
         // titleOverride 可能是「…数学练习　A 卷」（从试卷库改参数、或上一轮生成 A 卷
@@ -1349,7 +1373,7 @@ class AppState(private val rawContext: Context) {
             fontSize = 11f,
             seed = seed,
             tilt = tilt,
-            purpose = purpose,
+            kind = kind,
             orientation = orientation,
             topicIds = unitTopicIds,
             headerOneLine = headerOneLine,
@@ -1601,7 +1625,7 @@ class AppState(private val rawContext: Context) {
         }
         // 卷里一种题型都读不出来（老版本的备份）时退回默认配比，别给一张空卷
         counts = if (restored.isEmpty()) {
-            PaperComposer.defaultSpec(grade, subjects, tilt, purpose).counts
+            PaperComposer.defaultSpec(grade, subjects, tilt, kind).counts
         } else {
             restored
         }
@@ -1652,7 +1676,7 @@ class AppState(private val rawContext: Context) {
         grade = saved.grade
         subject = runCatching { Subject.valueOf(saved.subject) }.getOrDefault(Subject.MATH)
         subjects = listOf(subject)
-        counts = PaperComposer.defaultSpec(grade, subjects, tilt, purpose).counts
+        counts = PaperComposer.defaultSpec(grade, subjects, tilt, kind).counts
         titleOverride = saved.title
         busy = true
         try {

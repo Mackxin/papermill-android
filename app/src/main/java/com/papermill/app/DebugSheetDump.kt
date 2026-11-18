@@ -16,7 +16,7 @@ import com.papermill.app.domain.generate.GenContext
 import com.papermill.app.domain.generate.LineGap
 import com.papermill.app.domain.generate.PaperComposer
 import com.papermill.app.domain.generate.GeneratorRegistry
-import com.papermill.app.domain.generate.PaperPurpose
+import com.papermill.app.domain.generate.PaperKind
 import com.papermill.app.domain.generate.QuestionType
 import com.papermill.app.domain.generate.Subject
 import com.papermill.app.domain.generate.Tilt
@@ -338,7 +338,7 @@ object DebugSheetDump {
                 subjects.forEach { subject ->
                     Log.i(TAG, "===== ${grade} 年级 / ${subject.label} =====")
                     Tilt.values().forEach { tilt ->
-                        val line = PaperPurpose.values().joinToString("　｜　") { p ->
+                        val line = PaperKind.values().joinToString("　｜　") { p ->
                             val spec = PaperComposer.defaultSpec(grade, listOf(subject), tilt, p)
                             val detail = spec.counts.entries.joinToString("、") { "${it.key.label} ${it.value}" }
                             "${p.label}(${spec.counts.values.sum()}): $detail"
@@ -351,7 +351,7 @@ object DebugSheetDump {
             val multi = listOf(Subject.CHINESE, Subject.MATH)
             Log.i(TAG, "===== 3 年级 / 语文+数学 =====")
             Tilt.values().forEach { tilt ->
-                PaperPurpose.values().forEach { p ->
+                PaperKind.values().forEach { p ->
                     val spec = PaperComposer.defaultSpec(3, multi, tilt, p)
                     val detail = spec.counts.entries.joinToString("、") { "${it.key.label} ${it.value}" }
                     Log.i(TAG, "  ${tilt.label} / ${p.label} → ${spec.counts.values.sum()} 题：$detail")

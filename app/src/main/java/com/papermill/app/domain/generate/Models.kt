@@ -246,22 +246,91 @@ enum class Tilt(val label: String, val hint: String) {
     }
 }
 
+/** 思维类题型：竞赛 / 奥数 / 小升初优先挑这些（跟网页端 PAPER_KINDS 的 THINKING 同序） */
+private val THINKING_TYPES = listOf(
+    QuestionType.NUMBER_PATTERN, QuestionType.COMPARE, QuestionType.FILL_BLANK,
+    QuestionType.WORD_PROBLEM, QuestionType.CHAIN_CALC, QuestionType.EXPRESSION,
+    QuestionType.FRACTION, QuestionType.EQUATION, QuestionType.BAR_CHART, QuestionType.COUNTING,
+)
+
+/** 基础类题型：复习卷优先挑这些（练的是记忆与熟练度，不是拔高） */
+private val BASIC_TYPES = listOf(
+    QuestionType.ORAL, QuestionType.PINYIN, QuestionType.DICTATION, QuestionType.HANZI,
+    QuestionType.ENGLISH_WORD, QuestionType.FILL_BLANK, QuestionType.UNIT_CONVERT,
+    QuestionType.KNOWLEDGE, QuestionType.CURRIC_BLANK, QuestionType.SCIENCE_JUDGE,
+)
+
+/** 拼音卷的题型（语文专项）：看拼音写词语打头，往下依次是字、词、补全 */
+private val PINYIN_TYPES = listOf(
+    QuestionType.PINYIN, QuestionType.THEME_PINYIN, QuestionType.DICTATION,
+    QuestionType.HANZI, QuestionType.TEXTBOOK_HANZI,
+)
+
 /**
- * 卷面用途：决定这份卷子「铺多宽」。
+ * 卷型（试卷类型）—— 对照常见试卷库的栏目分类：
+ * 单元测试 / 期中测试 / 期末测试 / 练习题 / 拼音 / 复习题 / 综合测试 / 竞赛 / 奥数 / 小升初，
+ * 外加「全部」= 不限定卷型。
  *
- * 日常巩固 = 一种题型大量练；单元检测 = 三四种题型均衡；综合复习 = 题型铺满、题量更大。
+ * 每一项都必须**真的改变出什么题**，否则就是「点了有反应、反应是假的」：
+ *  - [kinds]      铺几种题型
+ *  - [sizes]      第 1、2、3… 种题型各出多少题（按顺序取，超出沿用最后一个）
+ *  - [preferTypes] 这种卷优先挑的题型（排到最前）；空 = 只看题型倾向
+ *  - [boost]      题库选题难度上调几档（与用户选的难度相加，1~3 封顶）
+ *  - [forceSubject] 只能按这个科目出（拼音 = 语文，奥数 = 数学）
+ *  - [minGrade] / [maxGrade] 这种卷有意义的年级区间（拼音只到小学，小升初从五年级起）
  */
-enum class PaperPurpose(val label: String, val hint: String) {
-    DAILY("日常巩固", "一两种题型大量练，一页盯住一个知识点"),
-    UNIT("单元检测", "三四种题型均衡，覆盖一个单元"),
-    REVIEW("综合复习", "题型铺满、题量更大，按整册复习"),
+enum class PaperKind(
+    val label: String,
+    val hint: String,
+    val kinds: Int,
+    val sizes: IntArray,
+    val boost: Int = 0,
+    val forceSubject: Subject? = null,
+    val preferTypes: List<QuestionType> = emptyList(),
+    val minGrade: Int = 1,
+    val maxGrade: Int = 9,
+) {
+    ALL("全部", "不限定卷型：四类题型各来一点，按年级常规配比", 4, intArrayOf(16, 10, 8, 6)),
+    UNIT("单元测试", "三四种题型均衡，覆盖一个单元，中等题量", 3, intArrayOf(18, 10, 8)),
+    MIDTERM("期中测试", "四种题型均衡，覆盖前半册，题量偏大", 4, intArrayOf(18, 10, 10, 8)),
+    FINAL("期末测试", "五种题型铺满全册，题量最大，适合期末总练", 5, intArrayOf(18, 12, 10, 8, 6)),
+    PRACTICE("练习题", "一两种题型大量练，一页盯住一个知识点", 1, intArrayOf(30, 12, 8)),
+    PINYIN(
+        "拼音", "语文拼音专项：看拼音写词语 / 生字注音 / 补全词语（自动切到语文）",
+        3, intArrayOf(20, 10, 8), forceSubject = Subject.CHINESE, preferTypes = PINYIN_TYPES, maxGrade = 6,
+    ),
+    REVIEW(
+        "复习题", "题型铺满但以基础题为主，考前查漏补缺",
+        4, intArrayOf(16, 12, 10, 8), preferTypes = BASIC_TYPES,
+    ),
+    COMPREHENSIVE(
+        "综合测试", "六种题型尽可能铺满，多题型混合检测",
+        6, intArrayOf(16, 12, 10, 8, 6, 6),
+    ),
+    CONTEST(
+        "竞赛", "题量少而难：以找规律 / 应用题 / 巧算为主，题库难度上调一档",
+        4, intArrayOf(10, 6, 6, 4), boost = 1, preferTypes = THINKING_TYPES,
+    ),
+    OLYMPIAD(
+        "奥数", "数学思维专项：找规律、巧算、应用题（自动切到数学，难度上调一档）",
+        3, intArrayOf(8, 6, 6), boost = 1, forceSubject = Subject.MATH, preferTypes = THINKING_TYPES,
+    ),
+    GRADUATION(
+        "小升初", "五六年级升学衔接：题型铺满、综合度最高，难度上调一档",
+        6, intArrayOf(16, 12, 10, 8, 6, 6), boost = 1,
+        preferTypes = THINKING_TYPES, minGrade = 5, maxGrade = 6,
+    ),
     ;
 
-    /** 单科卷用几种题型 */
-    val kinds: Int get() = when (this) {
-        DAILY -> 1
-        UNIT -> 3
-        REVIEW -> 4
+    /** 这个年级有没有这种卷 */
+    fun fits(grade: Int): Boolean = grade in minGrade..maxGrade
+
+    companion object {
+        /** 老调用点 / 老存档里的 DAILY、UNIT、REVIEW 也认，别让升级后打开就崩 */
+        fun of(name: String?): PaperKind = when (name) {
+            "DAILY" -> PRACTICE
+            else -> values().firstOrNull { it.name == name } ?: ALL
+        }
     }
 }
 
@@ -444,8 +513,11 @@ data class PaperSpec(
     val subjects: List<Subject> = emptyList(),
     /** 题型倾向：决定这份卷以哪类题为主 */
     val tilt: Tilt = Tilt.BALANCED,
-    /** 卷面用途：日常巩固 / 单元检测 / 综合复习，决定铺多宽 */
-    val purpose: PaperPurpose = PaperPurpose.DAILY,
+    /**
+     * 卷型：全部 / 单元测试 / 期中测试 / 期末测试 / 练习题 / 拼音 / 复习题 / 综合测试 /
+     * 竞赛 / 奥数 / 小升初，决定铺多宽、题量多大、优先挑哪类题。
+     */
+    val kind: PaperKind = PaperKind.ALL,
     /** 纸张方向：横版时 PDF 页面是 842×595pt，系统打印框也按横版 A4 匹配 */
     val orientation: PageOrientation = PageOrientation.PORTRAIT,
     /**

@@ -12,8 +12,8 @@
  */
 
 import {
-  DEFAULT_SPEC, SUBJECT_ALL, SUBJECT_LABEL, QUESTION_TYPES, TYPE, TILTS, PURPOSES,
-  ANSWER_MODES, ORIENTATIONS, LINE_GAPS, FOOTER_SIZES, TERM, Term, GradeProfiles,
+  DEFAULT_SPEC, SUBJECT_ALL, SUBJECT_LABEL, QUESTION_TYPES, TYPE, TILTS, PAPER_KINDS, KIND,
+  kindOf, kindFits, ANSWER_MODES, ORIENTATIONS, LINE_GAPS, FOOTER_SIZES, TERM, Term, GradeProfiles,
   subjectAvailableFor, effectiveSubjects, stableHash, Rng,
 } from './core/models.js';
 import {
@@ -139,22 +139,42 @@ function primarySubjects() {
   return effectiveSubjects(state.spec);
 }
 
-/** 年级/科目/学期变了才重算题量 —— 不要把用户手动调的题量冲掉 */
+/** 年级/科目/学期/卷型变了才重算题量 —— 不要把用户手动调的题量冲掉 */
 function recomputeCounts() {
   const spec = state.spec;
-  const auto = defaultSpec(spec.grade, primarySubjects(), spec.tilt, spec.purpose, spec.term);
+  const auto = defaultSpec(spec.grade, primarySubjects(), spec.tilt, spec.kind, spec.term);
   spec.counts = auto.counts;
   if (!spec.title || /^(小学|初中) · /.test(spec.title)) spec.title = auto.title;
   spec.subtitle = auto.subtitle;
 }
 
+/**
+ * 卷型复核：年级换了、科目换了之后，原来那个卷型可能已经不成立 ——
+ * 拼音只到六年级、小升初只在五六年级；拼音卷认语文、奥数卷认数学。
+ * 不成立就退回「全部」：留着一个名不副实的卷型，比没选更误导。
+ */
+function normalizeKind(spec) {
+  const k = KIND[spec.kind] ?? KIND.ALL;
+  let next = k.key;
+  if (!kindFits(spec.grade, next)) next = 'ALL';
+  if (k.only && !(spec.subjects ?? []).includes(k.only)) next = 'ALL';
+  spec.kind = next;
+}
+
 function ensureSpec() {
   if (!state.spec) {
-    state.spec = defaultSpec(3, ['MATH'], 'BALANCED', 'DAILY', TERM.FIRST);
+    state.spec = defaultSpec(3, ['MATH'], 'BALANCED', 'ALL', TERM.FIRST);
   }
   if (!state.spec.counts) state.spec.counts = {};
   if (!state.spec.subjects) state.spec.subjects = [state.spec.subject];
   if (state.spec.customSheets === undefined) state.spec.customSheets = [];
+  // 老存档（v2 之前）存的是 purpose: DAILY / UNIT / REVIEW，kindOf 里做了映射，
+  // 这里顺手把字段换成 kind，免得下次再读还走兼容分支
+  if (!state.spec.kind) {
+    state.spec.kind = kindOf(state.spec.purpose).key;
+    delete state.spec.purpose;
+  }
+  normalizeKind(state.spec);
   return state.spec;
 }
 
@@ -236,6 +256,7 @@ async function applyStudent(student) {
     spec.subjects = student.subjects;
     spec.subject = student.subjects[0];
   }
+  normalizeKind(spec);
   if (changed) recomputeCounts();
   save();
   // 点名字 = 直接出卷
@@ -284,6 +305,8 @@ function paramCard() {
         if (!list.length) return;
         spec.subjects = list;
         spec.subject = list[0];
+        // 卷型认科目（拼音 / 奥数）时，科目一改就退回「全部」，别留一个名不副实的卷型
+        normalizeKind(spec);
         recomputeCounts();
         save();
         render();
@@ -306,11 +329,30 @@ function paramCard() {
     }));
   });
 
-  const purposeChips = chips(PURPOSES.map((p) => ({ value: p.key, label: p.label })), spec.purpose, (v) => {
-    spec.purpose = v;
-    recomputeCounts();
-    save();
-    render();
+  // 卷型：11 个档位对着常见试卷库的栏目来。点一下要同时做三件事 ——
+  // 换配比、必要时切科目、把卷头标题改掉，缺一样就成了「点了没反应」的假开关。
+  const kindChips = h('div', { class: 'chips' });
+  PAPER_KINDS.forEach((k) => {
+    const fits = kindFits(spec.grade, k.key);
+    kindChips.appendChild(h('button', {
+      class: `chip${spec.kind === k.key ? ' on' : ''}${fits ? '' : ' off'}`,
+      text: k.label,
+      title: fits ? k.hint : (k.minGrade ? `${GradeProfiles.gradeLabel(k.minGrade)}起才有这种卷` : `这种卷只到${GradeProfiles.gradeLabel(k.maxGrade)}`),
+      disabled: !fits,
+      onclick: () => {
+        spec.kind = k.key;
+        // 卷型带科目（拼音 = 语文、奥数 = 数学）就跟着切：勾着英语再点拼音，
+        // 出来会是一张一道拼音题都没有的「拼音卷」
+        if (k.only && !(spec.subjects ?? []).includes(k.only) && subjectAvailableFor(k.only, spec.grade)) {
+          spec.subjects = [k.only];
+          spec.subject = k.only;
+        }
+        recomputeCounts();
+        save();
+        render();
+        toast(`${k.label}：${k.hint}`);
+      },
+    }));
   });
 
   const tiltChips = h('div', { class: 'chips' });
@@ -336,13 +378,18 @@ function paramCard() {
       const keep = (spec.subjects ?? []).filter((s) => subjectAvailableFor(s, spec.grade));
       spec.subjects = keep.length ? keep : ['MATH'];
       spec.subject = spec.subjects[0];
+      // 拼音只到六年级、小升初从五年级起：年级跨出去了就把卷型退回「全部」
+      normalizeKind(spec);
       recomputeCounts();
       save();
       render();
     })),
     h('div', { class: 'field' }, [h('span', { text: '科目（可多选）' }), subjectChips]),
     h('div', { class: 'field' }, [h('span', { text: '学期' }), termChips]),
-    h('div', { class: 'field' }, [h('span', { text: '卷面用途' }), purposeChips]),
+    h('div', { class: 'field' }, [h('span', { text: '卷型' }), kindChips]),
+    h('p', { class: 'hint', text: kindOf(spec.kind).hint + (
+      kindOf(spec.kind).only ? `（已按${SUBJECT_LABEL[kindOf(spec.kind).only]}出题）` : ''
+    ) }),
     h('div', { class: 'field' }, [h('span', { text: '题型倾向' }), tiltChips]),
     h('p', { class: 'hint', text: '学期只影响真带上下册数据的课标单元；口算、字词这些按年级分段，选上/下册不会变少。' }),
   );

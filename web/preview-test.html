@@ -33,7 +33,7 @@ if ([...Object.keys(counts ? JSON.parse(counts) : {})].some((k) => k.startsWith(
   await loadCurriculumFor(subjects);
 }
 
-const spec = defaultSpec(grade, subjects, params.get('tilt') ?? 'BALANCED', params.get('purpose') ?? 'DAILY');
+const spec = defaultSpec(grade, subjects, params.get('tilt') ?? 'BALANCED', params.get('kind') ?? 'ALL');
 if (counts) spec.counts = JSON.parse(counts);
 if (params.get('gap')) spec.lineGap = params.get('gap');
 if (params.get('pages')) spec.targetPages = Number(params.get('pages'));
