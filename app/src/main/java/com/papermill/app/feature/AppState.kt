@@ -4,10 +4,13 @@ import android.app.Activity
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.pdf.PdfRenderer
+import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.content.Intent
 import android.net.Uri
 import android.provider.OpenableColumns
+import android.provider.Settings
+import androidx.core.content.FileProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -35,7 +38,6 @@ import com.papermill.app.core.update.UpdateChecker
 import com.papermill.app.domain.content.CurricUnit
 import com.papermill.app.domain.content.CurriculumBank
 import com.papermill.app.domain.content.ExamBank
-import com.papermill.app.domain.content.PaperLibrary
 import com.papermill.app.domain.content.ScienceBank
 import com.papermill.app.domain.content.TextbookCatalog
 import com.papermill.app.domain.generate.AnswerMode
@@ -88,7 +90,7 @@ data class LocalPdf(
     val landscape: Boolean,
 )
 
-enum class Screen { HOME, CREATE, PREVIEW, MISTAKES, HISTORY, HELP, REFERENCE, MORE, TEXTBOOK, PAPERS, LOCAL_PDF, STUDENTS }
+enum class Screen { HOME, CREATE, PREVIEW, MISTAKES, HISTORY, HELP, REFERENCE, MORE, TEXTBOOK, LOCAL_PDF, STUDENTS }
 
 /**
  * 底部 dock 的页签。
@@ -105,7 +107,6 @@ enum class NavTab(val label: String, val screen: Screen) {
     REFERENCE("打印纸", Screen.REFERENCE),
     MISTAKES("错题本", Screen.MISTAKES),
     HISTORY("试卷库", Screen.HISTORY),
-    PAPERS("名卷", Screen.PAPERS),
     TEXTBOOK("课本", Screen.TEXTBOOK),
     MORE("更多", Screen.MORE),
 }
@@ -372,25 +373,6 @@ class AppState(private val rawContext: Context) {
         saveSettings()
     }
 
-    // ------------------------------------------------------------------
-    // 名卷库的筛选（v0.24.0）
-    //
-    // 只活在内存里、不落盘：这页的常态是「进来看看有什么」，默认「全部」最省事。
-    // 上次筛了「五年级 · 英语」这种状态留着，下次进来一片空白反而像坏了。
-    // ------------------------------------------------------------------
-
-    /** 0 = 全部年级 */
-    var paperGrade by mutableStateOf(0)
-
-    /** "" = 全科；否则 MATH / CHINESE / ENGLISH / SCIENCE */
-    var paperSubject by mutableStateOf("")
-
-    /** "" = 全类型 */
-    var paperType by mutableStateOf("")
-
-    /** 只搜标题，不搜正文（这站的标题本身就是「版本+年级+册次+类型」） */
-    var paperQuery by mutableStateOf("")
-
     fun choosePointCount(n: Int) {
         pointCount = n.coerceIn(5, 50)
         titleOverride = null
@@ -600,6 +582,14 @@ class AppState(private val rawContext: Context) {
 
     var updateInfo by mutableStateOf("")
     var updateRelease by mutableStateOf<UpdateChecker.Release?>(null)
+
+    /** 正在下新 APK（进度见 [updatePercent]，0~100） */
+    var updateDownloading by mutableStateOf(false)
+    var updatePercent by mutableStateOf(0)
+
+    /** 已经下好、等着装的安装包。留在内存里：用户被弹去「安装未知应用」授权页
+     *  再回来时，不用重新下 3MB。 */
+    var updateSavedApk by mutableStateOf<File?>(null)
 
     /** 底部 tab 栏用玻璃半透明（默认关：不透明实底，透出的卡片文字会干扰阅读） */
     var dockGlass by mutableStateOf(false)
@@ -892,10 +882,12 @@ class AppState(private val rawContext: Context) {
             NavTab.entries.firstOrNull { it.name == name.trim() }
         }.distinct().filter { it != NavTab.MORE }
 
-        // v0.24.0 加了「名卷」页签。老存档里那串名字是旧版本写的，里面没有 PAPERS，
-        // 光靠 parse 它永远不会出现 —— 升上来的用户会觉得「说好的新页面呢」。
-        // 按版本号补一次：用户不可能主动隐藏一个还没发布的页签，所以补进去是对的。
-        // 补完把版本号一起落盘，下次就不会再补（那时他真隐藏了也要尊重）。
+        // 新增页签（v0.18 的课本、v0.24 的名卷、v0.26 起名卷已退场）时，老存档里
+        // 那串名字是旧版本写的，光靠 parse 新页签永远不会出现 —— 升上来的用户会
+        // 觉得「说好的新页面呢」。按版本号补一次：用户不可能主动隐藏一个还没
+        // 发布的页签，所以补进去是对的。补完把版本号一起落盘，下次不再补。
+        // 反过来，删掉的页签（PAPERS）在老存档里还在，parse 会对不上枚举名字，
+        // 自动被 mapNotNull 丢掉 —— 不需要额外迁移。
         val upgraded = if (version < DOCK_TABS_VERSION) {
             (parsed + NavTab.entries.filter { it !in parsed && it != NavTab.MORE })
                 .sortedBy { it.ordinal }
@@ -1000,7 +992,6 @@ class AppState(private val rawContext: Context) {
         Screen.MORE.name -> Screen.MORE
         Screen.CREATE.name -> Screen.CREATE
         Screen.HISTORY.name -> Screen.HISTORY
-        Screen.PAPERS.name -> Screen.PAPERS
         Screen.TEXTBOOK.name -> Screen.TEXTBOOK
         Screen.HELP.name -> Screen.HELP
         else -> Screen.HOME
@@ -1062,7 +1053,7 @@ class AppState(private val rawContext: Context) {
                 true
             }
             // 页签页：返回键先回首页，首页再按才退出 App
-            Screen.REFERENCE, Screen.MISTAKES, Screen.HISTORY, Screen.PAPERS, Screen.TEXTBOOK,
+            Screen.REFERENCE, Screen.MISTAKES, Screen.HISTORY, Screen.TEXTBOOK,
             Screen.MORE, Screen.STUDENTS -> {
                 screen = Screen.HOME
                 true
@@ -1141,8 +1132,6 @@ class AppState(private val rawContext: Context) {
         val t3 = android.os.SystemClock.elapsedRealtime()
         TextbookCatalog.init(ctx)
         val t4 = android.os.SystemClock.elapsedRealtime()
-        // 名卷库：776 条外站下载索引，只读标题和链接，不影响出卷
-        PaperLibrary.init(ctx)
         // 真题库几 MB，启动时不占主线程：读完再切回主线程把状态翻成「就绪」
         ExamBank.warmUp(ctx) {
             android.os.Handler(android.os.Looper.getMainLooper()).post { examBankReady = true }
@@ -2579,6 +2568,95 @@ class AppState(private val rawContext: Context) {
                 "发现新版本 ${release.version}：${release.name}"
             else -> "已是最新版本 $versionName"
         }
+    }
+
+    /**
+     * 在 App 内把新版 APK 下下来，下完直接调系统安装器（v0.26.0）。
+     *
+     * 用户原来的要求：「下载更新，直接在 app 内下载，下载完直接调用系统来安装」。
+     * 以前这里是 `openUrl(apkUrl)`，甩给浏览器 —— 下完还得自己翻通知栏点安装。
+     *
+     * 下载失败不静默：把原因写进 [updateInfo]，用户知道是网络问题还是别的问题。
+     */
+    suspend fun downloadUpdate() {
+        val release = updateRelease ?: return
+        val url = release.apkUrl ?: return
+        if (updateDownloading) return
+        updateDownloading = true
+        updatePercent = 0
+        updateSavedApk = null
+        val main = android.os.Handler(android.os.Looper.getMainLooper())
+        try {
+            val apk = UpdateChecker.download(ctx, url, release.version) { done, total ->
+                if (total > 0) {
+                    val p = ((done * 100) / total).toInt().coerceIn(0, 100)
+                    // 回调在 IO 线程，改 Compose 状态要回主线程
+                    main.post { updatePercent = p }
+                }
+            }
+            main.post {
+                updateSavedApk = apk
+                updateInfo = "已下载 ${release.version}，正在调起安装"
+            }
+            installApk(apk)
+        } catch (e: Exception) {
+            updateInfo = "下载失败：${e.message ?: "网络不通，换个网络再试"}"
+        } finally {
+            updateDownloading = false
+        }
+    }
+
+    /**
+     * 调系统安装器装本地 APK。
+     *
+     * Android 8 起装「未知来源」的应用要单独授权：没授权就跳授权页，
+     * 回来再点一次「安装」就行（安装包还在 [updateSavedApk] 里，不用重下）。
+     */
+    fun installApk(file: File) {
+        if (!file.exists()) {
+            toast = "安装包不见了，重新下载一次"
+            return
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+            !ctx.packageManager.canRequestPackageInstalls()
+        ) {
+            toast = "请先允许「安装未知应用」，回来点「安装」"
+            runCatching {
+                ctx.startActivity(
+                    Intent(
+                        Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                        Uri.parse("package:${ctx.packageName}"),
+                    ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
+            }.onFailure {
+                toast = "打不开授权页，请到系统设置里手动允许安装"
+            }
+            return
+        }
+        runCatching {
+            val uri = FileProvider.getUriForFile(ctx, "${ctx.packageName}.fileprovider", file)
+            ctx.startActivity(
+                Intent(Intent.ACTION_VIEW)
+                    .setDataAndType(uri, "application/vnd.android.package-archive")
+                    // 少了 FLAG_GRANT_READ_URI_PERMISSION，安装器打不开 content:// 会直接崩
+                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+        }.onFailure {
+            toast = "调不起安装器：${it.message}"
+        }
+    }
+
+    /**
+     * 上一次下好的安装包还在不在磁盘上。
+     *
+     * [updateSavedApk] 只在内存里，App 被系统回收或用户手动划掉就没了，但文件还躺在
+     * cacheDir 里。用户被弹去「允许安装未知应用」再回来时，不该被迫重下 3MB。
+     * 按版本号取文件，免得缓存里躺着上一版的包时「点 v0.27 装成 v0.26」。
+     */
+    fun cachedUpdateApk(): File? {
+        val v = updateRelease?.version ?: return null
+        val f = File(ctx.cacheDir, "updates/papermill-${v.filter { it.isDigit() || it == '.' }}.apk")
+        return if (f.exists() && f.length() > 512 * 1024) f else null
     }
 
     fun openUrl(url: String) {

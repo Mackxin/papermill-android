@@ -69,7 +69,7 @@ data class AppSettings(
      * 数组要额外处理空值/脏值，字符串简单过滤一下就够了。
      * 顺序即展示顺序 —— 用户想「错题本放第一格」也在这一串里表达。
      */
-    val dockTabs: String = "HOME,REFERENCE,MISTAKES,HISTORY,PAPERS,TEXTBOOK,MORE",
+    val dockTabs: String = "HOME,REFERENCE,MISTAKES,HISTORY,TEXTBOOK,MORE",
     /**
      * 页签表的「出厂版本」。解析存档时拿它判断要不要补上新版加的页签（v0.24.0）。
      *
@@ -193,7 +193,7 @@ object LocalStore {
                 lineGapCustom = o.optDouble("lineGapCustom", 8.0).toFloat(),
                 showPageNo = o.optBoolean("showPageNo", true),
                 footerSize = o.optString("footerSize", "NORMAL"),
-                dockTabs = o.optString("dockTabs", "HOME,REFERENCE,MISTAKES,HISTORY,PAPERS,TEXTBOOK,MORE"),
+                dockTabs = o.optString("dockTabs", "HOME,REFERENCE,MISTAKES,HISTORY,TEXTBOOK,MORE"),
                 dockTabsVersion = o.optInt("dockTabsVersion", 0),
                 targetPages = o.optInt("targetPages", 0),
                 layoutVersion = o.optInt("layoutVersion", 0),

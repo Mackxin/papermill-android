@@ -7,7 +7,6 @@
  *  - data/science/bank.json 小学科学 216 道
  *  - data/bank/builtin_questions.json 自编题库 74 道
  *  - data/textbook/catalog.json 教材链接（只存链接，不打包 PDF）
- *  - data/papers/library.json 名卷库索引 776 条（原站标题 + 网盘链接，只存链接）
  *
  * 课标题库的字段压缩规则（照 App 的 parse）：
  *   topic    : i=id n=名称 g=年级 s=上/下 c=章节 d=说明 cr=掌握标准 dq/da=诊断题答案
@@ -21,8 +20,6 @@ export const DATA = {
   science: [],
   bank: [],
   catalog: [],
-  papers: [],          // 名卷库：i/n/g/s/t/m/y/u 八个字段，见 tools/fetch-papers.py
-  paperFacets: null,
   examBank: [],        // 真题库：从下载的 docx 试卷切出来的题，见 tools/build-question-bank.py
   stats: null,
   loadedSubjects: new Set(),
@@ -60,21 +57,17 @@ async function getJson(path) {
 }
 
 export async function loadCoreData() {
-  const [content, science, bank, catalog, stats, papers] = await Promise.all([
+  const [content, science, bank, catalog, stats] = await Promise.all([
     getJson('data/content.json'),
     getJson('data/science/bank.json'),
     getJson('data/bank/builtin_questions.json'),
     getJson('data/textbook/catalog.json'),
     getJson('data/taxonomy/index.json'),
-    // 名卷库是外链索引，缺文件不该拖垮整个应用（旧存档 / 精简部署都可能没有）
-    getJson('data/papers/library.json').catch(() => null),
   ]);
   DATA.content = content;
   DATA.science = science.questions ?? [];
   DATA.bank = bank.questions ?? [];
   DATA.catalog = catalog.books ?? [];
-  DATA.papers = papers?.items ?? [];
-  DATA.paperFacets = papers?.facets ?? null;
   DATA.stats = stats;
 }
 

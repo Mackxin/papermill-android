@@ -89,8 +89,6 @@ import com.papermill.app.core.store.SavedPaper
 import com.papermill.app.core.update.UpdateChecker
 import com.papermill.app.domain.content.ContentCatalog
 import com.papermill.app.domain.content.CurriculumBank
-import com.papermill.app.domain.content.PaperLibrary
-import com.papermill.app.domain.content.PaperResource
 import com.papermill.app.domain.content.TextbookCatalog
 import com.papermill.app.domain.generate.AnswerMode
 import com.papermill.app.domain.generate.CustomMode
@@ -472,8 +470,6 @@ fun PaperMillRoot(state: AppState) {
                                 // 课本页本身就是「一串卡片」，内部没有嵌套滚动，整块塞进一个
                                 // item 是安全的；它的单元列表最多几十行，一次性组合也无所谓。
                                 NavTab.TEXTBOOK -> item { TextbookScreen(state, scope) }
-                                // 名卷库里 776 条，必须交给 LazyColumn 按屏组合
-                                NavTab.PAPERS -> papersScreenItems(state)
                                 NavTab.MORE -> moreScreenItems(
                                     state, scope,
                                     onImport = { importLauncher.launch("*/*") },
@@ -946,7 +942,6 @@ private fun screenTitle(state: AppState): Pair<String, String> = when (state.scr
     Screen.MORE -> "更多" to "数据 / 打印 / 更新 / 关于"
     Screen.TEXTBOOK -> "课本" to "按单元出卷 · 教材原文在线阅读"
     Screen.HISTORY -> "试卷库" to "最近的卷子 · 可重新打开或改参数再出一张"
-    Screen.PAPERS -> "名卷库" to "776 份现成卷子的下载索引 · 文件在网盘，App 只存链接"
     Screen.HELP -> "打印帮助" to "在家打印与远程打印两种方式"
     Screen.LOCAL_PDF -> "打印本地 PDF" to (state.localPdf?.let { "${it.pages} 页 · ${it.name}" } ?: "选一个 PDF")
     Screen.STUDENTS -> "学生档案" to "点名字 = 年级 + 学期 + 科目一次就位，直接出卷"
@@ -1605,9 +1600,15 @@ private fun CreateScreen(state: AppState, scope: CoroutineScope) {
                 .sumOf { ExamBank.countOf(state.grade, state.subjects.map { it.code }.toSet(), it.types) }
             Text(
                 if (pool == 0) {
-                    "${GradeProfiles.gradeLabel(state.grade)}${state.subjects.joinToString("、") { it.label }}还没有真题，换个年级或科目试试。"
+                    // 英语单独说明：它的问题是「真题大多是听力题（没音频做不了）+ 带答案的太少」，
+                    // 干巴巴一句「还没有真题」会让人以为自己选错了年级或科目。
+                    if (state.subjects.size == 1 && state.subjects.first().code == "ENGLISH") {
+                        "英语真题大多是听力题（没有音频做不了），能用的带答案真题太少 —— 这门建议用自编题。"
+                    } else {
+                        "${GradeProfiles.gradeLabel(state.grade)}${state.subjects.joinToString("、") { it.label }}还没有带答案的真题，换个年级或科目试试。"
+                    }
                 } else {
-                    "当前年级与科目能抽 $pool 道，每类取 ${state.examPer} 道（同年级题不够就少给，不跨年级凑）。"
+                    "当前年级与科目能抽 $pool 道带答案的真题，每类取 ${state.examPer} 道（同年级题不够就少给，不跨年级凑）。"
                 },
                 fontSize = PaperDimens.TinySp,
                 color = PaperColors.Muted,
@@ -2981,9 +2982,51 @@ private fun LazyListScope.moreScreenItems(
             if (release != null) {
                 Divider()
                 ListRow("打开 Release 页面", release.name) { state.openUrl(release.pageUrl) }
-                if (release.apkUrl != null) {
+                // 只有真的有新版才给「下载并安装」；已经是最新版时点它是白下 3MB
+                val newer = UpdateChecker.isNewer(release.version, state.versionName)
+                if (release.apkUrl != null && newer) {
                     Divider()
-                    ListRow("下载新版 APK", release.version) { state.openUrl(release.apkUrl) }
+                    if (state.updateDownloading) {
+                        // 3MB 在慢网下要几十秒，只写「正在下载」会让人以为卡死
+                        Column(
+                            Modifier.fillMaxWidth().padding(vertical = 12.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Text(
+                                "正在下载 ${state.updatePercent}%",
+                                fontSize = PaperDimens.BodySp,
+                                color = PaperColors.OnSurface,
+                            )
+                            Box(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .height(6.dp)
+                                    .clip(RoundedCornerShape(3.dp))
+                                    .background(PaperColors.SurfaceAlt)
+                            ) {
+                                Box(
+                                    Modifier
+                                        .fillMaxWidth(state.updatePercent / 100f)
+                                        .fillMaxHeight()
+                                        .background(PaperColors.GradientStart)
+                                )
+                            }
+                        }
+                    } else {
+                        ListRow(
+                            "下载并安装 v${release.version}",
+                            "App 内下载 · 下完直接调系统安装器",
+                            trailing = "↓",
+                        ) { scope.launch { state.downloadUpdate() } }
+                    }
+                    val saved = state.updateSavedApk ?: state.cachedUpdateApk()
+                    if (saved != null && !state.updateDownloading) {
+                        Divider()
+                        // 授权页回来点这里：不用重下，安装包还在
+                        ListRow("安装已下载的 v${release.version}", "已经下好了，就差点一下") {
+                            state.installApk(saved)
+                        }
+                    }
                 }
             }
             Divider()
@@ -3094,153 +3137,6 @@ private fun HeadStat(value: String, label: String, modifier: Modifier = Modifier
  * 「教材原文」只是链接清单：那个仓库没有 LICENSE、教材著作权属出版社，
  * App 不持有也不转发任何一页 PDF，点了用浏览器去原站看。
  */
-// ------------------------------------------------------------------ 页面：名卷库
-
-/**
- * 名卷库 —— 外站「小学试卷库」776 份下载资源的索引。
- *
- * 为什么用 [LazyListScope] 的 items(count) 而不是像别的页那样 item { forEach }：
- * 776 张卡片一次性组合，进页面要卡半秒以上；交给 LazyColumn 按屏组合才滑得动。
- *
- * 筛选状态存在 AppState 里（见 paperGrade / paperSubject / …），不落盘：
- * 这个页面进来默认「全部」最省事，没必要把上次筛选带到下次。
- */
-private fun LazyListScope.papersScreenItems(state: AppState) {
-    val list = PaperLibrary.query(
-        grade = state.paperGrade,
-        subject = state.paperSubject,
-        type = state.paperType,
-        keyword = state.paperQuery,
-    )
-
-    item {
-        CardSection {
-            Text(
-                "这里是 ${PaperLibrary.total} 份现成卷子的下载索引（一~六年级 · 语数英科）。"
-                    + "文件在网盘里，App 只存标题和链接，点「打开网盘」自取。",
-                fontSize = PaperDimens.BodySp,
-                color = PaperColors.OnSurfaceVariant,
-                lineHeight = 18.sp,
-            )
-        }
-        Spacer(Modifier.height(PaperDimens.Gap))
-    }
-
-    item {
-        SectionLabel("01", "筛一下", "共 ${PaperLibrary.total} 份")
-        Spacer(Modifier.height(PaperDimens.GapSmall))
-        CompactChipGrid(
-            items = listOf(0) + PaperLibrary.allGrades,
-            perRow = 4,
-            label = { if (it == 0) "全部" else "${GradeProfiles.gradeLabel(it)} ${PaperLibrary.countOfGrade(it)}" },
-            selected = { it == state.paperGrade },
-            onClick = { state.paperGrade = it },
-        )
-        Spacer(Modifier.height(PaperDimens.GapSmall))
-        CompactChipGrid(
-            items = listOf("") + PaperLibrary.allSubjects,
-            perRow = 3,
-            label = { if (it.isEmpty()) "全科" else "${PaperLibrary.subjectName(it)} ${PaperLibrary.countOfSubject(it)}" },
-            selected = { it == state.paperSubject },
-            onClick = { state.paperSubject = it },
-        )
-        Spacer(Modifier.height(PaperDimens.GapSmall))
-        CompactChipGrid(
-            items = listOf("") + PaperLibrary.allTypes,
-            perRow = 3,
-            label = { if (it.isEmpty()) "全类型" else "$it ${PaperLibrary.countOfType(it)}" },
-            selected = { it == state.paperType },
-            onClick = { state.paperType = it },
-        )
-        Spacer(Modifier.height(PaperDimens.GapSmall))
-        Field3(
-            value = state.paperQuery,
-            onValueChange = { state.paperQuery = it },
-            placeholder = "搜标题，例如「圆的面积」「第五单元」「苏教版」",
-            leadingIcon = Icons.Rounded.Search,
-        )
-        Spacer(Modifier.height(PaperDimens.Gap))
-    }
-
-    item {
-        SectionLabel("02", "查到的卷子", "${list.size} 条")
-        Spacer(Modifier.height(PaperDimens.GapSmall))
-    }
-
-    if (list.isEmpty()) {
-        item {
-            Text(
-                "这个组合下没有卷子，换个年级或科目试试。",
-                fontSize = PaperDimens.CaptionSp,
-                color = PaperColors.OnSurfaceVariant,
-                lineHeight = 17.sp,
-            )
-            Spacer(Modifier.height(PaperDimens.Gap))
-        }
-    }
-
-    items(count = list.size, key = { list[it].id }) { i ->
-        PaperRow(list[i], state)
-    }
-
-    item {
-        Spacer(Modifier.height(6.dp))
-        Text(
-            "这些卷子来自 shijuan.on2on.cn 的公开下载目录，文件存在第三方网盘，"
-                + "本 App 只做索引，不转载也不打包任何试题文件。"
-                + "网盘链接由分享者提供，失效是常事——打不开就换一条，"
-                + "或者回「出卷」用知识点专项自己出一张。",
-            fontSize = PaperDimens.TinySp,
-            color = PaperColors.OnSurfaceVariant,
-            lineHeight = 15.sp,
-        )
-        Spacer(Modifier.height(PaperDimens.Gap))
-    }
-}
-
-@Composable
-private fun PaperRow(p: PaperResource, state: AppState) {
-    val ctx = LocalContext.current
-    CardSection {
-        Text(
-            p.title,
-            fontSize = PaperDimens.BodySp,
-            fontWeight = FontWeight.SemiBold,
-            color = PaperColors.OnSurface,
-            lineHeight = 19.sp,
-        )
-        Spacer(Modifier.height(4.dp))
-        Text(
-            p.meta,
-            fontSize = PaperDimens.TinySp,
-            color = PaperColors.OnSurfaceVariant,
-        )
-        Spacer(Modifier.height(10.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            SecondaryButton("打开网盘", modifier = Modifier.weight(1f)) {
-                // 手机上未必装了网盘 App：跳不过去就提示复制，别让按钮看起来坏了
-                runCatching {
-                    ctx.startActivity(
-                        Intent(Intent.ACTION_VIEW, Uri.parse(p.url))
-                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    )
-                }.onFailure {
-                    state.toast = "打不开网盘链接，点「复制链接」粘到浏览器里试试"
-                }
-            }
-            SecondaryButton("复制链接", modifier = Modifier.weight(1f)) {
-                runCatching {
-                    val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                    cm.setPrimaryClip(ClipData.newPlainText("网盘链接", p.url))
-                    state.toast = "网盘链接（含提取码）已复制"
-                }.onFailure {
-                    state.toast = "复制失败，长按标题手动抄一下吧"
-                }
-            }
-        }
-    }
-    Spacer(Modifier.height(PaperDimens.GapSmall))
-}
 
 @Composable
 private fun TextbookScreen(state: AppState, scope: CoroutineScope) {

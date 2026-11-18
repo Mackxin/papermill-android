@@ -64,6 +64,26 @@ INLINE_CALC_RE = re.compile(r'(\d[\d.]*\s*[+\-×÷*\/]\s*\d[\d.]*\s*=\s*(?:（\s
 FIGURE_RE = re.compile(r'如图|下图|上图|右图|左图|图中|见图|图示|图\s*\d|示意图|统计图|条形图'
                        r'|折线图|扇形图|图片|图案|看图|照片')
 
+# ---- 答案可信度校验（v0.26.0）----
+# 只收带答案的题之后，冒出来的新问题不是「没答案」而是「答案对不上」：
+# 英语卷整段错位时会给出「Where is the cinema? → bus」这种，家长照着批改就是教错。
+# 三条闸门：做不了的题整类剔、答案格式必须像答案、答案里不能混着解析或下一个题号。
+UNUSABLE_RE = re.compile(r'听录音|听对话|听问句|听短文|听音|听力|你所听到|听到的|听两遍|听一遍'
+                         r'|匹配题|连线题')
+ANS_JUNK_RE = re.compile(r'【|详解|句意|分析：|解析|考点|参考答?案')
+CHOICE_ANS_RE = re.compile(r'[A-Da-d]')
+JUDGE_ANS_RE = re.compile(r'[√×✓✗对错是否TF]+')
+# 语文/数学卷常用圈号当选项标识，答案给「③」就等于 C
+CIRCLE_TO_LETTER = {'①': 'A', '②': 'B', '③': 'C', '④': 'D'}
+# 题干/答案里又冒出一个「6.」→ 两道题粘连或答案串行
+STRAY_NO_RE = re.compile(r'(?<![\d.])\d{1,2}\s*[.、．]\s*[^\d\s]')
+# 语文阅读题的题干指向原文（「文中画线的句子」「第三自然段」）。
+# 原文不在题库里，这种题印出来无处可查，装不进「自由组合」的卷子。
+MATERIAL_REF_RE = re.compile(r'文中|短文|语段|自然段|本文|下文|上文|选文|画线|划线的|阅读|文章'
+                             r'|第[一二三四五六七八九十\d]+段')
+
+
+
 
 def sec_type(name):
     if '判断' in name:
@@ -83,40 +103,89 @@ def sec_type(name):
     return 'OTHER'
 
 
-def parse_answers(lines):
-    """答案区 → {大题序号: {小题号: 答案文本}}。
+def is_answer_token(t):
+    """答案区里一个空格分隔的 token 像不像「答案」。
 
-    答案区有两个坑：
-      1. 一行塞多道：`1. D 2. A 3. B`（选择题最常见）
-      2. 多套卷的答案连在一起：第二个「一、」要另起一册
+    用来把 `B A B A A C` 这种纯序列收下来，同时把 `【详解】` 里跟着的
+    英文原句（`I want to show them my new bike.`）挡在外面 ——
+    那行被收进去就会整批答案错位。
+    """
+    if not t or len(t) > 16:
+        return False
+    if re.search(r'[，。；：？！、“”‘’【】]', t):
+        return False
+    if re.search(r'\d', t):
+        return True                                   # 18.33 / 3.241<3.242 / 56cm2
+    if re.fullmatch(r'[\u4e00-\u9fa5]{1,10}', t):
+        return True                                   # 幼稚 / 草丛 / 略
+    if re.fullmatch(r'[√×✓✗✓]{1,2}', t):
+        return True                                   # 判断题答案
+    if re.fullmatch(r'[A-Za-z]{1,4}', t):
+        return t.isupper() or len(t) <= 2             # B / CABBA / TF
+    return False
+
+
+def parse_answers(lines):
+    """答案区 → ([{大题号: {小题号: 答案}}], [{大题号: [按序答案, …]}]).
+
+    答案区有三种写法，都得认 —— 只认第一种的话，243 份卷子会「有答案却配不上」：
+      1. 带序号：`1. D 2. A 3. B`、`1.18.33 47 2.1.86 1.87`
+      2. 不带序号、一串空格分开的短答案：`B A B A A C B B A C`、
+         `幼稚 草丛 蟋蟀 玻璃 灵感`、`√ × √ ×`
+      3. 多套卷的答案连在一起：第二个「一、」另起一册
+
+    第 2 种没有题号，只能按出现顺序对应，所以**不在这里填**，单独收进第二个
+    返回值，由调用方在「数量完全等于该大题小题数」时才用。错配的答案比没有答案
+    更糟：家长照着它批改，错一处就是教错一道题。
     """
     start = None
     for i, ln in enumerate(lines):
         if ANS_HEAD_RE.match(ln):
             start = i + 1
     if start is None:
-        return [{}]
+        return [{}], [{}]
 
     books = [{}]
+    seqs = [{}]
     cur_no = None
+
+    def feed(ln):
+        """把一大题下的一行答案喂进去：带序号存进 books，没序号存进 seqs。"""
+        # 一行多道：按 `数字.` 切开。切点前面不能是数字，**也不能是小数点** ——
+        # 否则 `1.18.33 47 2.1.86` 会在 `18.` 处再切一刀，第 1 题答案变成空。
+        parts = re.split(r'(?=(?<![\d.])\d{1,3}\s*[.、．]\s*)', ln)
+        hit = False
+        for p in parts:
+            pm = QNO_RE.match(p.strip())
+            if pm:
+                hit = True
+                books[-1][cur_no][int(pm.group(1))] = pm.group(2).strip()
+        if hit:
+            return
+        # 整行都没序号 → 可能是按序答案序列
+        toks = ln.split()
+        if toks and len(toks) <= 40 and all(is_answer_token(t) for t in toks):
+            seqs[-1].setdefault(cur_no, []).extend(toks)
+
     for ln in lines[start:]:
         m = SEC_RE.match(ln)
         if m and len(ln) <= 34 and '？' not in ln and '?' not in ln:
             no = CN.get(m.group(1))
             if no == 1 and books[-1]:
                 books.append({})
+                seqs.append({})
             cur_no = no
             books[-1].setdefault(no, {})
+            # `一． B A B A A C B B A A C` —— 行首是中文序号，剩下的全是答案。
+            # 只看首字就把它当大题标题的话，这 10 个答案会整批丢掉。
+            tail = (m.group(2) or '').strip()
+            if tail and not SEC_KW.search(tail):
+                feed(tail)
             continue
         if cur_no is None:
             continue
-        # 一行多道：按 `数字.` 切开
-        parts = re.split(r'(?=(?<!\d)\d{1,3}\s*[.、．]\s*)', ln)
-        for p in parts:
-            pm = QNO_RE.match(p.strip())
-            if pm:
-                books[-1][cur_no][int(pm.group(1))] = pm.group(2).strip()
-    return books
+        feed(ln)
+    return books, seqs
 
 
 def split_options(line):
@@ -241,6 +310,26 @@ def norm(text):
     return re.sub(r'[\s（）()　_＿]+', '', text)
 
 
+def to_choice_letter(answer, options):
+    """把选择题答案换成 A~D。
+
+    答案区给的东西五花八门：`B`、`③`（圈号选项）、`红红的太阳像火球`（直接给内容）。
+    换不出来就返回空串 —— 由调用方丢掉这道题，绝不硬猜。
+    """
+    a = answer.strip().rstrip('。.、 ')
+    if len(a) == 1 and a in CIRCLE_TO_LETTER:
+        return CIRCLE_TO_LETTER[a]
+    if re.fullmatch(r'[A-Da-d]', a):
+        return a.upper()
+    na = norm(a)
+    if len(na) >= 2:
+        for i, o in enumerate(options[:6]):
+            no = norm(o)
+            if no and (no == na or no in na or na in no):
+                return 'ABCDEF'[i]
+    return ''
+
+
 def fingerprint(text):
     return hashlib.md5(norm(text).encode()).hexdigest()[:16]
 
@@ -293,16 +382,25 @@ def build(max_files=None):
             continue
 
         sections = parse_paper(lines)
-        books = parse_answers(lines)
-        ans_book = books[0] if books else {}
+        books, seqs = parse_answers(lines)
 
         # 卷子可能是「两套」：第二个「一、」之后的题归到第二份答案
         sec_seen_one = 0
         for sec in sections:
             if sec['no'] == 1:
                 sec_seen_one += 1
-            book = books[min(sec_seen_one - 1, len(books) - 1)] if books else {}
+            bi = min(sec_seen_one - 1, len(books) - 1) if books else 0
+            book = books[bi] if books else {}
             ans_sec = book.get(sec['no'], {})
+
+            # 没有题号的答案序列：只有「数量正好等于该大题小题数」才敢按序填。
+            # 少一个、多一个都说明这段和这份卷对不上（多半是【详解】混进来了）。
+            seq = (seqs[bi] if bi < len(seqs) else {}).get(sec['no'], [])
+            nos = [it['n'] for it in sec['items'] if it['n']]
+            seq_map = {}
+            if seq and not ans_sec and len(seq) == len(nos):
+                seq_map = dict(zip(nos, seq))
+                stat['ans_seq'] += 1
 
             for it in sec['items']:
                 text = clean_text(it['text'])
@@ -310,6 +408,11 @@ def build(max_files=None):
                 # 这种题印出来就是「一汽车▯小时行了▯千米」，只能整题剔除。
                 if OBJ in text or any(OBJ in o for o in it['options']):
                     stat['obj'] += 1
+                    continue
+                # 听力题的音频既没下载也没法印在纸上，匹配/连线题切出来只剩一堆散词 ——
+                # 这两类印在卷上学生根本没法做，整类不进题库。
+                if UNUSABLE_RE.search(text) or UNUSABLE_RE.search(sec['name']):
+                    stat['unusable'] += 1
                     continue
                 # 答案区漏进题目区：「① 2.② 3.②」「× 2.√ 3.×」这种连号行不是题
                 if len(MULTI_NO_RE.findall(text)) >= 3:
@@ -346,8 +449,19 @@ def build(max_files=None):
                 answer = ''
                 if it['n'] and it['n'] in ans_sec:
                     answer = ans_sec[it['n']]
-                elif it['options']:
-                    answer = ''
+                elif it['n'] and it['n'] in seq_map:
+                    answer = seq_map[it['n']]
+                # 答案里常粘着分值（`B（3分）`）。先剥掉再判断 —— 不剥就会把正确
+                # 答案连分值一起丢掉；剥完什么都不剩的（`（10分）阅读下文，回答问题。`）
+                # 其实是下一题的题干，会落到下面「没答案」那一支被剔掉。
+                answer = re.sub(r'[（(]\s*\d+\s*分\s*[）)]', '', answer).strip()
+
+                # 题库只收带答案的题。用户的原话：「没有答案的话那不行，
+                # 内置的题都是要有答案的」。组卷是为了做完能对答案批改，
+                # 一道没答案的题印在卷上就是个只能跳过的空。
+                if not answer:
+                    stat['no_answer'] += 1
+                    continue
 
                 qtype = sec['type']
                 if qtype == 'CHOICE' and not it['options']:
@@ -360,6 +474,53 @@ def build(max_files=None):
                 # 粘到下一条上的，直接丢掉别印在卷面上。
                 if qtype == 'JUDGE':
                     it['options'] = []
+
+                # 语文阅读题指向原文（「文中画线的句子」「第三自然段」），原文不在
+                # 题库里 —— 印在卷上无处可查，本来也装不进自由组合。
+                if qtype == 'WORD' and meta.get('s') == 'CHINESE' and MATERIAL_REF_RE.search(text):
+                    stat['material_ref'] += 1
+                    continue
+
+                # 答案抄了题干开头一句（「在○里填上“＋”或“－”。」→ 原样返回）。
+                # 这不是答案，是解析把题干重复了一遍。
+                na, nq = norm(answer), norm(text)
+                if len(na) >= 6 and na in nq:
+                    stat['ans_echo'] += 1
+                    continue
+                # 答案给了个字母，可题干里根本没有 A/B/C/D —— 选项在排版时丢了，
+                # 印出来就是「（ ）」后面跟着一个孤零零的 B。
+                if re.fullmatch(r'[A-D]', answer) and not it['options']:
+                    stat['ans_bad'] += 1
+                    continue
+
+                # —— 答案得像答案 ——
+                # 只收带答案的题之后，冒出来的新问题不是「没答案」而是「答案对不上」：
+                # 英语卷整段错位时会给出「Where is the cinema? → bus」，家长照着批改
+                # 就是教错。三道闸：不是解析文本、格式对得上题型、不夹着下一个题号。
+                if ANS_JUNK_RE.search(answer):
+                    stat['ans_junk'] += 1
+                    continue
+                answer = answer.strip()
+                if qtype == 'CHOICE':
+                    letter = to_choice_letter(answer, it['options'])
+                    if not letter:
+                        stat['ans_bad'] += 1
+                        continue
+                    answer = letter
+                elif qtype == 'JUDGE':
+                    j = answer.rstrip('。.、）) ')
+                    if not JUDGE_ANS_RE.fullmatch(j):
+                        stat['ans_bad'] += 1
+                        continue
+                    answer = j[0]
+                elif len(answer) > 60 or STRAY_NO_RE.search(answer):
+                    stat['ans_bad'] += 1
+                    continue
+                # 答案是问句 = 抄来的下一题题干（语文阅读卷尤其常见）。
+                # 数学里「第几页看起？」这种短问句不算，所以要求同时够长。
+                if len(answer) > 16 and re.search(r'[？?]', answer):
+                    stat['ans_bad'] += 1
+                    continue
 
                 q = {
                     'q': text[:400],

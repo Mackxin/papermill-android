@@ -1382,60 +1382,6 @@ await test('真题库 · 关掉真题回到自编，题型配比重新生效', a
   return `关掉真题 · 按题型配比出了 ${qs.length} 题`;
 });
 
-// ---------------------------------------------------------------- 名卷库
-/** 名卷库那张卡的标题「查到的卷子 N 条」→ N */
-function paperCount() {
-  const head = qa('#view .card h2').map(T).find((t) => /^查到的卷子 \d+ 条$/.test(t));
-  if (!head) throw new Error('没找到「查到的卷子 N 条」');
-  return Number(/(\d+)/.exec(head)[1]);
-}
-
-await test('名卷库 · 776 份下载索引都在，按年级筛完只剩该年级', async () => {
-  goCreate();
-  await waitFor(() => q('#view .create-actions'), '出卷页');
-  dock('名卷');
-  await waitFor(() => qa('#view .lib-item').length > 0, '名卷列表');
-
-  const total = paperCount();
-  if (total !== 776) throw new Error(`总数是 ${total}，应该是 776`);
-  const first = qa('#view .lib-item').length;
-  if (first !== 40) throw new Error(`首屏排了 ${first} 条，应该一次给 40 条`);
-
-  const chip = qa('#view .chip').find((c) => /^一年级 \d+$/.test(T(c)));
-  if (!chip) throw new Error('没有「一年级」筛选标签');
-  chip.click();
-  await sleep(300);
-
-  const cnt = paperCount();
-  if (cnt !== 133) throw new Error(`一年级筛出 ${cnt} 条，应该是 133`);
-  const bad = qa('#view .lib-item .meta').map(T).filter((t) => !t.includes('一年级'));
-  if (bad.length) throw new Error(`混进了别的年级：${bad.slice(0, 2).join(' / ')}`);
-  return `共 776 条 · 首屏 40 条 · 一年级 133 条且每条都印着一年级`;
-});
-
-await test('名卷库 · 搜关键词只重画列表，输入框不丢焦点', async () => {
-  // 清回「全部」，否则在「一年级」里搜「苏教版」会 0 条
-  const allChip = qa('#view .chip').find((c) => /^全部 \d+$/.test(T(c)));
-  if (!allChip) throw new Error('没有「全部」标签');
-  allChip.click();
-  await sleep(300);
-
-  const box = q('#view .search-box');
-  if (!box) throw new Error('没有搜索框');
-  box.focus();
-  box.value = '苏教版';
-  box.dispatchEvent(new Event('input', { bubbles: true }));
-  await sleep(320);
-
-  const doc = frame.contentDocument;
-  if (doc.activeElement !== box) throw new Error('搜一下就丢焦点，接着打字会断（说明整页被重绘了）');
-  const cnt = paperCount();
-  if (cnt !== 75) throw new Error(`搜「苏教版」得到 ${cnt} 条，应该是 75`);
-  const bad = qa('#view .lib-item b').map(T).filter((t) => !t.includes('苏教版'));
-  if (bad.length) throw new Error(`搜出无关标题：${bad.slice(0, 2).join(' / ')}`);
-  return `搜「苏教版」75 条 · 焦点仍在输入框 · 列表就地重画`;
-});
-
 // ---------------------------------------------------------------- 收尾
 
 paint();

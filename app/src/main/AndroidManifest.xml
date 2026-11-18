@@ -5,6 +5,12 @@
     <uses-permission android:name="android.permission.INTERNET" />
 
     <!--
+      新版 APK 在 App 内下完直接调系统安装器，Android 8（API 26）起必须声明这条。
+      只是「声明可以装」—— 真正装之前系统还会单独问一次「是否允许安装未知应用」。
+    -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
+    <!--
       Android 11（API 30）的包可见性：不声明这条 queries，
       PrintManager.printServices 永远返回空列表 —— 检测「有没有打印服务」会永远误判为没有。
     -->

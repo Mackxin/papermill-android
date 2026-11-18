@@ -6,7 +6,6 @@
  *   预览页   ↔ PreviewScreen
  *   错题本   ↔ 批改记错题
  *   试卷库   ↔ 本地历史卷
- *   名卷     ↔ 外站下载索引（776 条，只存标题与网盘链接）
  *   课本     ↔ TextbookScreen（课标单元 / 教材链接）
  *   打印纸   ↔ ReferenceData + PracticeData（内置速查表与格纸）
  *   更多     ↔ 数据统计 / 打印帮助 / 关于
@@ -458,7 +457,7 @@ function examCard() {
       text: `${f.label}${loaded ? ` ${n}` : ''}`,
       title: !loaded ? '真题库还没载入'
         : n ? `${GradeProfiles.gradeLabel(spec.grade)}可抽 ${n} 道`
-          : `${GradeProfiles.gradeLabel(spec.grade)}这一类没有真题`,
+          : `${GradeProfiles.gradeLabel(spec.grade)}这一类没有带答案的真题`,
       // 题库里这一类在当前年级是 0 道时置灰 —— 勾了也排不出大题，只会让人以为坏了
       disabled: !loaded || n === 0,
       onclick: () => toggleExamFamily(f.key),
@@ -485,6 +484,7 @@ function examCard() {
     ? EXAM_FAMILIES.filter((f) => chosen.has(f.key)).reduce((a, f) => a + examPoolSize(f.key), 0)
     : 0;
   const nothing = loaded && chosen.size > 0 && pickable === 0;
+  const onlyEnglish = effectiveSubjects(spec).length === 1 && effectiveSubjects(spec)[0] === 'ENGLISH';
 
   const head = h('div', { class: 'row' }, [
     h('p', {
@@ -492,7 +492,11 @@ function examCard() {
       text: !loaded
         ? '正在读取真题库…'
         : nothing
-          ? `${GradeProfiles.gradeLabel(spec.grade)}${effectiveSubjects(spec).map((x) => SUBJECT_LABEL[x] ?? x).join('、')}还没有真题，换个年级或科目试试。`
+          ? (onlyEnglish
+            // 英语卷大半是听力题（音频既没下载也印不到纸上），带答案的又太少。
+            // 干巴巴一句「还没有真题」会让人以为是自己选错了。
+            ? '英语真题大多是听力题（没有音频做不了），能用的带答案真题太少 —— 这门建议用自编题。'
+            : `${GradeProfiles.gradeLabel(spec.grade)}${effectiveSubjects(spec).map((x) => SUBJECT_LABEL[x] ?? x).join('、')}还没有带答案的真题，换个年级或科目试试。`)
           : `库里 ${DATA.examBank.length} 道真题，按当前年级与科目：` + (chosen.size
             ? `能抽 ${pickable} 道，勾了 ${chosen.size} 类，每类 ${spec.examPer ?? 5} 题（同年级题不够就少给，不跨年级凑）`
             : '还没勾题型'),
@@ -1895,159 +1899,6 @@ function textbookScreen() {
   return wrap;
 }
 
-// ------------------------------------------------------------------ 页面：名卷库
-
-/**
- * 名卷库 —— 把 shijuan.on2on.cn「小学试卷库」那份下载目录搬成本地索引（776 条）。
- *
- * 那站的试卷本身是网盘里的 PDF / Word，站内没有题目正文，这里也只存标题与链接：
- * 点「打开」跳网盘自取，「复制」把带提取码的整条链接拷走。不下载、不转载文件。
- * 筛选状态只活在这次会话里，不进存档 —— 下次进来从「全部年级」开始最省事。
- */
-const PAPER_SUBJECT_NAME = { MATH: '数学', CHINESE: '语文', ENGLISH: '英语', SCIENCE: '科学' };
-const paperFilter = { grade: 0, subject: '', type: '', q: '', limit: 40 };
-
-function paperMatches(p) {
-  if (paperFilter.grade && p.g !== paperFilter.grade) return false;
-  if (paperFilter.subject && p.s !== paperFilter.subject) return false;
-  if (paperFilter.type && p.t !== paperFilter.type) return false;
-  const q = paperFilter.q.trim();
-  if (q && !p.n.includes(q)) return false;
-  return true;
-}
-
-function papersScreen() {
-  const all = DATA.papers ?? [];
-  const facets = DATA.paperFacets ?? { grades: [], subjects: [], types: [] };
-  const wrap = h('div', { class: 'page page-cards' });
-  wrap.appendChild(h('div', { class: 'page-head' }, [
-    h('h1', { text: '名卷库' }),
-    h('p', { class: 'hint', text: `${all.length} 份现成卷子的下载索引（一~六年级 · 语数英科）。文件在网盘里，这里只存标题和链接，点开自取。` }),
-  ]));
-
-  if (!all.length) {
-    wrap.appendChild(card('还没有索引数据', h('p', { class: 'hint', text: '跑一次 python3 tools/fetch-papers.py 就会生成（需要联网）。' })));
-    return wrap;
-  }
-
-  // ---- 筛选条：年级 / 科目 / 类型 三排 chip + 关键词
-  const patch = (fn) => { fn(); paperFilter.limit = 40; render(); };
-
-  const gradeChips = h('div', { class: 'chips' }, [
-    h('button', {
-      class: `chip${paperFilter.grade === 0 ? ' on' : ''}`, text: `全部 ${all.length}`,
-      onclick: () => patch(() => { paperFilter.grade = 0; }),
-    }),
-    ...facets.grades.map((g) => h('button', {
-      class: `chip${paperFilter.grade === g ? ' on' : ''}`,
-      text: `${GradeProfiles.gradeLabel(g)} ${all.filter((p) => p.g === g).length}`,
-      onclick: () => patch(() => { paperFilter.grade = g; }),
-    })),
-  ]);
-
-  const subjectChips = h('div', { class: 'chips' }, [
-    h('button', {
-      class: `chip${paperFilter.subject === '' ? ' on' : ''}`, text: '全科',
-      onclick: () => patch(() => { paperFilter.subject = ''; }),
-    }),
-    ...facets.subjects.map((s) => h('button', {
-      class: `chip${paperFilter.subject === s ? ' on' : ''}`,
-      text: `${PAPER_SUBJECT_NAME[s] ?? s} ${all.filter((p) => p.s === s).length}`,
-      onclick: () => patch(() => { paperFilter.subject = s; }),
-    })),
-  ]);
-
-  const typeChips = h('div', { class: 'chips' }, [
-    h('button', {
-      class: `chip${paperFilter.type === '' ? ' on' : ''}`, text: '全类型',
-      onclick: () => patch(() => { paperFilter.type = ''; }),
-    }),
-    ...facets.types.map((t) => h('button', {
-      class: `chip${paperFilter.type === t ? ' on' : ''}`,
-      text: `${t} ${all.filter((p) => p.t === t).length}`,
-      onclick: () => patch(() => { paperFilter.type = t; }),
-    })),
-  ]);
-
-  const search = input('search', paperFilter.q, (v) => {
-    paperFilter.q = v;
-    paperFilter.limit = 40;
-    // 只重画列表，不整页 render —— 整页重绘会把输入框一起重建，光标立刻跑掉
-    paintList();
-  }, { placeholder: '搜标题，例如「圆的面积」「第五单元」「苏教版」', class: 'search-box' });
-
-  wrap.appendChild(card('筛一下', gradeChips, subjectChips, typeChips, search));
-
-  // ---- 列表：一次 40 条，多了手动「再看」
-  const listHost = h('div', {});
-  wrap.appendChild(listHost);
-
-  function paintList() {
-    listHost.innerHTML = '';
-    const hits = all.filter(paperMatches);
-    const list = h('div', { class: 'lib-list' });
-    const shown = hits.slice(0, paperFilter.limit);
-    if (!shown.length) {
-      list.appendChild(h('p', { class: 'hint', text: '这个组合下没有卷子，换个年级或科目试试。' }));
-    }
-    shown.forEach((p) => {
-      const meta = [
-        p.g ? GradeProfiles.gradeLabel(p.g) : '',
-        PAPER_SUBJECT_NAME[p.s] ?? p.s,
-        p.t,
-        p.m,
-        p.y ? `${p.y} 年` : '',
-      ].filter(Boolean).join(' · ');
-      list.appendChild(h('div', { class: 'lib-item' }, [
-        h('div', {}, [
-          h('b', { text: p.n }),
-          h('span', { class: 'meta', text: meta }),
-        ]),
-        h('div', { class: 'custom-actions' }, [
-          button('打开', '', () => window.open(p.u, '_blank', 'noreferrer')),
-          button('复制', 'ghost', () => copyText(p.u, '网盘链接（含提取码）已复制')),
-        ]),
-      ]));
-    });
-    listHost.appendChild(card(`查到的卷子 ${hits.length} 条`, list));
-    if (hits.length > shown.length) {
-      listHost.appendChild(h('div', { class: 'row' }, [
-        button(`再看 ${Math.min(40, hits.length - shown.length)} 条（还有 ${hits.length - shown.length}）`, 'ghost', () => {
-          paperFilter.limit += 40;
-          paintList();
-        }),
-      ]));
-    }
-  }
-  paintList();
-
-  wrap.appendChild(card('说明',
-    h('p', { class: 'hint', text: '这些卷子来自 shijuan.on2on.cn 的公开下载目录，文件存在第三方网盘，本站只做索引，不转载也不打包文件。' }),
-    h('p', { class: 'hint', text: '网盘链接由分享者提供，失效是常事；打不开就换一条，或者直接用上面的知识点专项自己出一张。' }),
-  ));
-  return wrap;
-}
-
-/** 复制文本：老浏览器没有 clipboard 就走临时文本框那条老路 */
-function copyText(text, okTip) {
-  const done = () => toast(okTip);
-  if (navigator.clipboard?.writeText) {
-    navigator.clipboard.writeText(text).then(done).catch(() => fallback());
-  } else {
-    fallback();
-  }
-  function fallback() {
-    const ta = document.createElement('textarea');
-    ta.value = text;
-    ta.style.position = 'fixed';
-    ta.style.opacity = '0';
-    document.body.appendChild(ta);
-    ta.select();
-    try { document.execCommand('copy'); done(); } catch (err) { toast('复制失败，请手动选中链接'); }
-    document.body.removeChild(ta);
-  }
-}
-
 // ------------------------------------------------------------------ 页面：打印纸
 
 function sheetsScreen() {
@@ -2135,7 +1986,6 @@ function moreScreen() {
       { v: DATA.content?.poems?.length ?? 0, l: '古诗（首）' },
       { v: (DATA.content?.textbook?.hanzi?.length ?? 0), l: '课本生字' },
       { v: (DATA.content?.references?.length ?? 0) + (DATA.content?.practice?.length ?? 0), l: '可打印纸张' },
-      { v: DATA.papers?.length ?? 0, l: '名卷库（份）' },
     ].map((s) => h('div', { class: 'stat' }, [h('b', { text: String(s.v) }), h('span', { text: s.l })]))),
   ));
 
@@ -2177,7 +2027,6 @@ const TABS = [
   { key: 'sheets', label: '打印纸' },
   { key: 'mistakes', label: '错题本' },
   { key: 'library', label: '试卷库' },
-  { key: 'papers', label: '名卷' },
   { key: 'textbook', label: '课本' },
   { key: 'more', label: '更多' },
 ];
@@ -2217,9 +2066,6 @@ function render() {
       break;
     case 'library':
       view.appendChild(libraryScreen());
-      break;
-    case 'papers':
-      view.appendChild(papersScreen());
       break;
     case 'textbook':
       view.appendChild(textbookScreen());
@@ -2285,7 +2131,7 @@ async function boot() {
   if (state.tab === 'preview') state.tab = 'create';
   // 支持 #preview / #sheets 这类深链：刷新后还停在原来的页面
   const hash = (location.hash || '').replace('#', '');
-  if (['preview', 'sheets', 'mistakes', 'library', 'papers', 'textbook', 'more', 'students'].includes(hash)) {
+  if (['preview', 'sheets', 'mistakes', 'library', 'textbook', 'more', 'students'].includes(hash)) {
     state.tab = hash;
   }
   render();
