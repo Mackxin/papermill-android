@@ -9,9 +9,11 @@
 import {
   DEFAULT_SPEC, TYPE, QUESTION_TYPES, Subject, SUBJECT_LABEL, Term,
   GradeProfiles, effectiveSubjects, makeContext, kindOf,
+  pointsOf, pointTotal, POINT_BY_KEY,
 } from './models.js';
 import { Rng, sectionSeed } from './models.js';
 import { availableTypes, generatorOf, isCrossSubject, runGenerator, subjectOf, generatorCount } from './registry.js';
+import { makePointItems } from '../gen/points.js';
 
 const CN_NUM = ['一', '二', '三', '四', '五', '六', '七', '八', '九', '十'];
 const POINTS_PER_QUESTION = 2;
@@ -58,6 +60,31 @@ export function subjectPrefixFor(spec, type) {
 }
 
 /**
+ * 知识点专项的一个大题。
+ *
+ * 跟常规大题的唯一区别是大题名字用**知识点名**（「一、20以内退位减法」），
+ * 而不是题型名（「一、口算」）—— 专项卷要让人一眼看出这张纸在练哪一课。
+ * 栏数、答题线、竖式说明全部沿用该题型的规则，所以纸面风格和常规卷一致。
+ */
+function pointSection(spec, point, questions, ordinal) {
+  const t = TYPE[point.render] ?? TYPE.ORAL;
+  return {
+    index: ordinal,
+    title: titleFor(point.label, POINTS_PER_QUESTION, questions.length, ordinal),
+    name: point.label,
+    points: POINTS_PER_QUESTION,
+    type: point.render,
+    questions,
+    columns: t.columns <= 1 ? 1 : t.answerLines > 0 ? t.columns : Math.max(t.columns, spec.columns),
+    answerLines: t.answerLines,
+    // 竖式那三个知识点需要「用竖式计算」这句说明；口算、比大小本来就没有说明
+    instruction: t.instruction,
+    titleNote: '',
+    padWithLines: t.padWithLines !== false,
+  };
+}
+
+/**
  * 把「每道题都重复一遍的做题指令」抽出来，作为大题说明只印一次。
  * 判据是最长公共前缀里最后一个冒号；三条保守限制见 Kotlin 注释。
  */
@@ -88,11 +115,29 @@ export function compose(spec, historyHashes = new Set()) {
   const sections = [];
   let nextNo = 1;
 
+  // 知识点专项：选了知识点就只出这些知识点，一个知识点一道大题。
+  // 这时候 spec.counts 不参与 —— 专项卷的意义就是把「考什么」锁死，
+  // 再掺进阅读、应用题就成了普通练习卷，用户会以为专项没生效。
+  const points = pointsOf(spec);
+  const usePoints = points.length > 0;
+
+  if (usePoints) {
+    points.forEach((point, i) => {
+      const per = Math.min(Math.max(spec.pointCount ?? point.count ?? 20, 5), 50);
+      // 每个知识点独立种子：改动其中一个的题量，不会把别的知识点洗牌
+      const rng = new Rng(sectionSeed(spec.seed, 700 + i));
+      const items = makePointItems(point, per, rng).map((q, k) => ({ ...q, no: nextNo + k }));
+      nextNo += items.length;
+      if (!items.length) return;
+      sections.push(pointSection(spec, point, items, sections.length + 1));
+    });
+  }
+
   const ordered = Object.entries(spec.counts)
     .filter(([k, v]) => v > 0 && TYPE[k])
     .sort((a, b) => TYPE[a[0]].order - TYPE[b[0]].order);
 
-  ordered.forEach(([type, rawCount], index) => {
+  (usePoints ? [] : ordered).forEach(([type, rawCount], index) => {
     const count = Math.min(Math.max(rawCount, 1), 200);
     const gen = generatorOf(type, spec.grade);
     if (!gen) return;
@@ -182,9 +227,12 @@ const KIND_WORD = {
   GRADUATION: '小升初冲刺',
 };
 
-export function autoTitleFor(grade, subjects, kind) {
-  const word = KIND_WORD[kindOf(kind).key] ?? '练习';
+export function autoTitleFor(grade, subjects, kind, points = []) {
   const head = `${GradeProfiles.stageLabel(grade)} · ${GradeProfiles.gradeLabel(grade)}`;
+  // 专项卷的标题直接写知识点：家长拿到一张纸，第一眼看的就是「练的哪一课」
+  if (points.length === 1) return `${head} · ${points[0].label}专项`;
+  if (points.length > 1) return `${head} · 数学专项（${points.length} 个知识点）`;
+  const word = KIND_WORD[kindOf(kind).key] ?? '练习';
   const list = Array.isArray(subjects) ? subjects : [subjects];
   return list.length > 1 ? `${head} · ${word}` : `${head} · ${SUBJECT_LABEL[list[0]] || ''}${word}`;
 }
@@ -282,14 +330,14 @@ function pickForSubjects(types, subjects, tilt, kind) {
   return out;
 }
 
-export function specWith({ grade, subject, counts, seed, title, isMistakePaper = false, subjects = [], tilt = 'BALANCED', kind = 'ALL', term }) {
+export function specWith({ grade, subject, counts, seed, title, isMistakePaper = false, subjects = [], tilt = 'BALANCED', kind = 'ALL', term, points = [], pointCount = 20 }) {
   const total = Object.values(counts).reduce((a, b) => a + b, 0);
   const list = subjects.length ? subjects : [subject];
   return {
     ...DEFAULT_SPEC,
     grade,
     subject,
-    title: title ?? autoTitleFor(grade, list, kind),
+    title: title ?? autoTitleFor(grade, list, kind, points.map((k) => POINT_BY_KEY[k]).filter(Boolean)),
     subtitle: `共 ${total} 题　满分 ${total * 2} 分`,
     counts,
     seed: seed ?? (Date.now() % 2147483647),
@@ -298,6 +346,8 @@ export function specWith({ grade, subject, counts, seed, title, isMistakePaper =
     tilt,
     kind: kindOf(kind).key,
     term: term ?? Term.FIRST,
+    points,
+    pointCount,
   };
 }
 

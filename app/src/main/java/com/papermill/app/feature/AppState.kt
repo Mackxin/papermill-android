@@ -40,6 +40,7 @@ import com.papermill.app.domain.generate.AnswerMode
 import com.papermill.app.domain.generate.BankQuestionSource
 import com.papermill.app.domain.generate.CustomSheet
 import com.papermill.app.domain.generate.Density
+import com.papermill.app.domain.generate.MathPoint
 import com.papermill.app.domain.generate.GenContext
 import com.papermill.app.domain.generate.GeneratedPaper
 import com.papermill.app.domain.generate.GeneratedQuestion
@@ -293,6 +294,61 @@ class AppState(private val rawContext: Context) {
         margin = d.margin
         bodySize = d.bodySize
         lineGap = d.lineGap
+        saveSettings()
+    }
+
+    // ---------------- v0.23.0 知识点专项 ----------------
+
+    /**
+     * 选中的数学知识点（v0.23.0，照试卷库的「知识点导航」搬的 15 个）。
+     *
+     * 非空 = 这份卷子是专项卷：一个知识点一道大题、只考这一课，题型配比整块失效。
+     * 为什么单独一个维度：常规卷是「按题型配比拼一张纸」，专项卷是「20 道全是它」，
+     * 后者才是家长真会买的教辅形态（口算天天练、有余数除法专项）。
+     */
+    var points by mutableStateOf<List<MathPoint>>(emptyList())
+        private set
+
+    /** 专项卷里每个知识点出几题（网站的范围 5~50） */
+    var pointCount by mutableStateOf(20)
+        private set
+
+    fun choosePointCount(n: Int) {
+        pointCount = n.coerceIn(5, 50)
+        titleOverride = null
+        previewSeed = System.currentTimeMillis()
+        saveSettings()
+    }
+
+    /**
+     * 勾 / 取消一个知识点。
+     *
+     * 顺手做三件事：科目切到数学（知识点全是数学的，勾着英语点它会出一张
+     * 一道数学题都没有的「专项卷」）、年级跟着知识点走（点「表内乘法」而卷头
+     * 还写着三年级，家长会以为点错了）、标题立刻换成知识点名。
+     */
+    fun togglePoint(p: MathPoint) {
+        val set = points.toMutableSet()
+        if (!set.remove(p)) set.add(p)
+        // 按枚举顺序存：界面与卷面顺序就永远一致，不受点击先后影响
+        points = MathPoint.values().filter { it in set }
+        if (points.isNotEmpty()) {
+            subjects = listOf(Subject.MATH)
+            subject = Subject.MATH
+            grade = points.maxOf { it.grade }
+            normalizeTilt()
+            normalizeKind()
+        }
+        clearUnitFilter()
+        titleOverride = null
+        previewSeed = System.currentTimeMillis()
+        saveSettings()
+    }
+
+    fun clearPoints() {
+        points = emptyList()
+        titleOverride = null
+        previewSeed = System.currentTimeMillis()
         saveSettings()
     }
 
@@ -604,6 +660,8 @@ class AppState(private val rawContext: Context) {
                     targetPages = targetPages,
                     margin = margin,
                     bodySize = bodySize,
+                    points = points.joinToString(",") { it.name },
+                    pointCount = pointCount,
                     layoutVersion = LAYOUT_VERSION,
                     activeStudentId = activeStudentId,
                     term = term,
@@ -628,6 +686,8 @@ class AppState(private val rawContext: Context) {
         targetPages = s.targetPages.coerceIn(0, 8)
         margin = s.margin.coerceIn(8f, 60f)
         bodySize = s.bodySize.coerceIn(8f, 14f)
+        points = s.points.split(",").mapNotNull { MathPoint.of(it.trim()) }
+        pointCount = s.pointCount.coerceIn(5, 50)
         activeStudentId = s.activeStudentId
         term = s.term.coerceIn(0, 2)
 
@@ -1256,7 +1316,12 @@ class AppState(private val rawContext: Context) {
      * v0.19.0 起把自编题也算进来 —— 原来只数 counts，用户写 20 个词进卷子，
      * 首页还显示「0 题」，点「直接出卷」直接被 `totalQuestions > 0` 挡掉。
      */
-    val totalQuestions: Int get() = counts.values.sum() + customQuestionCount
+    val totalQuestions: Int
+        get() = if (points.isEmpty()) {
+            counts.values.sum() + customQuestionCount
+        } else {
+            points.size * pointCount + customQuestionCount
+        }
 
     val estimatedPages: Int
         get() {
@@ -1377,7 +1442,7 @@ class AppState(private val rawContext: Context) {
         /** A/B 卷后缀：题量结构与 A 卷完全一致，只是换了种子重抽题目 */
         copySuffix: String = "",
     ): PaperSpec {
-        val total = useCounts.values.sum()
+        val total = if (points.isEmpty()) useCounts.values.sum() else points.size * pointCount
         // 「三年级上册」这种写法家长最熟：只写「三年级」分不出这学期学的是哪册
         val gradeText = GradeProfiles.gradeLabel(grade) +
             if (term == Term.BOTH) "" else Term.label(term)
@@ -1385,7 +1450,7 @@ class AppState(private val rawContext: Context) {
             // 按单元出卷：标题直接写单元名，家长一眼知道这张卷考的是哪一课
             unitTitle.isNotEmpty() -> "$gradeText · $unitTitle"
             // 卷型直接进标题（「数学期末测试」），点一下就看得见效果
-            else -> PaperComposer.autoTitle(grade, subjects.ifEmpty { listOf(subject) }, kind)
+            else -> PaperComposer.autoTitle(grade, subjects.ifEmpty { listOf(subject) }, kind, points)
         }
         val current = titleOverride?.takeIf { it.isNotBlank() } ?: autoTitle
         // titleOverride 可能是「…数学练习　A 卷」（从试卷库改参数、或上一轮生成 A 卷
@@ -1426,6 +1491,9 @@ class AppState(private val rawContext: Context) {
             term = term,
             studentName = activeStudent?.name.orEmpty(),
             customSheets = visibleCustomSheets,
+            // v0.23.0：知识点专项（非空时 counts 不参与出题）
+            points = points,
+            pointCount = pointCount,
         )
     }
 

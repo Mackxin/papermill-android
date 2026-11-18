@@ -15,11 +15,12 @@ import {
   DEFAULT_SPEC, SUBJECT_ALL, SUBJECT_LABEL, QUESTION_TYPES, TYPE, TILTS, PAPER_KINDS, KIND,
   kindOf, kindFits, ANSWER_MODES, ORIENTATIONS, LINE_GAPS, FOOTER_SIZES, TERM, Term, GradeProfiles,
   MARGINS, BODY_SIZES, DENSITIES, densityOf, defaultFooter,
+  MATH_POINTS, POINT_COUNTS, pointsOf, pointTotal,
   subjectAvailableFor, effectiveSubjects, stableHash, Rng,
 } from './core/models.js';
 import {
   compose, defaultSpec, templatesFor, customValidCount, buildCustomSheet,
-  CUSTOM_MODES, newCustomSheet, tiltFits, sectionTitle, titleFor,
+  CUSTOM_MODES, newCustomSheet, tiltFits, sectionTitle, titleFor, autoTitleFor,
 } from './core/composer.js';
 import { availableTypes, generatorOf, runGenerator, generatorCount } from './core/registry.js';
 import { renderPaper, assemble, repaintQuestion, repaintAnswer } from './core/renderer.js';
@@ -169,6 +170,9 @@ function ensureSpec() {
   if (!state.spec.counts) state.spec.counts = {};
   if (!state.spec.subjects) state.spec.subjects = [state.spec.subject];
   if (state.spec.customSheets === undefined) state.spec.customSheets = [];
+  // 知识点专项是 v0.23.0 才有的字段：老存档没有，补上空数组（空 = 常规卷）
+  if (!Array.isArray(state.spec.points)) state.spec.points = [];
+  if (!state.spec.pointCount) state.spec.pointCount = 20;
   // 老存档（v2 之前）存的是 purpose: DAILY / UNIT / REVIEW，kindOf 里做了映射，
   // 这里顺手把字段换成 kind，免得下次再读还走兼容分支
   if (!state.spec.kind) {
@@ -180,6 +184,9 @@ function ensureSpec() {
 }
 
 const totalCount = (counts) => Object.values(counts ?? {}).reduce((a, b) => a + (b || 0), 0);
+
+/** 这张卷子到底出几题：专项卷看知识点，常规卷看题型配比 */
+const specTotal = (spec) => (pointsOf(spec).length ? pointTotal(spec) : totalCount(spec.counts));
 
 // ------------------------------------------------------------------ 出卷
 
@@ -396,8 +403,108 @@ function paramCard() {
   );
 }
 
+/**
+ * 知识点专项：照 shijuan.on2on.cn「知识点导航」搬来的 15 个知识点。
+ *
+ * 为什么值得单独做一个卡片：常规卷是「按题型配比拼一张纸」，专项卷是
+ * 「只练这一课，20 道全是它」。家长真正会买的教辅就是后者（口算天天练、
+ * 有余数除法专项），而题型配比里没法表达「只出 20以内退位减法」。
+ *
+ * 勾了知识点之后题型配比整块失效 —— 这一点必须显式告诉用户，
+ * 否则他勾着「期末测试 5 种题型」再点知识点，会以为配比还在起作用。
+ */
+function pointsCard() {
+  const spec = state.spec;
+  const chosen = new Set(spec.points ?? []);
+  const total = pointTotal(spec);
+
+  const gradeRows = [1, 2, 3].map((g) => {
+    const wrap = h('div', { class: 'chips' });
+    MATH_POINTS.filter((p) => p.grade === g).forEach((p) => {
+      wrap.appendChild(h('button', {
+        class: `chip${chosen.has(p.key) ? ' on' : ''}`,
+        text: p.label,
+        title: `第 ${p.unit} 单元 · ${p.hint}`,
+        onclick: () => togglePoint(p.key),
+      }));
+    });
+    return field(GradeProfiles.gradeLabel(g), wrap);
+  });
+
+  const countChips = h('div', { class: 'chips' });
+  POINT_COUNTS.forEach((n) => {
+    countChips.appendChild(h('button', {
+      class: `chip${(spec.pointCount ?? 20) === n ? ' on' : ''}`,
+      text: `${n} 题`,
+      onclick: () => {
+        spec.pointCount = n;
+        if (chosen.size) {
+          spec.subtitle = `共 ${pointTotal(spec)} 题　满分 ${pointTotal(spec) * 2} 分`;
+        }
+        save();
+        render();
+      },
+    }));
+  });
+
+  return card('知识点专项（数学 · 15 个）',
+    h('p', { class: 'hint', text: '对着试卷库的「知识点导航」搬的：勾一个就是一份只练这一课的专项卷，勾多个就一个知识点一道大题。不勾 = 按上面的题型配比出常规卷。' }),
+    ...gradeRows,
+    field('每个知识点出几题', countChips),
+    chosen.size
+      ? h('div', { class: 'row' }, [
+        h('p', { class: 'hint', text: `已选 ${chosen.size} 个知识点 · 共 ${total} 题　（题型配比在本卷不生效）` }),
+        button('清空知识点', 'ghost', () => {
+          spec.points = [];
+          save();
+          recomputeCounts();
+          render();
+        }),
+      ])
+      : null,
+  );
+}
+
+/** 勾/取消一个知识点：顺手把科目切到数学、标题换成知识点名 */
+function togglePoint(key) {
+  const spec = ensureSpec();
+  const set = new Set(spec.points ?? []);
+  if (set.has(key)) set.delete(key);
+  else set.add(key);
+  // 按题库顺序存，界面与卷面顺序就永远一致，不受点击先后影响
+  spec.points = MATH_POINTS.filter((p) => set.has(p.key)).map((p) => p.key);
+
+  if (spec.points.length) {
+    // 知识点全是数学的：勾着英语去点它，会出来一张一道数学题都没有的「专项卷」
+    spec.subjects = ['MATH'];
+    spec.subject = 'MATH';
+    // 年级跟着知识点走：点「表内乘法」而卷头还写着三年级，家长会以为点错了
+    spec.grade = Math.max(...pointsOf(spec).map((p) => p.grade));
+    normalizeKind(spec);
+    spec.title = autoTitleFor(spec.grade, ['MATH'], spec.kind, pointsOf(spec));
+    spec.subtitle = `共 ${pointTotal(spec)} 题　满分 ${pointTotal(spec) * 2} 分`;
+  } else {
+    recomputeCounts();
+  }
+  save();
+  render();
+}
+
 function typesCard() {
   const spec = state.spec;
+  // 专项卷不出配比：这里换成一句说明 + 一键退回常规卷，避免两套设置互相打架
+  if (pointsOf(spec).length) {
+    return card('题型与题量',
+      h('p', { class: 'hint', text: `当前是知识点专项：${pointsOf(spec).map((p) => p.label).join('、')}。` }),
+      h('p', { class: 'hint', text: '专项卷一个知识点一道大题、题量按上面选的走，题型配比与这里无关。想要「几种题型混着来」就先清空知识点。' }),
+      button('清空知识点，回到常规配比', 'ghost', () => {
+        spec.points = [];
+        save();
+        recomputeCounts();
+        render();
+      }),
+    );
+  }
   const types = availableTypes(spec.grade, primarySubjects());
   const list = h('div', { class: 'type-list' });
 
@@ -1863,19 +1970,19 @@ function render() {
     default: {
       view.appendChild(h('div', { class: 'page-head' }, [
         h('h1', { text: '出卷' }),
-        h('p', { class: 'hint', text: `${GradeProfiles.gradeLabel(spec.grade)} · ${primarySubjects().map((s) => SUBJECT_LABEL[s]).join(' + ')} · ${Term.label(spec.term)} · 已选 ${totalCount(spec.counts)} 题` }),
+        h('p', { class: 'hint', text: `${GradeProfiles.gradeLabel(spec.grade)} · ${primarySubjects().map((s) => SUBJECT_LABEL[s]).join(' + ')} · ${Term.label(spec.term)} · 已选 ${specTotal(spec)} 题${pointsOf(spec).length ? ' · 知识点专项' : ''}` }),
       ]));
       view.appendChild(studentStrip());
       view.appendChild(templateRow());
       // 电脑端两列并排：左「出什么卷 + 题型」，右「自编题 + 卷面定制」；
       // 手机端 .create-cols 退化成块级，还是原来那样竖着堆。
       view.appendChild(h('div', { class: 'create-cols' }, [
-        h('div', { class: 'col' }, [paramCard(), typesCard()]),
+        h('div', { class: 'col' }, [paramCard(), pointsCard(), typesCard()]),
         h('div', { class: 'col' }, [customCard(), layoutCard()]),
       ]));
       view.appendChild(h('div', { class: 'create-actions' }, [
-        button(`生成卷子（${totalCount(spec.counts)} 题）`, 'primary', async () => {
-          if (!totalCount(spec.counts)) { toast('先勾几个题型'); return; }
+        button(`生成卷子（${specTotal(spec)} 题）`, 'primary', async () => {
+          if (!specTotal(spec)) { toast('先勾几个题型，或选一个知识点'); return; }
           const built = await generatePaper(spec);
           if (built) {
             toast(describe(built.result));

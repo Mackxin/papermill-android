@@ -263,6 +263,69 @@ export function kindFits(grade, key) {
   return grade >= lo && grade <= hi;
 }
 
+// ------------------------------------------------------------------ 数学知识点
+
+/**
+ * 小学数学知识点专项 —— 照 shijuan.on2on.cn「知识点导航」那一页搬的，共 15 个。
+ *
+ * 那个网站的组织方式是「一个知识点一页、只出这一种算式，题量 5~50 自选」。
+ * 我们把这一套搬进题库：选中一个或多个知识点，这份卷子就变成**专项卷**，
+ * 每个知识点单独一道大题，题干和数字范围逐条对齐，不再被年级的通用配比稀释。
+ *
+ * render 用的是本项目已有的题型渲染规则（栏数 / 答题线 / 是否带括号），
+ * 所以专项卷的纸面跟常规卷完全一致，只是「考什么」被锁死了。
+ */
+export const MATH_POINTS = [
+  { key: 'g1.compare', grade: 1, unit: 1, label: '10以内数的比较', render: 'COMPARE', count: 20,
+    hint: '两个 0~10 的数比大小，填 ＞ ＜ ＝' },
+  { key: 'g1.add10', grade: 1, unit: 2, label: '10以内加法', render: 'ORAL', count: 20,
+    hint: '两个数相加不超过 10' },
+  { key: 'g1.sub10', grade: 1, unit: 3, label: '10以内减法', render: 'ORAL', count: 20,
+    hint: '被减数不超过 10，不会减出负数' },
+  { key: 'g1.sub20', grade: 1, unit: 4, label: '20以内退位减法', render: 'ORAL', count: 20,
+    hint: '只出要退位的：11~20 减一位数，个位不够减' },
+  { key: 'g1.addSub100', grade: 1, unit: 5, label: '100以内不进退位加减法', render: 'ORAL', count: 20,
+    hint: '两位数加减两位数，不出进位、不出退位' },
+  { key: 'g2.addSub100Adv', grade: 2, unit: 1, label: '100以内进退位加减法', render: 'ORAL', count: 20,
+    hint: '专练进位加与退位减，和不超过 100' },
+  { key: 'g2.mul', grade: 2, unit: 2, label: '表内乘法', render: 'ORAL', count: 20,
+    hint: '1~9 乘法口诀表内的算式' },
+  { key: 'g2.div', grade: 2, unit: 3, label: '表内除法', render: 'ORAL', count: 20,
+    hint: '用乘法口诀求商，全部除得尽' },
+  { key: 'g2.divRemain', grade: 2, unit: 4, label: '有余数的除法', render: 'ORAL', count: 20,
+    hint: '只出带余数的，商与余数分开写' },
+  { key: 'g2.mulAddSub', grade: 2, unit: 5, label: '乘加 / 乘减混合运算', render: 'ORAL', count: 20,
+    hint: '先乘后加减，加减数不超过 20' },
+  { key: 'g3.addSubWan', grade: 3, unit: 1, label: '万以内加减法（笔算）', render: 'VERTICAL', count: 12,
+    hint: '三位数或四位数相加减，结果不超过 9999，留竖式空' },
+  { key: 'g3.mulMore', grade: 3, unit: 2, label: '多位数乘一位数', render: 'VERTICAL', count: 12,
+    hint: '两位数 / 三位数乘一位数，积不超过 10000' },
+  { key: 'g3.perimeter', grade: 3, unit: 3, label: '长方形正方形周长', render: 'WORD_PROBLEM', count: 10,
+    hint: '给长宽算周长，边长与周长都不超过 200 厘米' },
+  { key: 'g3.fractionAddSub', grade: 3, unit: 4, label: '分数简单加减法', render: 'FRACTION', count: 20,
+    hint: '同分母分数加减，结果要约成最简' },
+  { key: 'g3.mulTwo', grade: 3, unit: 5, label: '两位数乘两位数', render: 'VERTICAL', count: 12,
+    hint: '两个两位数相乘，积不超过 9999' },
+];
+
+export const POINT_BY_KEY = {};
+MATH_POINTS.forEach((p) => { POINT_BY_KEY[p.key] = p; });
+
+/** 这份卷子选中的知识点（过滤掉不认识的 key，老存档里可能有已删除的点） */
+export function pointsOf(spec) {
+  return (spec.points ?? []).map((k) => POINT_BY_KEY[k]).filter(Boolean);
+}
+
+/** 专项卷的题量口径：每个知识点出几题（网站的范围是 5~50） */
+export const POINT_COUNTS = [10, 20, 30, 50];
+
+/** 专项卷一共多少题 */
+export function pointTotal(spec) {
+  const list = pointsOf(spec);
+  const per = Math.min(Math.max(spec.pointCount ?? 20, 5), 50);
+  return list.length * per;
+}
+
 export const ANSWER_MODES = [
   { key: 'NONE', label: '不带答案' },
   { key: 'LAST_PAGE', label: '附答案页' },
@@ -498,6 +561,10 @@ export const DEFAULT_SPEC = {
   term: TERM.FIRST,
   studentName: '',
   customSheets: [],
+  /** 选中的数学知识点（专项卷）：空 = 按常规配比出卷 */
+  points: [],
+  /** 专项卷里每个知识点出几题 */
+  pointCount: 20,
 };
 
 /** 兼容单科旧数据：没勾选多学科时按主科目处理 */

@@ -1138,6 +1138,119 @@ await test('排版自由 · 正文字号 12pt、页数上限能选 6 页', async
   return `12pt 生效 · 页数上限含 6 页 · 页边距 4 档`;
 });
 
+// ---------------------------------------------------------------- 知识点专项
+
+const POINT_NEED = [
+  '10以内数的比较', '10以内加法', '10以内减法', '20以内退位减法', '100以内不进退位加减法',
+  '100以内进退位加减法', '表内乘法', '表内除法', '有余数的除法', '乘加 / 乘减混合运算',
+  '万以内加减法（笔算）', '多位数乘一位数', '长方形正方形周长', '分数简单加减法', '两位数乘两位数',
+];
+
+function pointCard() {
+  const card = qa('#view .card').find((c) => T(c.querySelector('h2')).startsWith('知识点专项'));
+  if (!card) throw new Error('出卷页没有「知识点专项」卡片');
+  return card;
+}
+function pointChip(card, label) {
+  const c = [...card.querySelectorAll('.chip')].find((x) => T(x) === label);
+  if (!c) throw new Error(`知识点里没有「${label}」`);
+  return c;
+}
+/**
+ * 纸面上的每道题。
+ *
+ * 一道题在 DOM 里是**两个**节点（题号一个、题干一个，都带 data-q），
+ * 所以按 qid 去重才是题量 —— 直接数节点会翻倍（踩过）。
+ */
+function questionNodes() {
+  const best = new Map();
+  qa('#view .paper-stage [data-q]:not([data-a])').forEach((n) => {
+    const id = n.dataset.q;
+    if (!id) return;
+    const cur = best.get(id);
+    // 同一个 qid 有两个节点：一个是「1.」题号、一个是题干，取文字长的那个
+    if (!cur || T(n).length > T(cur).length) best.set(id, n);
+  });
+  return [...best.values()];
+}
+/** 大题标题去重：答案页会把同一批标题再印一遍，不去重就会翻倍 */
+function sectionHeads(text) {
+  const set = new Set();
+  String(text).replace(/\s+/g, ' ').split(/(?=[一二三四五六七八九十]、)/).forEach((x) => {
+    const m = /^([一二三四五六七八九十]、[^（]+)（/.exec(x.trim());
+    if (m) set.add(m[1]);
+  });
+  return [...set];
+}
+
+/**
+ * 清空存档重开一次。
+ *
+ * 知识点用例要数「一共几道题」，而前面用例留下的自编题会原样接在专项大题后面
+ * （这是设计如此：自编题永远追加），不清掉就会把 4 道自编题算进来。
+ */
+async function freshApp() {
+  // 注意是 window.localStorage：document 上没有这个属性（踩过一次）
+  frame.contentWindow.localStorage.removeItem(KEY);
+  D().location.reload();
+  await waitFor(() => q('#view .create-actions'), '出卷页重开', 15000);
+  await sleep(500);
+}
+
+await test('知识点专项 · 15 个知识点都在，点「表内乘法」整张卷只出乘法', async () => {
+  await freshApp();
+  const card = pointCard();
+  const chips = [...card.querySelectorAll('.chip')].map(T);
+  const miss = POINT_NEED.filter((x) => !chips.includes(x));
+  if (miss.length) throw new Error('缺知识点：' + miss.join('、'));
+
+  pointChip(card, '表内乘法').click();
+  await sleep(220);
+  const p = await generate();
+  if (!/表内乘法专项/.test(p.text)) throw new Error('卷头没印「表内乘法专项」：' + p.text.slice(0, 80));
+  const qs = questionNodes();
+  if (qs.length !== 20) throw new Error(`题量是 ${qs.length}，默认应该是 20`);
+  const bad = qs.map(T).filter((t) => !/^\d+×\d+=（\s*）$/.test(t));
+  if (bad.length) throw new Error(`混进了别的题：${bad.slice(0, 3).join(' / ')}`);
+  // 口诀范围内的积：1~9 乘 1~9 最多 81
+  const nums = qs.map((n) => {
+    const m = /(\d+)×(\d+)/.exec(T(n));
+    return Number(m[1]) * Number(m[2]);
+  });
+  if (nums.some((v) => v > 81)) throw new Error('出现了超出乘法口诀表的积');
+  return `15 个知识点 · 20 题全是表内乘法 · 最大积 ${Math.max(...nums)}`;
+});
+
+await test('知识点专项 · 勾两个知识点 = 两道大题，清空后回到题型配比', async () => {
+  goCreate();
+  await waitFor(() => q('#view .create-actions'), '出卷页');
+  const card = pointCard();
+  // 上一条用例已经勾了表内乘法，这里再补一个表内除法
+  pointChip(card, '表内除法').click();
+  await sleep(220);
+  const p = await generate();
+  const heads = sectionHeads(p.text);
+  if (heads.length !== 2) throw new Error(`排了 ${heads.length} 个大题：${heads.join(' / ')}`);
+
+  if (!/表内乘法/.test(p.text) || !/表内除法/.test(p.text)) throw new Error('两个大题名没有都印出来');
+  const qs = questionNodes();
+  if (qs.length !== 40) throw new Error(`总题量是 ${qs.length}，两个知识点各 20 应该是 40`);
+  const div = qs.map(T).filter((t) => /÷/.test(t)).length;
+  if (div !== 20) throw new Error(`除法题有 ${div} 道，应该是 20 道`);
+
+  goCreate();
+  await waitFor(() => q('#view .create-actions'), '出卷页');
+  const back = [...pointCard().querySelectorAll('.btn')].find((b) => T(b) === '清空知识点');
+  if (!back) throw new Error('没有「清空知识点」按钮');
+  back.click();
+  await sleep(220);
+  const typeCount = qa('#view .type-item').length;
+  if (!typeCount) throw new Error('清空后题型配比没回来');
+  const again = await generate();
+  if (/专项/.test(again.text)) throw new Error('清空后卷头还写着专项');
+  return `2 个大题 40 题（含 20 道除法）· 清空后 ${typeCount} 个题型回来`;
+});
+
 // ---------------------------------------------------------------- 收尾
 
 paint();

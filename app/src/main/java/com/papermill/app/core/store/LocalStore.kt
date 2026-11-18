@@ -90,6 +90,15 @@ data class AppSettings(
     val margin: Float = 40f,
     /** 正文字号（pt，v0.22.0）：9 / 10 / 11 / 12 */
     val bodySize: Float = 11f,
+    /**
+     * 选中的数学知识点（v0.23.0），以逗号分隔的枚举名存。
+     *
+     * 为什么不存成 JSON 数组：这一层只解析 Settings 里的平铺字段，
+     * 一个字符串就够，读错了也只是「专项卷回到常规卷」，不会让设置整体崩掉。
+     */
+    val points: String = "",
+    /** 专项卷每个知识点出几题（v0.23.0） */
+    val pointCount: Int = 20,
 )
 
 /**
@@ -179,6 +188,8 @@ object LocalStore {
                 term = o.optInt("term", 1).coerceIn(0, 2),
                 margin = o.optDouble("margin", 40.0).toFloat().coerceIn(8f, 60f),
                 bodySize = o.optDouble("bodySize", 11.0).toFloat().coerceIn(8f, 14f),
+                points = o.optString("points", ""),
+                pointCount = o.optInt("pointCount", 20).coerceIn(5, 50),
             )
         }.getOrDefault(AppSettings())
     }
@@ -204,6 +215,8 @@ object LocalStore {
                     .put("term", settings.term)
                     .put("margin", settings.margin.toDouble())
                     .put("bodySize", settings.bodySize.toDouble())
+                    .put("points", settings.points)
+                    .put("pointCount", settings.pointCount)
                     .toString(2)
             )
         }

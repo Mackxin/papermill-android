@@ -26,11 +26,28 @@ object PaperComposer {
         val sections = ArrayList<GeneratedSection>()
         var nextNo = 1
 
+        // 知识点专项：选了知识点就只出这些知识点，一个知识点一道大题。
+        // 这时候 spec.counts 不参与 —— 专项卷的意义就是把「考什么」锁死，
+        // 再掺进阅读、应用题就成了普通练习卷，用户会以为专项没生效。
+        if (spec.points.isNotEmpty()) {
+            spec.points.forEachIndexed { i, point ->
+                val per = spec.pointCount.coerceIn(5, 50)
+                // 每个知识点独立种子：改动其中一个的题量，不会把别的知识点洗牌
+                val rng = Random(GeneratorRegistry.sectionSeed(spec.seed, 700 + i))
+                val items = MathPointGenerators.generate(point, per, rng)
+                    .mapIndexed { k, q -> q.copy(no = nextNo + k) }
+                nextNo += items.size
+                if (items.isNotEmpty()) {
+                    sections.add(pointSectionOf(spec, point, items, sections.size + 1))
+                }
+            }
+        }
+
         val ordered = spec.counts.entries
             .filter { it.value > 0 }
             .sortedBy { it.key.ordinal }
 
-        ordered.forEachIndexed { index, entry ->
+        (if (spec.points.isEmpty()) ordered else emptyList()).forEachIndexed { index, entry ->
             val type = entry.key
             val count = entry.value.coerceIn(1, 200)
             val generator = GeneratorRegistry.of(type, spec.grade) ?: return@forEachIndexed
@@ -183,9 +200,40 @@ object PaperComposer {
         titleNote = titleNote,
     )
 
+    /**
+     * 知识点专项的一个大题。
+     *
+     * 跟常规大题的唯一区别是大题名字用**知识点名**（「一、20以内退位减法」），
+     * 而不是题型名（「一、口算」）—— 专项卷要让人一眼看出这张纸在练哪一课。
+     * 栏数、答题线、竖式说明全部沿用该题型的规则，所以纸面风格和常规卷一致。
+     */
+    private fun pointSectionOf(
+        spec: PaperSpec,
+        point: MathPoint,
+        questions: List<GeneratedQuestion>,
+        ordinal: Int,
+    ): GeneratedSection {
+        val type = point.render
+        return GeneratedSection(
+            index = ordinal,
+            title = titleFor(point.label, POINTS_PER_QUESTION, questions.size, ordinal),
+            name = point.label,
+            points = POINTS_PER_QUESTION,
+            type = type,
+            questions = questions,
+            columns = when {
+                type.columns <= 1 -> 1
+                type.answerLines > 0 -> type.columns
+                else -> maxOf(type.columns, spec.columns)
+            },
+            answerLines = type.answerLines,
+            // 竖式那三个知识点需要「用竖式计算」这句说明；口算、比大小本来就没有说明
+            instruction = type.instruction,
+        )
+    }
+
     /** 多学科交叉时大题标题的科目前缀；跨科题型（题库混装）不加，见 [compose] */
-    fun subjectPrefixFor(spec: PaperSpec, type: QuestionType): String {
-        if (spec.effectiveSubjects().size <= 1) return ""
+    fun subjectPrefixFor(spec: PaperSpec, type: QuestionType): String {        if (spec.effectiveSubjects().size <= 1) return ""
         val generator = GeneratorRegistry.of(type, spec.grade)
         if (generator?.crossSubject == true) return ""
         return GeneratorRegistry.subjectOf(type)?.let { "${it.label}·" } ?: ""
@@ -381,12 +429,14 @@ object PaperComposer {
         subjects: List<Subject> = emptyList(),
         tilt: Tilt = Tilt.BALANCED,
         kind: PaperKind = PaperKind.ALL,
+        points: List<MathPoint> = emptyList(),
+        pointCount: Int = 20,
     ): PaperSpec {
-        val total = counts.values.sum()
+        val total = if (points.isEmpty()) counts.values.sum() else points.size * pointCount.coerceIn(5, 50)
         return PaperSpec(
             grade = grade,
             subject = subject,
-            title = title ?: autoTitle(grade, subjects.ifEmpty { listOf(subject) }, kind),
+            title = title ?: autoTitle(grade, subjects.ifEmpty { listOf(subject) }, kind, points),
             subtitle = "共 $total 题　满分 ${total * 2} 分",
             counts = counts,
             difficulty = 2,
@@ -399,6 +449,8 @@ object PaperComposer {
             subjects = subjects,
             tilt = tilt,
             kind = kind,
+            points = points,
+            pointCount = pointCount,
         )
     }
 
@@ -408,8 +460,16 @@ object PaperComposer {
      * 点一下卷型，卷头那几个字立刻跟着变 —— 这是最快的反馈：不用回头看配比，
      * 也知道这一次点上了（只有「配比真的变了」还不够，用户得看得见）。
      */
-    fun autoTitle(grade: Int, subjects: List<Subject>, kind: PaperKind): String {
+    fun autoTitle(
+        grade: Int,
+        subjects: List<Subject>,
+        kind: PaperKind,
+        points: List<MathPoint> = emptyList(),
+    ): String {
         val head = "${GradeProfiles.stageLabel(grade)} · ${GradeProfiles.gradeLabel(grade)}"
+        // 专项卷的标题直接写知识点：家长拿到一张纸，第一眼看的就是「练的哪一课」
+        if (points.size == 1) return "$head · ${points[0].label}专项"
+        if (points.size > 1) return "$head · 数学专项（${points.size} 个知识点）"
         return if (subjects.size > 1) {
             "$head · ${kindWord(kind)}"
         } else {

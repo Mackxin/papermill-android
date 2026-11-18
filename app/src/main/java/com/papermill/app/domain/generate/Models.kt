@@ -340,6 +340,55 @@ enum class AnswerMode(val label: String) {
 }
 
 /**
+ * 小学数学知识点专项（v0.23.0）—— 对照 shijuan.on2on.cn「知识点导航」那一页搬的，共 15 个。
+ *
+ * 那个网站的组织方式是「一个知识点一页、只出这一种算式，题量 5~50 自选」。
+ * 我们把这一套搬进题库：选中一个或多个知识点，这份卷子就变成**专项卷**，
+ * 每个知识点单独一道大题，题干和数字范围逐条对齐，不再被年级的通用配比稀释。
+ *
+ * [render] 复用已有题型的渲染规则（栏数 / 答题线 / 是否带括号），
+ * 所以专项卷的纸面跟常规卷完全一致，只是「考什么」被锁死了。
+ *
+ * [webKey] 是网页版 models.js 里 MATH_POINTS 的 key —— 两端同一张表，改名要一起改。
+ */
+enum class MathPoint(
+    val label: String,
+    val grade: Int,
+    val unit: Int,
+    val render: QuestionType,
+    val defaultCount: Int,
+    val hint: String,
+    val webKey: String,
+) {
+    G1_COMPARE("10以内数的比较", 1, 1, QuestionType.COMPARE, 20, "两个 0~10 的数比大小，填 ＞ ＜ ＝", "g1.compare"),
+    G1_ADD10("10以内加法", 1, 2, QuestionType.ORAL, 20, "两个数相加不超过 10", "g1.add10"),
+    G1_SUB10("10以内减法", 1, 3, QuestionType.ORAL, 20, "被减数不超过 10，不会减出负数", "g1.sub10"),
+    G1_SUB20("20以内退位减法", 1, 4, QuestionType.ORAL, 20, "只出要退位的：11~20 减一位数，个位不够减", "g1.sub20"),
+    G1_ADDSUB100("100以内不进退位加减法", 1, 5, QuestionType.ORAL, 20, "两位数加减两位数，不出进位、不出退位", "g1.addSub100"),
+    G2_ADDSUB100ADV("100以内进退位加减法", 2, 1, QuestionType.ORAL, 20, "专练进位加与退位减，和不超过 100", "g2.addSub100Adv"),
+    G2_MUL("表内乘法", 2, 2, QuestionType.ORAL, 20, "1~9 乘法口诀表内的算式", "g2.mul"),
+    G2_DIV("表内除法", 2, 3, QuestionType.ORAL, 20, "用乘法口诀求商，全部除得尽", "g2.div"),
+    G2_DIVREMAIN("有余数的除法", 2, 4, QuestionType.ORAL, 20, "只出带余数的，商与余数分开写", "g2.divRemain"),
+    G2_MULADDSUB("乘加 / 乘减混合运算", 2, 5, QuestionType.ORAL, 20, "先乘后加减，加减数不超过 20", "g2.mulAddSub"),
+    G3_ADDSUBWAN("万以内加减法（笔算）", 3, 1, QuestionType.VERTICAL, 12, "三位数或四位数相加减，结果不超过 9999，留竖式空", "g3.addSubWan"),
+    G3_MULMORE("多位数乘一位数", 3, 2, QuestionType.VERTICAL, 12, "两位数 / 三位数乘一位数，积不超过 10000", "g3.mulMore"),
+    G3_PERIMETER("长方形正方形周长", 3, 3, QuestionType.WORD_PROBLEM, 10, "给长宽算周长，边长与周长都不超过 200 厘米", "g3.perimeter"),
+    G3_FRACTIONADDSUB("分数简单加减法", 3, 4, QuestionType.FRACTION, 20, "同分母分数加减，结果要约成最简", "g3.fractionAddSub"),
+    G3_MULTWO("两位数乘两位数", 3, 5, QuestionType.VERTICAL, 12, "两个两位数相乘，积不超过 9999", "g3.mulTwo"),
+    ;
+
+    companion object {
+        /** 专项卷的题量口径：每个知识点出几题（网站的范围是 5~50） */
+        val COUNTS = listOf(10, 20, 30, 50)
+
+        fun of(name: String?): MathPoint? = values().firstOrNull { it.name == name }
+
+        /** 按年级分组给界面用（一 / 二 / 三年级） */
+        fun ofGrade(grade: Int): List<MathPoint> = values().filter { it.grade == grade }
+    }
+}
+
+/**
  * 卷面方向：竖版 / 横版 A4。
  * 放在 domain 层是因为它属于「用户对卷子的要求」，PDF 层只是照着执行。
  * 打印时会同步到 PrintAttributes.MediaSize，避免驱动把横版内容再缩放一次。
@@ -634,6 +683,19 @@ data class PaperSpec(
     val studentName: String = "",
     /** 自编题：内容由用户自己给，按顺序接在常规大题后面（v0.19.0） */
     val customSheets: List<CustomSheet> = emptyList(),
+
+    // ---------------- v0.23.0 知识点专项 ----------------
+
+    /**
+     * 选中的数学知识点。非空 = 这份卷子是**专项卷**：只出这些知识点，
+     * 一个知识点一道大题，[counts] 完全不参与。
+     *
+     * 为什么不用「加几个专项题型」的办法：专项卷的意义就是把「考什么」锁死。
+     * 掺进阅读、应用题就成了普通练习卷，用户会以为知识点没生效。
+     */
+    val points: List<MathPoint> = emptyList(),
+    /** 专项卷里每个知识点出几题（网站的范围 5~50） */
+    val pointCount: Int = 20,
 )
 
 /** 学期文案：上册 / 下册 / 不限。集中一处，UI 和标题都读它 */

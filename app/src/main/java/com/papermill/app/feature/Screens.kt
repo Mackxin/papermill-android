@@ -89,6 +89,7 @@ import com.papermill.app.domain.generate.AnswerMode
 import com.papermill.app.domain.generate.CustomMode
 import com.papermill.app.domain.generate.CustomSheet
 import com.papermill.app.domain.generate.Density
+import com.papermill.app.domain.generate.MathPoint
 import com.papermill.app.domain.generate.GeneratorRegistry
 import com.papermill.app.domain.generate.FooterSize
 import com.papermill.app.domain.generate.GradeProfiles
@@ -1259,6 +1260,9 @@ private fun CreateScreen(state: AppState, scope: CoroutineScope) {
         append(state.targetPages).append('|')
         // v0.22.0：页边距与正文字号直接改纸张几何，缩略图必须重排
         append(state.margin).append('|').append(state.bodySize).append('|')
+        // v0.23.0：知识点专项整块换掉出题来源，签名不进就会「勾了没反应」
+        append(state.points.joinToString(",") { it.name }).append('|')
+        append(state.pointCount).append('|')
         // v0.19.0：学期 / 自编题 / 卷头姓名都会改变纸上内容，缩略图必须跟着重排
         append(state.term).append('|').append(state.activeStudentId).append('|')
         append(state.visibleCustomSheets.joinToString(";") {
@@ -1564,12 +1568,70 @@ private fun CreateScreen(state: AppState, scope: CoroutineScope) {
                 modifier = Modifier.padding(top = 3.dp),
             )
         }
+        Divider()
+        // v0.23.0 知识点专项：照试卷库「知识点导航」搬的 15 个知识点。
+        // 勾了就是专项卷 —— 一个知识点一道大题、只考这一课，题型配比整块不参与。
+        SettingRowFlow("知识点 · 一年级") {
+            MathPoint.ofGrade(1).forEach { p ->
+                ChoiceChip(p.label, p in state.points) { state.togglePoint(p) }
+            }
+        }
+        SettingRowFlow("知识点 · 二年级") {
+            MathPoint.ofGrade(2).forEach { p ->
+                ChoiceChip(p.label, p in state.points) { state.togglePoint(p) }
+            }
+        }
+        SettingRowFlow("知识点 · 三年级") {
+            MathPoint.ofGrade(3).forEach { p ->
+                ChoiceChip(p.label, p in state.points) { state.togglePoint(p) }
+            }
+        }
+        if (state.points.isEmpty()) {
+            Text(
+                "对着试卷库的知识点搬的 15 个专项：勾一个就是一份只练这一课的卷子（自动切到数学、年级跟着知识点走）。不勾就按上面的题型配比出常规卷。",
+                fontSize = PaperDimens.TinySp,
+                color = PaperColors.Muted,
+                lineHeight = 15.sp,
+                modifier = Modifier.padding(top = 3.dp),
+            )
+        } else {
+            SettingRowFlow("每个知识点题量") {
+                MathPoint.COUNTS.forEach { n ->
+                    ChoiceChip("$n 题", state.pointCount == n) { state.choosePointCount(n) }
+                }
+            }
+            Text(
+                "知识点专项：${state.points.joinToString("、") { it.label }}　共 ${state.totalQuestions} 题" +
+                    "（题型配比在本卷不生效）",
+                fontSize = PaperDimens.TinySp,
+                color = PaperColors.OnSurfaceVariant,
+                lineHeight = 15.sp,
+            )
+            Text(
+                "清空知识点",
+                fontSize = PaperDimens.TinySp,
+                color = PaperColors.Primary,
+                modifier = Modifier
+                    .padding(top = 4.dp)
+                    .clickable { state.clearPoints() },
+            )
+        }
     }
 
     // v0.6.0 题型库：搜索 + 按科目筛选，点「＋10」就能加进组合
     Spacer(Modifier.height(14.dp))
     SectionLabel("03", "题型库", "共 ${state.availableTypes.size} 种")
     Spacer(Modifier.height(8.dp))
+    // 专项卷不出配比：这里必须说清楚，否则用户勾着题型再点知识点，会以为两边在打架
+    if (state.points.isNotEmpty()) {
+        Text(
+            "当前是知识点专项（${state.points.size} 个知识点），下面的题型库本卷不参与；想混着来就先清空知识点。",
+            fontSize = PaperDimens.TinySp,
+            color = PaperColors.Accent,
+            lineHeight = 15.sp,
+        )
+        Spacer(Modifier.height(6.dp))
+    }
     var filterSubject by remember { mutableStateOf<Subject?>(null) }
     val subjectOptions = state.availableTypes
         .mapNotNull { GeneratorRegistry.subjectOf(it) }
