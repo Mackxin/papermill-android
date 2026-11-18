@@ -351,6 +351,41 @@ enum class AnswerMode(val label: String) {
  *
  * [webKey] 是网页版 models.js 里 MATH_POINTS 的 key —— 两端同一张表，改名要一起改。
  */
+/**
+ * 真题库的大类（v0.25.0）。
+ *
+ * 题库里切出来的原题型是 FILL / CHOICE / JUDGE / WORD / CALC / OTHER，
+ * 这里归成六类给用户勾：勾几类就在卷上排几个大题，一个大题一类。
+ * 前五类是默认勾上的；「其他题」是把没能归类的杂项（语文修改病句、英语词汇填空、
+ * 数学解答题）聚在一起，质量比前几类参差，所以默认不勾，由用户自己决定要不要。
+ */
+enum class ExamFamily(
+    val label: String,
+    /** 对应真题库里的 t 字段 */
+    val types: Set<String>,
+    /** 排版借用的题型（栏数、答题线都按它来） */
+    val renderType: QuestionType,
+    /** true = 默认不勾选 */
+    val offByDefault: Boolean = false,
+) {
+    BLANK("填空题", setOf("FILL"), QuestionType.FILL_BLANK),
+    CHOICE("选择题", setOf("CHOICE"), QuestionType.CURRIC_CHOICE),
+    JUDGE("判断题", setOf("JUDGE"), QuestionType.SCIENCE_JUDGE),
+    APPLY("应用题", setOf("WORD"), QuestionType.WORD_PROBLEM),
+    // 口算/竖式/脱式都归这里。默认不勾：题库里的「计算」多是「直接写得数」一整块，
+    // 一道题里挤着八九个算式，印出来的观感跟填空题差得远，让用户自己决定。
+    CALC("计算题", setOf("CALC"), QuestionType.ORAL, offByDefault = true),
+    // 其他题要写字（修改病句、词汇填空、解答过程），借用应用题的排版：单栏 + 三条线
+    OTHER("其他题", setOf("OTHER", "MATCH"), QuestionType.WORD_PROBLEM, offByDefault = true),
+    ;
+
+    companion object {
+        fun ofKey(k: String): ExamFamily? = entries.firstOrNull { it.name == k }
+        val defaults: List<ExamFamily> get() = entries.filter { !it.offByDefault }
+    }
+}
+
+
 enum class MathPoint(
     val label: String,
     val grade: Int,
@@ -720,6 +755,18 @@ data class PaperSpec(
     val points: List<MathPoint> = emptyList(),
     /** 专项卷里每个知识点出几题（网站的范围 5~50） */
     val pointCount: Int = 20,
+
+    // ---------------- v0.25.0 真题库 ----------------
+
+    /**
+     * 真题出卷：开了就从真题库（下载的公开试卷切出来的题）抽题，不再现场生成。
+     * 跟 [points] 互斥 —— 两种「锁死考什么」的模式同时开着，用户会以为有一个没生效。
+     */
+    val exam: Boolean = false,
+    /** 真题要哪几类：勾几类就排几个大题 */
+    val examFamilies: List<ExamFamily> = ExamFamily.defaults,
+    /** 真题每类抽几道 */
+    val examPer: Int = 5,
 )
 
 /** 学期文案：上册 / 下册 / 不限。集中一处，UI 和标题都读它 */

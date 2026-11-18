@@ -11,3 +11,7 @@ captures/
 *.aab
 *.jks
 *.keystore
+tools/.baidu-session.json
+tools/.probe-cache.json
+downloads/
+tools/__pycache__/

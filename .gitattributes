@@ -1,2 +1,5 @@
 # 单文件版是构建产物（3MB 一行 JSON），diff 展开没意义还会卡住 git 界面
 试卷工坊.html -diff
+# 真题库是 tools/build-question-bank.py 的产物，3MB 一行 JSON，展开 diff 没意义
+web/data/papers/questions.json -diff
+app/src/main/assets/papers/questions.json -diff

@@ -599,7 +599,45 @@ export const DEFAULT_SPEC = {
   points: [],
   /** 专项卷里每个知识点出几题 */
   pointCount: 20,
+  /** 真题出卷：开了就从真题库（下载的公开试卷切出来的题）抽题，不再现场生成 */
+  exam: false,
+  /** 真题要哪几类：BLANK / CHOICE / JUDGE / APPLY，勾几类就出几个大题 */
+  examFamilies: ['BLANK', 'CHOICE', 'JUDGE', 'APPLY'],
+  /** 真题每类抽几道 */
+  examPer: 5,
 };
+
+/**
+ * 真题库的大类。题库里切出来的原题型是 FILL / CHOICE / JUDGE / WORD / CALC / OTHER，
+ * 这里归成六类给用户勾 —— 勾「填空」就只出填空题，一个大题一类。
+ */
+export const EXAM_FAMILIES = [
+  { key: 'BLANK', label: '填空题', types: ['FILL'] },
+  { key: 'CHOICE', label: '选择题', types: ['CHOICE'] },
+  { key: 'JUDGE', label: '判断题', types: ['JUDGE'] },
+  { key: 'APPLY', label: '应用题', types: ['WORD'] },
+  // 计算题和其他题默认都不勾，由用户自己决定要不要。
+  // 原因：题库里的「计算」大多是「直接写得数」一整块（一道题里挤着八九个算式），
+  // 印出来跟填空题的观感差得远；「其他」是没能归类的杂项（语文修改病句、
+  // 英语词汇填空、数学解答题），质量比前四类参差。两类都能正常出，只是不默认开。
+  { key: 'CALC', label: '计算题', types: ['CALC'], off: true },
+  { key: 'OTHER', label: '其他题', types: ['OTHER', 'MATCH'], off: true },
+];
+
+/** 默认勾选的大类（`off: true` 的那些要用户自己开） */
+export const DEFAULT_EXAM_FAMILIES = EXAM_FAMILIES.filter((f) => !f.off).map((f) => f.key);
+
+/** 题库里的题型 → 大类 */
+export function examFamilyOf(t) {
+  switch (t) {
+    case 'FILL': return 'BLANK';
+    case 'CHOICE': return 'CHOICE';
+    case 'JUDGE': return 'JUDGE';
+    case 'WORD': return 'APPLY';
+    case 'CALC': return 'CALC';
+    default: return 'OTHER';
+  }
+}
 
 /** 兼容单科旧数据：没勾选多学科时按主科目处理 */
 export function effectiveSubjects(spec) {

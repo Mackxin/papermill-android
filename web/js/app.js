@@ -17,6 +17,7 @@ import {
   kindOf, kindFits, ANSWER_MODES, ORIENTATIONS, LINE_GAPS, FOOTER_SIZES, TERM, Term, GradeProfiles,
   MARGINS, BODY_SIZES, DENSITIES, densityOf, defaultFooter,
   MATH_POINTS, POINT_COUNTS, pointsOf, pointTotal,
+  EXAM_FAMILIES, DEFAULT_EXAM_FAMILIES, examFamilyOf,
   subjectAvailableFor, effectiveSubjects, stableHash, Rng,
 } from './core/models.js';
 import {
@@ -28,7 +29,7 @@ import { renderPaper, assemble, repaintQuestion, repaintAnswer } from './core/re
 import { renderPages, applyZoom, printPaper, describe, printNodes } from './ui/paper.js';
 import { exportPdf, exportPngs } from './ui/export.js';
 import { referenceSheet, practiceSheet } from './ui/sheets.js';
-import { DATA, loadCoreData, loadCurriculumFor, curricUnits, CURRIC_META } from './data/store.js';
+import { DATA, loadCoreData, loadCurriculumFor, loadExamBank, curricUnits, CURRIC_META } from './data/store.js';
 import {
   openModal, closeModal, toast, confirmDialog, field, select, input, textarea, chips,
   stepper, slider,
@@ -174,6 +175,10 @@ function ensureSpec() {
   // 知识点专项是 v0.23.0 才有的字段：老存档没有，补上空数组（空 = 常规卷）
   if (!Array.isArray(state.spec.points)) state.spec.points = [];
   if (!state.spec.pointCount) state.spec.pointCount = 20;
+  // 真题库是 v0.25.0 才有的字段，老存档同样要补
+  if (state.spec.exam === undefined) state.spec.exam = false;
+  if (!Array.isArray(state.spec.examFamilies)) state.spec.examFamilies = [...DEFAULT_EXAM_FAMILIES];
+  if (!state.spec.examPer) state.spec.examPer = 5;
   // 老存档（v2 之前）存的是 purpose: DAILY / UNIT / REVIEW，kindOf 里做了映射，
   // 这里顺手把字段换成 kind，免得下次再读还走兼容分支
   if (!state.spec.kind) {
@@ -414,6 +419,107 @@ function paramCard() {
  * 勾了知识点之后题型配比整块失效 —— 这一点必须显式告诉用户，
  * 否则他勾着「期末测试 5 种题型」再点知识点，会以为配比还在起作用。
  */
+// ------------------------------------------------------------------ 真题库
+
+/** 当前条件下真题库能抽到多少题（跟 composer 的池子规则保持一致，别各算一套） */
+function examPoolSize(familyKey) {
+  const spec = state.spec;
+  const def = EXAM_FAMILIES.find((f) => f.key === familyKey);
+  if (!def) return 0;
+  const subjects = effectiveSubjects(spec);
+  const bank = DATA.examBank ?? [];
+  // 只算同年级：题库出卷严格按年级取题，这里报的数要和实际能抽到的一致
+  return bank.filter((q) => q.q && q.q.length >= 6 && def.types.includes(q.t)
+    && subjects.includes(q.s) && q.g === spec.grade).length;
+}
+
+function toggleExamFamily(key) {
+  const spec = ensureSpec();
+  const set = new Set(spec.examFamilies ?? []);
+  if (set.has(key)) set.delete(key);
+  else set.add(key);
+  // 按固定顺序存，卷面上的大题顺序就不受点击先后影响
+  spec.examFamilies = EXAM_FAMILIES.filter((f) => set.has(f.key)).map((f) => f.key);
+  save();
+  render();
+}
+
+function examCard() {
+  const spec = ensureSpec();
+  const loaded = (DATA.examBank ?? []).length > 0;
+  const on = !!spec.exam;
+  const chosen = new Set(spec.examFamilies ?? []);
+
+  const famChips = h('div', { class: 'chips' });
+  EXAM_FAMILIES.forEach((f) => {
+    const n = loaded ? examPoolSize(f.key) : 0;
+    famChips.appendChild(h('button', {
+      class: `chip${chosen.has(f.key) ? ' on' : ''}`,
+      text: `${f.label}${loaded ? ` ${n}` : ''}`,
+      title: !loaded ? '真题库还没载入'
+        : n ? `${GradeProfiles.gradeLabel(spec.grade)}可抽 ${n} 道`
+          : `${GradeProfiles.gradeLabel(spec.grade)}这一类没有真题`,
+      // 题库里这一类在当前年级是 0 道时置灰 —— 勾了也排不出大题，只会让人以为坏了
+      disabled: !loaded || n === 0,
+      onclick: () => toggleExamFamily(f.key),
+    }));
+  });
+
+  const countChips = h('div', { class: 'chips' });
+  [3, 5, 8, 10, 15, 20].forEach((n) => {
+    countChips.appendChild(h('button', {
+      class: `chip${(spec.examPer ?? 5) === n ? ' on' : ''}`,
+      text: `${n} 题`,
+      onclick: () => {
+        spec.examPer = n;
+        save();
+        render();
+      },
+    }));
+  });
+
+  // 当前年级 + 科目下到底能抽到几道（勾中的那几类相加）。
+  // 题库是按 年级×科目 切的，某个年级某科一道题都没有是常态（三年级数学就是），
+  // 不算出来就会让用户点了「用真题出卷」却什么都没发生。
+  const pickable = loaded
+    ? EXAM_FAMILIES.filter((f) => chosen.has(f.key)).reduce((a, f) => a + examPoolSize(f.key), 0)
+    : 0;
+  const nothing = loaded && chosen.size > 0 && pickable === 0;
+
+  const head = h('div', { class: 'row' }, [
+    h('p', {
+      class: 'hint',
+      text: !loaded
+        ? '正在读取真题库…'
+        : nothing
+          ? `${GradeProfiles.gradeLabel(spec.grade)}${effectiveSubjects(spec).map((x) => SUBJECT_LABEL[x] ?? x).join('、')}还没有真题，换个年级或科目试试。`
+          : `库里 ${DATA.examBank.length} 道真题，按当前年级与科目：` + (chosen.size
+            ? `能抽 ${pickable} 道，勾了 ${chosen.size} 类，每类 ${spec.examPer ?? 5} 题（同年级题不够就少给，不跨年级凑）`
+            : '还没勾题型'),
+    }),
+  ]);
+
+  const toggleBtn = button(on ? '关掉真题，回到自编' : '用真题出卷', on ? 'ghost' : 'primary', () => {
+    if (!on && nothing) return;
+    spec.exam = !on;
+    if (spec.exam && !(spec.examFamilies ?? []).length) {
+      spec.examFamilies = [...DEFAULT_EXAM_FAMILIES];
+    }
+    // 开真题时把知识点清掉：两种模式互斥，都留着会让人以为勾的知识点没生效
+    if (spec.exam) spec.points = [];
+    save();
+    render();
+  });
+
+  return card(`真题库${loaded ? `（${DATA.examBank.length} 道）` : ''}`,
+    h('p', { class: 'hint', text: '这些题是从公开分享的期末/期中/单元卷里切出来的原题，带答案。开了真题就只出真题，一个大类一个大题；关掉就回到按题型配比现场生成。' }),
+    head,
+    field('要哪几类题', famChips),
+    field('每类出几题', countChips),
+    h('div', { class: 'row' }, [toggleBtn]),
+  );
+}
+
 function pointsCard() {
   const spec = state.spec;
   const chosen = new Set(spec.points ?? []);
@@ -2137,7 +2243,7 @@ function render() {
       // 电脑端两列并排：左「出什么卷 + 题型」，右「自编题 + 卷面定制」；
       // 手机端 .create-cols 退化成块级，还是原来那样竖着堆。
       view.appendChild(h('div', { class: 'create-cols' }, [
-        h('div', { class: 'col' }, [paramCard(), pointsCard(), typesCard()]),
+        h('div', { class: 'col' }, [paramCard(), examCard(), pointsCard(), typesCard()]),
         h('div', { class: 'col' }, [customCard(), layoutCard()]),
       ]));
       view.appendChild(h('div', { class: 'create-actions' }, [
@@ -2183,6 +2289,11 @@ async function boot() {
     state.tab = hash;
   }
   render();
+
+  // 真题库几 MB，不挡首屏：先画完界面再后台读，读到了重画一次出卷页
+  loadExamBank().then((list) => {
+    if (list.length && state.tab === 'create') render();
+  });
 
   // 首次进来先给一张默认卷子垫着，免得点了「保存/打印」发现是空的
   if (!state.result) {

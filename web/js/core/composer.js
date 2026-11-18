@@ -9,9 +9,11 @@
 import {
   DEFAULT_SPEC, TYPE, QUESTION_TYPES, Subject, SUBJECT_LABEL, Term,
   GradeProfiles, effectiveSubjects, makeContext, kindOf,
-  pointsOf, pointTotal, POINT_BY_KEY,
+  pointsOf, pointTotal, POINT_BY_KEY, EXAM_FAMILIES, examFamilyOf,
 } from './models.js';
 import { Rng, sectionSeed } from './models.js';
+// data 层不反向依赖 core，这里单向引用不会成环
+import { DATA } from '../data/store.js';
 import { availableTypes, generatorOf, isCrossSubject, runGenerator, subjectOf, generatorCount } from './registry.js';
 import { makePointItems } from '../gen/points.js';
 
@@ -134,11 +136,53 @@ export function compose(spec, historyHashes = new Set()) {
     });
   }
 
+  // 真题卷：从真题库（下载的公开试卷切出来的题）抽题，一个大类一个大题。
+  // 开了真题就只出真题 —— 跟知识点专项同一个道理：混着出，用户会以为开关没生效。
+  const useExam = !usePoints && !!spec.exam && (DATA.examBank?.length ?? 0) > 0;
+  if (useExam) {
+    const subjects = effectiveSubjects(spec);
+    const per = Math.min(Math.max(spec.examPer ?? 5, 1), 30);
+    const fams = (spec.examFamilies ?? []).filter((k) => EXAM_FAMILIES.some((f) => f.key === k));
+    const allowed = new Set(fams);
+    const usable = DATA.examBank.filter((q) => q.q && q.q.length >= 6 && q.t
+      && subjects.includes(q.s) && allowed.has(examFamilyOf(q.t)));
+
+    fams.forEach((fam, i) => {
+      const def = EXAM_FAMILIES.find((f) => f.key === fam);
+      const rng = new Rng(sectionSeed(spec.seed, 900 + i));
+      // 严格同年级。以前试过「不够就往邻年级借一年」，结果三年级卷里冒出
+      // 「四年级同学去植树」—— 难度对不上年级，家长一眼就看出来了。
+      // 题库不够就如实少给：宁可一张卷少几道，也不能年级错配。
+      const pool = usable.filter((q) => def.types.includes(q.t) && q.g === spec.grade);
+      if (!pool.length) return;
+
+      const picked = rng.shuffle(pool).slice(0, per).map((q, k) => ({
+        no: nextNo + k,
+        type: 'EXAM',
+        // 选择题的选项直接并进题干，跟自编题库生成器的做法一致（渲染层不认独立选项字段）
+        stem: q.o && q.o.length ? `${q.q}　${q.o.join('　')}` : q.q,
+        answer: q.a ?? '',
+        topic: q.sec ?? '',
+      }));
+      nextNo += picked.length;
+
+      const sec = sectionOf(spec, 'KNOWLEDGE', picked, sections.length + 1, '', '', '');
+      sec.title = titleFor(def.label, POINTS_PER_QUESTION, picked.length, sections.length + 1);
+      sec.name = def.label;
+      // 应用题 / 其他题都是要写字的（简答、修改病句、解答过程），留三行横线、单栏；
+      // 填空选择判断计算都是短答，走双栏省纸。
+      const prose = fam === 'APPLY' || fam === 'OTHER';
+      sec.answerLines = prose ? 3 : 0;
+      sec.columns = prose ? 1 : Math.max(2, spec.columns);
+      sections.push(sec);
+    });
+  }
+
   const ordered = Object.entries(spec.counts)
     .filter(([k, v]) => v > 0 && TYPE[k])
     .sort((a, b) => TYPE[a[0]].order - TYPE[b[0]].order);
 
-  (usePoints ? [] : ordered).forEach(([type, rawCount], index) => {
+  (usePoints || useExam ? [] : ordered).forEach(([type, rawCount], index) => {
     const count = Math.min(Math.max(rawCount, 1), 200);
     const gen = generatorOf(type, spec.grade);
     if (!gen) return;

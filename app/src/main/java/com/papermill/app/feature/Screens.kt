@@ -95,7 +95,9 @@ import com.papermill.app.domain.content.TextbookCatalog
 import com.papermill.app.domain.generate.AnswerMode
 import com.papermill.app.domain.generate.CustomMode
 import com.papermill.app.domain.generate.CustomSheet
+import com.papermill.app.domain.content.ExamBank
 import com.papermill.app.domain.generate.Density
+import com.papermill.app.domain.generate.ExamFamily
 import com.papermill.app.domain.generate.MathPoint
 import com.papermill.app.domain.generate.GeneratorRegistry
 import com.papermill.app.domain.generate.FooterSize
@@ -1572,6 +1574,50 @@ private fun CreateScreen(state: AppState, scope: CoroutineScope) {
         if (state.kind != PaperKind.ALL) {
             Text(
                 "换了卷型会重算题型与题量；已经手动调过的题量会被覆盖，点卷型就是重新开始配比。",
+                fontSize = PaperDimens.TinySp,
+                color = PaperColors.Muted,
+                lineHeight = 15.sp,
+                modifier = Modifier.padding(top = 3.dp),
+            )
+        }
+        Divider()
+        // v0.25.0 真题库：从下载的公开试卷里切出来的原题，勾几类就排几个大题。
+        // 跟知识点专项互斥 —— 两种都是「把考什么锁死」，同时开着会让人以为有一个没生效。
+        SettingRowFlow("真题") {
+            ChoiceChip(
+                if (state.examBankReady) "用真题出卷" else "正在读取真题库…",
+                state.exam,
+            ) { if (state.examBankReady) state.chooseExam(!state.exam) }
+        }
+        if (state.exam) {
+            SettingRowFlow("真题 · 要哪几类") {
+                ExamFamily.entries.forEach { f ->
+                    ChoiceChip(f.label, f in state.examFamilies) { state.toggleExamFamily(f) }
+                }
+            }
+            SettingRowFlow("真题 · 每类几题") {
+                listOf(3, 5, 8, 10, 15, 20).forEach { n ->
+                    ChoiceChip("$n 题", state.examPer == n) { state.chooseExamPer(n) }
+                }
+            }
+            val pool = ExamFamily.entries
+                .filter { it in state.examFamilies }
+                .sumOf { ExamBank.countOf(state.grade, state.subjects.map { it.code }.toSet(), it.types) }
+            Text(
+                if (pool == 0) {
+                    "${GradeProfiles.gradeLabel(state.grade)}${state.subjects.joinToString("、") { it.label }}还没有真题，换个年级或科目试试。"
+                } else {
+                    "当前年级与科目能抽 $pool 道，每类取 ${state.examPer} 道（同年级题不够就少给，不跨年级凑）。"
+                },
+                fontSize = PaperDimens.TinySp,
+                color = PaperColors.Muted,
+                lineHeight = 15.sp,
+                modifier = Modifier.padding(top = 3.dp),
+            )
+        } else if (state.points.isEmpty()) {
+            Text(
+                "真题库是公开分享的期末/期中/单元卷切出来的原题，带答案。开了真题就只出真题，一个大类一个大题；" +
+                    "关掉就回到按题型配比现场生成。",
                 fontSize = PaperDimens.TinySp,
                 color = PaperColors.Muted,
                 lineHeight = 15.sp,

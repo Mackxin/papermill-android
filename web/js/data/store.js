@@ -23,6 +23,7 @@ export const DATA = {
   catalog: [],
   papers: [],          // 名卷库：i/n/g/s/t/m/y/u 八个字段，见 tools/fetch-papers.py
   paperFacets: null,
+  examBank: [],        // 真题库：从下载的 docx 试卷切出来的题，见 tools/build-question-bank.py
   stats: null,
   loadedSubjects: new Set(),
 };
@@ -77,8 +78,30 @@ export async function loadCoreData() {
   DATA.stats = stats;
 }
 
-/** 按需加载某一科的课标题库（一科 2500 道题、约 0.8MB，五科全载没必要） */
-export async function loadCurriculum(subject) {
+/**
+ * 真题库（从下载的 docx 试卷里切出来的题）。
+ *
+ * 为什么懒加载：题库有上万道题、好几 MB，首屏用不到，跟着 loadCoreData 一起拉
+ * 会把打开应用的时间拖长一大截。用户真去点「真题」时才载。
+ */
+let examBankPromise = null;
+export function loadExamBank() {
+  if (!examBankPromise) {
+    examBankPromise = getJson('data/papers/questions.json')
+      .then((d) => {
+        DATA.examBank = d?.items ?? [];
+        return DATA.examBank;
+      })
+      // 缺文件不该让出卷页白屏（精简部署、旧存档都可能没有这份）
+      .catch(() => {
+        DATA.examBank = [];
+        return [];
+      });
+  }
+  return examBankPromise;
+}
+
+/** 按需加载某一科的课标题库（一科 2500 道题、约 0.8MB，五科全载没必要） */export async function loadCurriculum(subject) {
   const key = subjectKey(subject);
   if (DATA.loadedSubjects.has(key)) return;
   const root = await getJson(`data/taxonomy/${key}.json`);

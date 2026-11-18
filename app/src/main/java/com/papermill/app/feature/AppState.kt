@@ -34,6 +34,7 @@ import com.papermill.app.core.store.SessionState
 import com.papermill.app.core.update.UpdateChecker
 import com.papermill.app.domain.content.CurricUnit
 import com.papermill.app.domain.content.CurriculumBank
+import com.papermill.app.domain.content.ExamBank
 import com.papermill.app.domain.content.PaperLibrary
 import com.papermill.app.domain.content.ScienceBank
 import com.papermill.app.domain.content.TextbookCatalog
@@ -41,6 +42,7 @@ import com.papermill.app.domain.generate.AnswerMode
 import com.papermill.app.domain.generate.BankQuestionSource
 import com.papermill.app.domain.generate.CustomSheet
 import com.papermill.app.domain.generate.Density
+import com.papermill.app.domain.generate.ExamFamily
 import com.papermill.app.domain.generate.MathPoint
 import com.papermill.app.domain.generate.GenContext
 import com.papermill.app.domain.generate.GeneratedPaper
@@ -322,6 +324,53 @@ class AppState(private val rawContext: Context) {
     /** 专项卷里每个知识点出几题（网站的范围 5~50） */
     var pointCount by mutableStateOf(20)
         private set
+
+    // ------------------------------------------------------------------
+    // 真题库（v0.25.0）
+    //
+    // 跟「知识点专项」互斥：两种都是「把考什么锁死」，同时开着用户会以为有一个没生效。
+    // ------------------------------------------------------------------
+
+    /** 开了就从真题库（下载的公开试卷切出来的题）抽题，不再现场生成 */
+    var exam by mutableStateOf(false)
+        private set
+
+    /** 要哪几类题，勾几类就排几个大题（「其他题」默认不勾，见 ExamFamily.offByDefault） */
+    var examFamilies by mutableStateOf(ExamFamily.defaults)
+        private set
+
+    /** 每类抽几道 */
+    var examPer by mutableStateOf(5)
+        private set
+
+    /** 真题库读完了没有：没读完时卡片显示「正在读取」，按钮点不动 */
+    var examBankReady by mutableStateOf(false)
+        private set
+
+    fun chooseExam(on: Boolean) {
+        exam = on
+        // 开真题就把知识点清掉；关掉则完全恢复成按题型配比
+        if (on) points = emptyList()
+        titleOverride = null
+        previewSeed = System.currentTimeMillis()
+        saveSettings()
+    }
+
+    fun toggleExamFamily(f: ExamFamily) {
+        val set = examFamilies.toMutableSet()
+        if (!set.add(f)) set.remove(f)
+        // 按固定顺序存，卷面大题顺序就不受点击先后影响
+        examFamilies = ExamFamily.entries.filter { it in set }
+        if (examFamilies.isEmpty()) examFamilies = ExamFamily.defaults
+        previewSeed = System.currentTimeMillis()
+        saveSettings()
+    }
+
+    fun chooseExamPer(n: Int) {
+        examPer = n.coerceIn(1, 30)
+        previewSeed = System.currentTimeMillis()
+        saveSettings()
+    }
 
     // ------------------------------------------------------------------
     // 名卷库的筛选（v0.24.0）
@@ -692,6 +741,9 @@ class AppState(private val rawContext: Context) {
                     bodySize = bodySize,
                     points = points.joinToString(",") { it.name },
                     pointCount = pointCount,
+                    exam = exam,
+                    examFamilies = examFamilies.joinToString(",") { it.name },
+                    examPer = examPer,
                     layoutVersion = LAYOUT_VERSION,
                     activeStudentId = activeStudentId,
                     term = term,
@@ -718,6 +770,10 @@ class AppState(private val rawContext: Context) {
         bodySize = s.bodySize.coerceIn(8f, 14f)
         points = s.points.split(",").mapNotNull { MathPoint.of(it.trim()) }
         pointCount = s.pointCount.coerceIn(5, 50)
+        exam = s.exam
+        examFamilies = s.examFamilies.split(',').mapNotNull { ExamFamily.ofKey(it.trim()) }
+            .ifEmpty { ExamFamily.defaults }
+        examPer = s.examPer.coerceIn(1, 30)
         activeStudentId = s.activeStudentId
         term = s.term.coerceIn(0, 2)
 
@@ -1087,6 +1143,10 @@ class AppState(private val rawContext: Context) {
         val t4 = android.os.SystemClock.elapsedRealtime()
         // 名卷库：776 条外站下载索引，只读标题和链接，不影响出卷
         PaperLibrary.init(ctx)
+        // 真题库几 MB，启动时不占主线程：读完再切回主线程把状态翻成「就绪」
+        ExamBank.warmUp(ctx) {
+            android.os.Handler(android.os.Looper.getMainLooper()).post { examBankReady = true }
+        }
         // 卷面样式（姓名栏 / 一行标题 / 页脚 / 行距）跟着设置一起读回来，
         // 用户上次调好的版式下次开 App 还是那样
         applySettings(LocalStore.loadSettings(ctx))
@@ -1365,10 +1425,12 @@ class AppState(private val rawContext: Context) {
      * 首页还显示「0 题」，点「直接出卷」直接被 `totalQuestions > 0` 挡掉。
      */
     val totalQuestions: Int
-        get() = if (points.isEmpty()) {
-            counts.values.sum() + customQuestionCount
-        } else {
-            points.size * pointCount + customQuestionCount
+        get() = when {
+            // 真题：按「勾了几类 × 每类几题」估。同年级题不够时会少给，
+            // 所以这只是上限，卷面实际题数以生成结果为准
+            exam -> examFamilies.size * examPer + customQuestionCount
+            points.isNotEmpty() -> points.size * pointCount + customQuestionCount
+            else -> counts.values.sum() + customQuestionCount
         }
 
     val estimatedPages: Int
@@ -1542,6 +1604,10 @@ class AppState(private val rawContext: Context) {
             // v0.23.0：知识点专项（非空时 counts 不参与出题）
             points = points,
             pointCount = pointCount,
+            // v0.25.0：真题库（开着时 counts 与知识点都不参与）
+            exam = exam,
+            examFamilies = examFamilies,
+            examPer = examPer,
         )
     }
 

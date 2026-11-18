@@ -106,6 +106,11 @@ data class AppSettings(
     val points: String = "",
     /** 专项卷每个知识点出几题（v0.23.0） */
     val pointCount: Int = 20,
+    /** 真题出卷开关（v0.25.0） */
+    val exam: Boolean = false,
+    /** 勾了哪几类真题，逗号分隔的 ExamFamily 名字 */
+    val examFamilies: String = "BLANK,CHOICE,JUDGE,APPLY",
+    val examPer: Int = 5,
 )
 
 /**
@@ -198,6 +203,9 @@ object LocalStore {
                 bodySize = o.optDouble("bodySize", 11.0).toFloat().coerceIn(8f, 14f),
                 points = o.optString("points", ""),
                 pointCount = o.optInt("pointCount", 20).coerceIn(5, 50),
+                exam = o.optBoolean("exam", false),
+                examFamilies = o.optString("examFamilies", "BLANK,CHOICE,JUDGE,APPLY"),
+                examPer = o.optInt("examPer", 5).coerceIn(1, 30),
             )
         }.getOrDefault(AppSettings())
     }
@@ -226,6 +234,9 @@ object LocalStore {
                     .put("bodySize", settings.bodySize.toDouble())
                     .put("points", settings.points)
                     .put("pointCount", settings.pointCount)
+                    .put("exam", settings.exam)
+                    .put("examFamilies", settings.examFamilies)
+                    .put("examPer", settings.examPer)
                     .toString(2)
             )
         }

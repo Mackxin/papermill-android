@@ -1289,6 +1289,99 @@ await test('知识点专项 · 四~六年级 17 个新知识点都在，「圆�
   return `32 个知识点 · 圆的专项 ${qs.length} 题 · π 说明只在标题行印一次`;
 });
 
+// ---------------------------------------------------------------- 真题库
+
+function examCard() {
+  const card = qa('#view .card').find((c) => T(c.querySelector('h2')).startsWith('真题库'));
+  if (!card) throw new Error('出卷页没有「真题库」卡片');
+  return card;
+}
+
+/** 真题库是懒加载的：卡片先出现，题库读完才把「正在读取」换掉 */
+async function examReady() {
+  await waitFor(() => {
+    const c = qa('#view .card').find((x) => T(x.querySelector('h2')).startsWith('真题库'));
+    return c && !/正在读取/.test(T(c));
+  }, '真题库载入', 20000);
+  return examCard();
+}
+
+await test('真题库 · 开真题后整卷都是真题，勾几类就排几个大题', async () => {
+  await freshApp();
+  // 默认卷是三年级数学，而真题库里三年级数学一道都没有 —— 先把年级切到有题的六年级
+  const sel = [...D().querySelectorAll('#view select')]
+    .find((x) => [...x.options].some((o) => T(o).includes('六年级')));
+  if (!sel) throw new Error('找不到年级下拉');
+  sel.value = '6';
+  sel.dispatchEvent(new frame.contentWindow.Event('change', { bubbles: true }));
+  await sleep(500);
+
+  const card = await examReady();
+  const n = Number((/真题库（(\d+) 道）/.exec(T(card.querySelector('h2'))) || [])[1] || 0);
+  if (!n) throw new Error('真题库读出来是空的');
+
+  const btn = [...card.querySelectorAll('button')].find((b) => T(b) === '用真题出卷');
+  if (!btn) throw new Error('没有「用真题出卷」按钮');
+  btn.click();
+  await sleep(400);
+
+  const p = await generate();
+  // 默认勾选的大类数量从卡片上的 chip 现数，别在测试里写死 —— 以后加类别不用改这里
+  const famLabels = [...card.querySelectorAll('.chip')]
+    .map((c) => T(c)).filter((t) => /^(填空|选择|判断|应用|计算|其他)/.test(t))
+    .map((t) => t.replace(/\s*\d+$/, ''));
+  const picked = [...card.querySelectorAll('.chip.on')]
+    .map((c) => T(c).replace(/\s*\d+$/, ''))
+    .filter((t) => famLabels.includes(t));
+  if (picked.length < 4) throw new Error(`勾中的类别只有 ${picked.length} 个`);
+  const heads = sectionHeads(p.text);
+  if (!heads.length) throw new Error('一道大题都没排出来');
+  // 真题一个大类排一个大题，且题库里没题的类别会被跳过，所以只能比「不超过」
+  if (heads.length > picked.length) throw new Error(`排了 ${heads.length} 个大题，勾了 ${picked.length} 类`);
+  const qs = questionNodes();
+  if (!qs.length) throw new Error('卷面没有题');
+  if (qs.length > picked.length * 5) {
+    throw new Error(`题数是 ${qs.length}，${picked.length} 类各 5 题最多 ${picked.length * 5}`);
+  }
+  // 真题大题名就是类别名，不该出现生成器那套名字（口算天天练之类）
+  const bad = heads.filter((h) => !picked.some((lb) => h.includes(lb)));
+  if (bad.length) throw new Error('大题名不对：' + bad.join(' / '));
+
+  return `库里 ${n} 道 · 勾 ${picked.length} 类 · 排了 ${heads.length} 个大题 ${qs.length} 题`;
+});
+
+await test('真题库 · 「其他题」默认不勾，勾上就多出一个大题', async () => {
+  // 上一条已经在真题模式里了，这里直接补勾「其他题」再出一张
+  goCreate();
+  await waitFor(() => q('#view .create-actions'), '出卷页');
+  const card2 = examCard();
+  const other = [...card2.querySelectorAll('.chip')].find((c) => /^其他题/.test(T(c)));
+  if (!other) throw new Error('没有「其他题」chip');
+  if (other.disabled) throw new Error('这个年级的「其他题」是 0 道，池子不该为空');
+  if (other.classList.contains('on')) throw new Error('「其他题」应该默认不勾，留给用户自己选');
+  other.click();
+  await sleep(300);
+
+  const p = await generate();
+  const heads = sectionHeads(p.text);
+  if (!heads.some((h) => h.includes('其他'))) throw new Error('勾了其他题，卷面却没有其他题大题');
+  return `补勾其他题 · ${heads.length} 个大题 · 大题名 ${heads.join(' / ')}`;
+});
+
+await test('真题库 · 关掉真题回到自编，题型配比重新生效', async () => {
+  goCreate();
+  await waitFor(() => q('#view .create-actions'), '出卷页');
+  const card = await examReady();
+  const btn = [...card.querySelectorAll('button')].find((b) => /关掉真题/.test(T(b)));
+  if (!btn) throw new Error('没找到「关掉真题」按钮');
+  btn.click();
+  await sleep(400);
+  const p = await generate();
+  const qs = questionNodes();
+  if (qs.length < 10) throw new Error(`回到自编后只有 ${qs.length} 道题`);
+  return `关掉真题 · 按题型配比出了 ${qs.length} 题`;
+});
+
 // ---------------------------------------------------------------- 名卷库
 /** 名卷库那张卡的标题「查到的卷子 N 条」→ N */
 function paperCount() {

@@ -1,5 +1,6 @@
 package com.papermill.app.domain.generate
 
+import com.papermill.app.domain.content.ExamBank
 import java.util.Random
 
 /**
@@ -43,11 +44,58 @@ object PaperComposer {
             }
         }
 
+        // 真题卷：从真题库抽题，一个大类一个大题。
+        // 开了真题就只出真题 —— 跟知识点专项同一个道理：混着出，用户会以为开关没生效。
+        val useExam = spec.points.isEmpty() && spec.exam && ExamBank.items.isNotEmpty()
+        if (useExam) {
+            val subjects = spec.effectiveSubjects().map { it.code }.toSet()
+            val per = spec.examPer.coerceIn(1, 30)
+            spec.examFamilies.forEach { family ->
+                val rng = Random(GeneratorRegistry.sectionSeed(spec.seed, 900 + family.ordinal))
+                // 严格同年级。以前试过「不够就往邻年级借」，结果三年级卷里冒出
+                // 「四年级同学去植树」—— 难度对不上年级，家长一眼就看出来。
+                // 不够就如实少给。
+                val pool = ExamBank.items.filter {
+                    it.grade == spec.grade && it.subject in subjects && it.type in family.types
+                }
+                if (pool.isEmpty()) return@forEach
+
+                val picked = pool.shuffled(rng).take(per)
+                val questions = picked.mapIndexed { k, q ->
+                    GeneratedQuestion(
+                        no = nextNo + k,
+                        type = family.renderType,
+                        stem = q.stem,
+                        answer = q.answer,
+                        topic = q.section,
+                    )
+                }
+                nextNo += questions.size
+                sections.add(
+                    GeneratedSection(
+                        index = sections.size + 1,
+                        title = titleFor(family.label, POINTS_PER_QUESTION, questions.size, sections.size + 1),
+                        name = family.label,
+                        points = POINTS_PER_QUESTION,
+                        type = family.renderType,
+                        questions = questions,
+                        columns = when {
+                            family.renderType.columns <= 1 -> 1
+                            family.renderType.answerLines > 0 -> family.renderType.columns
+                            else -> maxOf(family.renderType.columns, spec.columns)
+                        },
+                        answerLines = family.renderType.answerLines,
+                        instruction = "",
+                    )
+                )
+            }
+        }
+
         val ordered = spec.counts.entries
             .filter { it.value > 0 }
             .sortedBy { it.key.ordinal }
 
-        (if (spec.points.isEmpty()) ordered else emptyList()).forEachIndexed { index, entry ->
+        (if (spec.points.isEmpty() && !useExam) ordered else emptyList()).forEachIndexed { index, entry ->
             val type = entry.key
             val count = entry.value.coerceIn(1, 200)
             val generator = GeneratorRegistry.of(type, spec.grade) ?: return@forEachIndexed
