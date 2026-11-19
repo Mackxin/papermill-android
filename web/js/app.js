@@ -138,6 +138,17 @@ function button(label, kind, onClick) {
   return h('button', { class: `btn ${kind ?? ''}`, text: label, onclick: onClick });
 }
 
+/**
+ * 年级下拉的选项。学前（0）排在最前，但课本页不列它 ——
+ * 幼儿园没有课标单元，列出来只会点进去看到一句「这个年级没有单元」。
+ */
+function gradeSelectOptions(includePreschool = true) {
+  const list = Array.from({ length: 9 }, (_, i) => ({
+    value: i + 1, label: GradeProfiles.gradeLabel(i + 1),
+  }));
+  return includePreschool ? [{ value: 0, label: GradeProfiles.gradeLabel(0) }, ...list] : list;
+}
+
 function primarySubjects() {
   return effectiveSubjects(state.spec);
 }
@@ -147,7 +158,7 @@ function recomputeCounts() {
   const spec = state.spec;
   const auto = defaultSpec(spec.grade, primarySubjects(), spec.tilt, spec.kind, spec.term);
   spec.counts = auto.counts;
-  if (!spec.title || /^(小学|初中) · /.test(spec.title)) spec.title = auto.title;
+  if (!spec.title || /^(学前|小学|初中) · /.test(spec.title)) spec.title = auto.title;
   spec.subtitle = auto.subtitle;
 }
 
@@ -302,7 +313,7 @@ function templateRow() {
 
 function paramCard() {
   const spec = state.spec;
-  const gradeOptions = Array.from({ length: 9 }, (_, i) => ({ value: i + 1, label: GradeProfiles.gradeLabel(i + 1) }));
+  const gradeOpts = gradeSelectOptions(true);
 
   const subjectChips = h('div', { class: 'chips' });
   SUBJECT_ALL.forEach((s) => {
@@ -337,7 +348,7 @@ function paramCard() {
         recomputeCounts();
         save();
         render();
-        toast(v === TERM.BOTH ? '已切到全学年' : `已切到${GradeProfiles.gradeLabel(spec.grade)}${Term.label(v)}`);
+        toast(v === TERM.BOTH ? '已切到全学年' : `已切到${GradeProfiles.gradeLabel(spec.grade)}${Term.suffix(spec.grade, v)}`);
       },
     }));
   });
@@ -386,7 +397,7 @@ function paramCard() {
   });
 
   return card('出什么卷',
-    field('年级', select(gradeOptions, spec.grade, (v) => {
+    field('年级', select(gradeOpts, spec.grade, (v) => {
       spec.grade = Number(v);
       const keep = (spec.subjects ?? []).filter((s) => subjectAvailableFor(s, spec.grade));
       spec.subjects = keep.length ? keep : ['MATH'];
@@ -398,13 +409,16 @@ function paramCard() {
       render();
     })),
     h('div', { class: 'field' }, [h('span', { text: '科目（可多选）' }), subjectChips]),
-    h('div', { class: 'field' }, [h('span', { text: '学期' }), termChips]),
+    // 学前没有课本、也没有课标单元，学期这一格点了不会改变任何东西 —— 不摆假开关
+    spec.grade > 0 ? h('div', { class: 'field' }, [h('span', { text: '学期' }), termChips]) : null,
     h('div', { class: 'field' }, [h('span', { text: '卷型' }), kindChips]),
     h('p', { class: 'hint', text: kindOf(spec.kind).hint + (
       kindOf(spec.kind).only ? `（已按${SUBJECT_LABEL[kindOf(spec.kind).only]}出题）` : ''
     ) }),
     h('div', { class: 'field' }, [h('span', { text: '题型倾向' }), tiltChips]),
-    h('p', { class: 'hint', text: '学期只影响真带上下册数据的课标单元；口算、字词这些按年级分段，选上/下册不会变少。' }),
+    spec.grade > 0
+      ? h('p', { class: 'hint', text: '学期只影响真带上下册数据的课标单元；口算、字词这些按年级分段，选上/下册不会变少。' })
+      : null,
   );
 }
 
@@ -1644,7 +1658,7 @@ function studentsScreen() {
     list.appendChild(h('div', { class: 'student-item' }, [
       h('div', {}, [
         h('b', { text: s.name }),
-        h('span', { class: 'meta', text: `${GradeProfiles.gradeLabel(s.grade)} · ${Term.label(s.term)}${sex} · ${(s.subjects ?? []).map((x) => SUBJECT_LABEL[x]).join('/')}` }),
+        h('span', { class: 'meta', text: `${GradeProfiles.gradeLabel(s.grade)}${Term.suffix(s.grade, s.term) ? ` · ${Term.label(s.term)}` : ''}${sex} · ${(s.subjects ?? []).map((x) => SUBJECT_LABEL[x]).join('/')}` }),
       ]),
       h('div', { class: 'custom-actions' }, [
         button('编辑', 'ghost', () => editStudent(s)),
@@ -1677,7 +1691,7 @@ function editStudent(student) {
   const summary = h('p', { class: 'hint' });
   const paintSummary = () => {
     const name = draft.name.trim();
-    summary.textContent = `${GradeProfiles.gradeLabel(draft.grade)} · ${Term.label(draft.term)}`
+    summary.textContent = `${GradeProfiles.gradeLabel(draft.grade)}${Term.suffix(draft.grade, draft.term) ? ` · ${Term.label(draft.term)}` : ''}`
       + ` · ${draft.subjects.map((s) => SUBJECT_LABEL[s]).join('/')}`
       + (draft.gender ? ` · ${draft.gender}` : '')
       + (name ? `　卷头印「${name}」` : '　还没填姓名');
@@ -1699,17 +1713,31 @@ function editStudent(student) {
     );
   };
 
+  // 学期这一格跟着年级变：学前没有上下册，选中「学前」就整格不显示（点了不影响任何东西的假开关）
+  const termField = h('div', {});
+  const paintTerm = () => {
+    termField.innerHTML = '';
+    if (draft.grade > 0) {
+      termField.append(field('学期', chips([
+        { value: TERM.FIRST, label: '上册' },
+        { value: TERM.SECOND, label: '下册' },
+        { value: TERM.BOTH, label: '全学年' },
+      ], draft.term, (v) => {
+        draft.term = Number(v);
+        paintSummary();
+      })));
+    }
+  };
+
   const body = h('div', {}, [
     field('姓名', input('text', draft.name, (v) => { draft.name = v; paintSummary(); }, { maxlength: '12', placeholder: '例如 小明' })),
-    field('年级', select(Array.from({ length: 9 }, (_, i) => ({ value: i + 1, label: GradeProfiles.gradeLabel(i + 1) })), draft.grade, (v) => {
+    field('年级', select(gradeSelectOptions(true), draft.grade, (v) => {
       draft.grade = Number(v);
       paintSubjects();
+      paintTerm();
       paintSummary();
     })),
-    field('学期', chips([{ value: TERM.FIRST, label: '上册' }, { value: TERM.SECOND, label: '下册' }, { value: TERM.BOTH, label: '全学年' }], draft.term, (v) => {
-      draft.term = Number(v);
-      paintSummary();
-    })),
+    termField,
     field('性别', chips([{ value: '', label: '不填' }, { value: '男', label: '男' }, { value: '女', label: '女' }], draft.gender, (v) => {
       draft.gender = v;
       paintSummary();
@@ -1718,6 +1746,7 @@ function editStudent(student) {
     summary,
   ]);
   paintSubjects();
+  paintTerm();
   paintSummary();
 
   openModal({
@@ -1832,7 +1861,7 @@ function textbookScreen() {
       save();
       render();
     }),
-    select(Array.from({ length: 9 }, (_, i) => ({ value: i + 1, label: GradeProfiles.gradeLabel(i + 1) })), grade, (v) => {
+    select(gradeSelectOptions(false), grade, (v) => {
       spec.grade = Number(v);
       recomputeCounts();
       save();
@@ -2082,7 +2111,7 @@ function render() {
     default: {
       view.appendChild(h('div', { class: 'page-head' }, [
         h('h1', { text: '出卷' }),
-        h('p', { class: 'hint', text: `${GradeProfiles.gradeLabel(spec.grade)} · ${primarySubjects().map((s) => SUBJECT_LABEL[s]).join(' + ')} · ${Term.label(spec.term)} · 已选 ${specTotal(spec)} 题${pointsOf(spec).length ? ' · 知识点专项' : ''}` }),
+        h('p', { class: 'hint', text: [GradeProfiles.gradeLabel(spec.grade), primarySubjects().map((s) => SUBJECT_LABEL[s]).join(' + '), Term.suffix(spec.grade, spec.term), `已选 ${specTotal(spec)} 题${pointsOf(spec).length ? ' · 知识点专项' : ''}`].filter(Boolean).join(' · ') }),
       ]));
       view.appendChild(studentStrip());
       view.appendChild(templateRow());

@@ -32,7 +32,8 @@ export function subjectAvailableFor(subject, grade) {
   switch (subject) {
     case Subject.MATH:
     case Subject.CHINESE:
-      return grade >= 1 && grade <= 9;
+      // grade 0 = 学前（幼小衔接）：幼儿园只教数学和语文，英语 / 科学不开
+      return grade >= 0 && grade <= 9;
     case Subject.ENGLISH:
       return grade >= 3 && grade <= 9;
     case Subject.SCIENCE:
@@ -230,12 +231,12 @@ export const PAPER_KINDS = [
     hint: '六种题型尽可能铺满，多题型混合检测',
   },
   {
-    key: 'CONTEST', label: '竞赛', kinds: 4, sizes: [10, 6, 6, 4], prefer: THINKING, boost: 1,
+    key: 'CONTEST', label: '竞赛', kinds: 4, sizes: [10, 6, 6, 4], prefer: THINKING, boost: 1, minGrade: 1,
     hint: '题量少而难：以找规律 / 应用题 / 巧算为主，题库难度上调一档',
   },
   {
     key: 'OLYMPIAD', label: '奥数', kinds: 3, sizes: [8, 6, 6], prefer: THINKING, boost: 1,
-    only: 'MATH',
+    only: 'MATH', minGrade: 1,
     hint: '数学思维专项：找规律、巧算、应用题（自动切到数学，难度上调一档）',
   },
   {
@@ -258,7 +259,8 @@ export function kindOf(key) {
 /** 这个年级有没有这种卷（拼音只到六年级、小升初从五年级起） */
 export function kindFits(grade, key) {
   const k = kindOf(key);
-  const lo = k.minGrade ?? 1;
+  // 下界默认 0：学前（grade 0）也要能选「全部 / 单元 / 期末」这些常规卷型
+  const lo = k.minGrade ?? 0;
   const hi = k.maxGrade ?? 9;
   return grade >= lo && grade <= hi;
 }
@@ -448,8 +450,14 @@ export const Term = {
   label(term) {
     return term === TERM.FIRST ? '上册' : term === TERM.SECOND ? '下册' : '全学年';
   },
+  /** 年级后面的学期后缀：学前（0）没有上下册，返回空串 */
+  suffix(grade, term) {
+    return grade === 0 || term === TERM.BOTH ? '' : Term.label(term);
+  },
   /** 卷标题 / 学生胶囊上的短后缀：「三上」「三下」 */
   short(grade, term) {
+    // 学前没有上下册之分，写「0上」只会让人一脸问号
+    if (grade === 0) return '学前';
     const g = TERM_CN[grade - 1] ?? String(grade);
     return term === TERM.FIRST ? `${g}上` : term === TERM.SECOND ? `${g}下` : `${g}年级`;
   },
@@ -458,6 +466,8 @@ export const Term = {
 // ------------------------------------------------------------------ 年级画像
 
 const GRADE_TABLE = [
+  // grade 0 = 学前（幼小衔接）：数域 20 以内，允许进位退位（9+3 靠凑十），不碰乘除
+  { grade: 0, addMax: 20, mulMax: 0, divisorMax: 0, allowCarry: true, allowBorrow: true, fractionMaxDen: 0, baseDifficulty: 1 },
   { grade: 1, addMax: 20, mulMax: 0, divisorMax: 0, allowCarry: false, allowBorrow: false, fractionMaxDen: 0, baseDifficulty: 1 },
   { grade: 2, addMax: 100, mulMax: 9, divisorMax: 9, allowCarry: true, allowBorrow: true, fractionMaxDen: 0, baseDifficulty: 1 },
   { grade: 3, addMax: 1000, mulMax: 9, divisorMax: 9, allowCarry: true, allowBorrow: true, fractionMaxDen: 10, baseDifficulty: 2 },
@@ -474,9 +484,11 @@ export const GradeProfiles = {
     return GRADE_TABLE.find((g) => g.grade === grade) ?? GRADE_TABLE[2];
   },
   gradeLabel(grade) {
-    return { 1: '一年级', 2: '二年级', 3: '三年级', 4: '四年级', 5: '五年级', 6: '六年级', 7: '初一', 8: '初二', 9: '初三' }[grade] ?? `${grade}年级`;
+    return { 0: '学前', 1: '一年级', 2: '二年级', 3: '三年级', 4: '四年级', 5: '五年级', 6: '六年级', 7: '初一', 8: '初二', 9: '初三' }[grade] ?? `${grade}年级`;
   },
   stageLabel(grade) {
+    // 学前单独一个阶段：落在「小学」里会让卷头印出「小学 · 学前」
+    if (grade === 0) return '学前';
     return grade <= 6 ? '小学' : '初中';
   },
 };

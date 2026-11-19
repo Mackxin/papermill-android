@@ -112,6 +112,29 @@ function hoistInstruction(questions) {
   return [head, questions.map((q, i) => ({ ...q, stem: rest[i] }))];
 }
 
+/**
+ * 按来源轮转抽题。
+ *
+ * 题库里各份卷的出题量极不均（最多的切出 34 道），直接 shuffle 取前 N 道，
+ * 「一大半来自同一张卷」是常态 —— 卷子看着像只考了一份卷的某一块。
+ * 这里先按来源分组、组间打乱、组内打乱，再每组轮流各取 1 道。
+ */
+function pickSpread(pool, per, rng) {
+  if (per >= pool.length) return rng.shuffle(pool);
+  const groups = new Map();
+  pool.forEach((q) => {
+    const key = q.src || q.q;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(q);
+  });
+  const queues = rng.shuffle([...groups.values()].map((g) => rng.shuffle(g)));
+  const out = [];
+  while (out.length < per && queues.some((q) => q.length)) {
+    queues.forEach((q) => { if (out.length < per && q.length) out.push(q.shift()); });
+  }
+  return out;
+}
+
 /** 出卷主流程：spec → 带题号与分值的卷子 */
 export function compose(spec, historyHashes = new Set()) {
   const blocked = new Set(historyHashes);
@@ -138,16 +161,22 @@ export function compose(spec, historyHashes = new Set()) {
 
   // 真题卷：从真题库（下载的公开试卷切出来的题）抽题，一个大类一个大题。
   // 开了真题就只出真题 —— 跟知识点专项同一个道理：混着出，用户会以为开关没生效。
-  const useExam = !usePoints && !!spec.exam && (DATA.examBank?.length ?? 0) > 0;
+  //
+  // 但「这个年级有没有真题」要先问一句：学前 / 初中在库里一道题都没有，
+  // 照旧走真题分支就会排出一张空卷。这里直接回退到自编题，别让人对着空白发愣。
+  const examSubjects = usePoints ? [] : effectiveSubjects(spec);
+  const examFams = (spec.examFamilies ?? []).filter((k) => EXAM_FAMILIES.some((f) => f.key === k));
+  const examAllowed = new Set(examFams);
+  const examPool = !usePoints && spec.exam && examAllowed.size
+    ? (DATA.examBank ?? []).filter((q) => q.q && q.q.length >= 6 && q.t
+      && examSubjects.includes(q.s) && examAllowed.has(examFamilyOf(q.t)) && q.g === spec.grade)
+    : [];
+  const useExam = examPool.length > 0;
   if (useExam) {
-    const subjects = effectiveSubjects(spec);
     const per = Math.min(Math.max(spec.examPer ?? 5, 1), 30);
-    const fams = (spec.examFamilies ?? []).filter((k) => EXAM_FAMILIES.some((f) => f.key === k));
-    const allowed = new Set(fams);
-    const usable = DATA.examBank.filter((q) => q.q && q.q.length >= 6 && q.t
-      && subjects.includes(q.s) && allowed.has(examFamilyOf(q.t)));
+    const usable = examPool;
 
-    fams.forEach((fam, i) => {
+    examFams.forEach((fam, i) => {
       const def = EXAM_FAMILIES.find((f) => f.key === fam);
       const rng = new Rng(sectionSeed(spec.seed, 900 + i));
       // 严格同年级。以前试过「不够就往邻年级借一年」，结果三年级卷里冒出
@@ -156,7 +185,7 @@ export function compose(spec, historyHashes = new Set()) {
       const pool = usable.filter((q) => def.types.includes(q.t) && q.g === spec.grade);
       if (!pool.length) return;
 
-      const picked = rng.shuffle(pool).slice(0, per).map((q, k) => ({
+      const picked = pickSpread(pool, per, rng).map((q, k) => ({
         no: nextNo + k,
         type: 'EXAM',
         // 选择题的选项直接并进题干，跟自编题库生成器的做法一致（渲染层不认独立选项字段）
@@ -273,7 +302,10 @@ const KIND_WORD = {
 };
 
 export function autoTitleFor(grade, subjects, kind, points = []) {
-  const head = `${GradeProfiles.stageLabel(grade)} · ${GradeProfiles.gradeLabel(grade)}`;
+  // 学前的阶段名和年级名都是「学前」，直接拼会印出「学前 · 学前」
+  const stage = GradeProfiles.stageLabel(grade);
+  const name = GradeProfiles.gradeLabel(grade);
+  const head = stage === name ? name : `${stage} · ${name}`;
   // 专项卷的标题直接写知识点：家长拿到一张纸，第一眼看的就是「练的哪一课」
   if (points.length === 1) return `${head} · ${points[0].label}专项`;
   if (points.length > 1) return `${head} · 数学专项（${points.length} 个知识点）`;
@@ -408,6 +440,10 @@ export function defaultSpec(grade, subjects, tilt = 'BALANCED', kind = 'ALL', te
     pickForSubjects(types, list, tilt, kind).forEach((t, i) => { counts[t] = countFor(t, i, kind); });
   } else {
     orderByTilt(types, tilt, kind).slice(0, kindOf(kind).kinds).forEach((t, i) => { counts[t] = countFor(t, i, kind); });
+  }
+  // 学前（grade 0）：40 道题的卷子对 5 岁孩子没有意义，整卷题量折半，每型至少留 4 道
+  if (grade === 0) {
+    Object.keys(counts).forEach((k) => { counts[k] = Math.max(4, Math.round(counts[k] / 2)); });
   }
   return specWith({ grade, subject: primary, counts, subjects: list, tilt, kind, term });
 }
@@ -611,7 +647,10 @@ export function templatesFor(grade, subjects) {
       });
     }
     const usable = {};
-    Object.entries(wanted).forEach(([k, v]) => { if (available.has(k)) usable[k] = v; });
+    // 学前（grade 0）的预设卡同样折半：一张卡 30 道题，5 岁孩子写不完也坐不住
+    Object.entries(wanted).forEach(([k, v]) => {
+      if (available.has(k)) usable[k] = grade === 0 ? Math.max(3, Math.round(v / 2)) : v;
+    });
     return Object.keys(usable).length ? { ...p, wanted: usable } : null;
   }).filter(Boolean);
 }

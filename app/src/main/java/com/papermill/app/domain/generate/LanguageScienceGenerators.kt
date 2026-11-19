@@ -83,7 +83,7 @@ object DictationGenerator : BaseGenerator() {
         val stem = when (ctx.rng.nextInt(3)) {
             0 -> "补全词语：${w.word[0]}（　）"
             1 -> "把词语补充完整：${w.word[0]}＿（　）"
-            else -> "填空：${w.word[0]}（　）→ ${w.word.substring(0, 1)}？"
+            else -> "组词：${w.word[0]}（　）"
         }
         return stem to w.word.substring(1)
     }

@@ -821,7 +821,7 @@ class AppState(private val rawContext: Context) {
         // 勾着知识点时年级跟知识点走（v0.24.0）：学生档案是三年级、勾的却是六年级
         // 「圆的周长与面积」，按学生的年级把卷头印成三年级就说不通了 —— 题本身是六年级的。
         // 知识点的年级更具体，所以它优先；没勾知识点时才用学生档案的年级。
-        grade = if (points.isNotEmpty()) points.maxOf { it.grade } else s.grade.coerceIn(1, 9)
+        grade = if (points.isNotEmpty()) points.maxOf { it.grade } else s.grade.coerceIn(0, 9)
         term = s.term.coerceIn(0, 2)
         subjects = s.subjects.filter { it.availableFor(grade) }.ifEmpty { listOf(Subject.MATH) }
         subject = subjects.first()
@@ -1330,7 +1330,7 @@ class AppState(private val rawContext: Context) {
         term = next
         saveSettings()
         previewSeed = System.currentTimeMillis()
-        toast = "已切到${GradeProfiles.gradeLabel(grade)}${Term.label(next)}"
+        toast = "已切到${GradeProfiles.gradeLabel(grade)}${Term.suffix(grade, next)}"
     }
 
     /** 多学科交叉：点一下加进来，再点一下取消（至少留一科） */
@@ -1583,8 +1583,7 @@ class AppState(private val rawContext: Context) {
     ): PaperSpec {
         val total = if (points.isEmpty()) useCounts.values.sum() else points.size * pointCount
         // 「三年级上册」这种写法家长最熟：只写「三年级」分不出这学期学的是哪册
-        val gradeText = GradeProfiles.gradeLabel(grade) +
-            if (term == Term.BOTH) "" else Term.label(term)
+        val gradeText = GradeProfiles.gradeLabel(grade) + Term.suffix(grade, term)
         val autoTitle = when {
             // 按单元出卷：标题直接写单元名，家长一眼知道这张卷考的是哪一课
             unitTitle.isNotEmpty() -> "$gradeText · $unitTitle"

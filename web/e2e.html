@@ -242,6 +242,48 @@ await test('卷型 · 拼音只到六年级、小升初从五年级起', async (
   return '三年级无小升初 · 七年级无拼音 · 六年级两个都能选';
 });
 
+// 5.5 -------------------------------------------------------------
+await test('学前 · 只开数学语文，卷面没有乘除、卷头不重复', async () => {
+  const gradeSel = () => findField(q('#view'), '年级').querySelector('select');
+  const opts = [...gradeSel().options].map((o) => o.textContent.trim());
+  if (!opts.includes('学前')) throw new Error('年级下拉里没有「学前」：' + opts.join('/'));
+  setControl(gradeSel(), '0');
+  await sleep(260);
+
+  const chips = () => [...findField(q('#view'), '科目（可多选）').querySelectorAll('.chip')];
+  const enabled = chips().filter((c) => !c.disabled).map(T);
+  if (enabled.join() !== '数学,语文') throw new Error('学前能选的科目是：' + enabled.join('、'));
+
+  const p = await generate();
+  if (/学前 · 学前/.test(p.text)) throw new Error('卷头印成了「学前 · 学前」');
+  if (!/学前/.test(p.text)) throw new Error('卷头没有「学前」：' + p.text.slice(0, 60));
+  if (/×|÷/.test(p.text)) throw new Error('学前卷里出现了乘除');
+  const total = Number((p.text.match(/共\s*(\d+)\s*题/) ?? [])[1] ?? 0);
+  if (!total) throw new Error('卷头读不到题量：' + p.text.slice(0, 80));
+  if (total > 24) throw new Error(`学前卷 ${total} 题，没折半（常规卷 30+）`);
+
+  // 语文：拼音 / 注音 / 补全词语，不能一道题都出不来
+  goCreate();
+  await waitFor(() => q('#view .create-actions'), '出卷页');
+  chips().find((c) => T(c) === '语文').click();
+  await sleep(200);
+  chips().find((c) => T(c) === '数学' && c.classList.contains('on')).click();
+  await sleep(240);
+  const zh = await generate();
+  if (!/拼音|注音|补全词语|补充完整/.test(zh.text)) throw new Error('学前语文卷没有字词题：' + zh.text.slice(0, 120));
+
+  // 收尾：回到三年级数学
+  goCreate();
+  await waitFor(() => q('#view .create-actions'), '出卷页');
+  chips().find((c) => T(c) === '数学').click();
+  await sleep(160);
+  chips().find((c) => T(c) === '语文' && c.classList.contains('on')).click();
+  await sleep(160);
+  setControl(gradeSel(), '3');
+  await sleep(240);
+  return `学前数学 ${total} 题 · 只开数学语文 · 语文卷出得来`;
+});
+
 // 6 ---------------------------------------------------------------
 let base = null;
 await test('生成卷子 · 页数 / 姓名栏 / 页脚页码', async () => {
@@ -1337,7 +1379,7 @@ await test('真题库 · 开真题后整卷都是真题，勾几类就排几个�
   const heads = sectionHeads(p.text);
   if (!heads.length) throw new Error('一道大题都没排出来');
   // 真题一个大类排一个大题，且题库里没题的类别会被跳过，所以只能比「不超过」
-  if (heads.length > picked.length) throw new Error(`排了 ${heads.length} 个大题，勾了 ${picked.length} 类`);
+  if (heads.length > picked.length) throw new Error(`排了 ${heads.length} 个大题（${heads.join(' / ')}），勾了 ${picked.length} 类（${picked.join(' / ')}）`);
   const qs = questionNodes();
   if (!qs.length) throw new Error('卷面没有题');
   if (qs.length > picked.length * 5) {

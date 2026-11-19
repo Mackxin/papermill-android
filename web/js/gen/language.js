@@ -110,9 +110,12 @@ const EN_WORDS = [
  * 从新词位置起步，能把本年级该学的词顶到前面。
  */
 function rotatedPool(list, grade) {
-  const pool = list.filter((w) => w.minGrade <= grade);
+  // 学前（grade 0）用一年级那批词：字表从一年级起才有 minGrade，
+  // 不减到 1 的话 g=0 的池子是空的，语文卷一道题都出不来
+  const g = Math.max(1, grade);
+  const pool = list.filter((w) => w.minGrade <= g);
   if (!pool.length) return pool;
-  const firstNew = list.findIndex((w) => w.minGrade === grade);
+  const firstNew = list.findIndex((w) => w.minGrade === g);
   const offset = firstNew > 0 ? firstNew % pool.length : 0;
   return pool.slice(offset).concat(pool.slice(0, offset));
 }
@@ -141,7 +144,9 @@ function nextFreshWord(ctx, pool, keyOf = (w) => w.word) {
 export const pinyinGenerator = {
   type: 'PINYIN',
   subject: Subject.CHINESE,
-  minGrade: 1,
+  // 幼小衔接（v0.27.0）：词表走 rotatedPool 的一年级下限，
+  // 正是大班在学的拼音识字，放行 grade 0
+  minGrade: 0,
   maxGrade: 9,
   topic: '拼音与字词',
   make(ctx) {
@@ -165,7 +170,9 @@ export const pinyinGenerator = {
 export const hanziGenerator = {
   type: 'HANZI',
   subject: Subject.CHINESE,
-  minGrade: 1,
+  // 幼小衔接（v0.27.0）：词表走 rotatedPool 的一年级下限，
+  // 正是大班在学的拼音识字，放行 grade 0
+  minGrade: 0,
   maxGrade: 9,
   topic: '字音',
   make(ctx) {
@@ -190,7 +197,9 @@ export const hanziGenerator = {
 export const dictationGenerator = {
   type: 'DICTATION',
   subject: Subject.CHINESE,
-  minGrade: 1,
+  // 幼小衔接（v0.27.0）：词表走 rotatedPool 的一年级下限，
+  // 正是大班在学的拼音识字，放行 grade 0
+  minGrade: 0,
   maxGrade: 9,
   topic: '词语积累',
   make(ctx) {
@@ -204,7 +213,7 @@ export const dictationGenerator = {
     const stem = [
       `补全词语：${head}（　）`,
       `把词语补充完整：${head}＿（　）`,
-      `填空：${head}（　）→ ${w.word.substring(0, 1)}？`,
+      `组词：${head}（　）`,
     ][ctx.rng.nextInt(3)];
     return [stem, w.word.substring(1)];
   },

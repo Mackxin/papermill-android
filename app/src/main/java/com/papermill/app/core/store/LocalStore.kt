@@ -256,7 +256,7 @@ object LocalStore {
                 Student(
                     id = o.optString("id"),
                     name = o.optString("name"),
-                    grade = o.optInt("grade", 3).coerceIn(1, 9),
+                    grade = o.optInt("grade", 3).coerceIn(0, 9),  // 0 = 学前：学生档案也允许
                     term = o.optInt("term", 1).coerceIn(0, 2),
                     gender = Gender.of(o.optString("gender")),
                     subjects = o.optString("subjects")

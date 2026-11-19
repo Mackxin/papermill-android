@@ -1039,7 +1039,7 @@ private fun screenTitle(state: AppState): Pair<String, String> = when (state.scr
     Screen.HOME -> "卷子" to "选年级科目，30 秒出一张能打印的卷子"
     Screen.CREATE -> "自由组合" to
         "${GradeProfiles.gradeLabel(state.grade)}" +
-        (if (state.term == Term.BOTH) "" else Term.label(state.term)) +
+        Term.suffix(state.grade, state.term) +
         " · ${state.totalQuestions} 题 · 预计 ${state.estimatedPages} 页 ${state.orientation.label}"
     Screen.PREVIEW -> if (state.isReference) {
         // 速查表可能排到 2 页，副标题必须读真实页数（原来写死「1 页」和卡片数字打架）
@@ -1115,7 +1115,7 @@ private fun LazyListScope.homeScreenItems(state: AppState, scope: CoroutineScope
             Column {
                 Text(
                     "${GradeProfiles.gradeLabel(state.grade)}" +
-                        (if (state.term == Term.BOTH) "" else Term.label(state.term)) +
+                        Term.suffix(state.grade, state.term) +
                         " · $subjectLabel",
                     fontSize = 24.sp,
                     fontWeight = FontWeight.Bold,
@@ -1180,16 +1180,19 @@ private fun LazyListScope.homeScreenItems(state: AppState, scope: CoroutineScope
         )
     }
 
-    item {
-        Spacer(Modifier.height(10.dp))
-        // 学期（v0.19.0）：课标题库的知识点分上下册，选错了抽出来的就是还没学的单元。
-        // 只影响真带学期数据的资源，所以右边把边界写清楚，不做「点了没反应」的假开关。
-        SectionLabel("01b", "这学期", "影响课标题库的单元")
-        Spacer(Modifier.height(8.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            ChoiceChip("上册", state.term == Term.FIRST) { state.selectTerm(Term.FIRST) }
-            ChoiceChip("下册", state.term == Term.SECOND) { state.selectTerm(Term.SECOND) }
-            ChoiceChip("全学年", state.term == Term.BOTH) { state.selectTerm(Term.BOTH) }
+    // 学期（v0.19.0）：课标题库的知识点分上下册，选错了抽出来的就是还没学的单元。
+    // 只影响真带学期数据的资源，所以右边把边界写清楚，不做「点了没反应」的假开关。
+    // 学前没有课本、也没有课标单元，这一排对它就是个纯假开关 —— 直接不显示。
+    if (state.grade > 0) {
+        item {
+            Spacer(Modifier.height(10.dp))
+            SectionLabel("01b", "这学期", "影响课标题库的单元")
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ChoiceChip("上册", state.term == Term.FIRST) { state.selectTerm(Term.FIRST) }
+                ChoiceChip("下册", state.term == Term.SECOND) { state.selectTerm(Term.SECOND) }
+                ChoiceChip("全学年", state.term == Term.BOTH) { state.selectTerm(Term.BOTH) }
+            }
         }
     }
 
@@ -3922,7 +3925,7 @@ private fun StudentDialog(state: AppState, initial: Student?, onDismiss: () -> U
             Text("年级", fontSize = PaperDimens.CaptionSp, color = PaperColors.OnSurfaceVariant)
             Spacer(Modifier.height(6.dp))
             CompactChipGrid(
-                items = (1..9).toList(),
+                items = listOf(0) + (1..9).toList(),
                 perRow = 5,
                 label = { GradeProfiles.gradeLabel(it) },
                 selected = { it == grade },
@@ -3932,17 +3935,20 @@ private fun StudentDialog(state: AppState, initial: Student?, onDismiss: () -> U
                     subjects = subjects.filter { it.availableFor(g) }.ifEmpty { listOf(Subject.MATH) }
                 },
             )
-            Spacer(Modifier.height(12.dp))
-            Text(
-                "这学期",
-                fontSize = PaperDimens.CaptionSp,
-                color = PaperColors.OnSurfaceVariant,
-            )
-            Spacer(Modifier.height(6.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                ChoiceChip("上册", term == Term.FIRST) { term = Term.FIRST }
-                ChoiceChip("下册", term == Term.SECOND) { term = Term.SECOND }
-                ChoiceChip("全学年", term == Term.BOTH) { term = Term.BOTH }
+            // 学前没有上下册：这里不摆一格点了不影响任何东西的开关
+            if (grade > 0) {
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    "这学期",
+                    fontSize = PaperDimens.CaptionSp,
+                    color = PaperColors.OnSurfaceVariant,
+                )
+                Spacer(Modifier.height(6.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ChoiceChip("上册", term == Term.FIRST) { term = Term.FIRST }
+                    ChoiceChip("下册", term == Term.SECOND) { term = Term.SECOND }
+                    ChoiceChip("全学年", term == Term.BOTH) { term = Term.BOTH }
+                }
             }
             Spacer(Modifier.height(12.dp))
             Text("常做的科目（可多选）", fontSize = PaperDimens.CaptionSp, color = PaperColors.OnSurfaceVariant)

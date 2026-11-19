@@ -787,8 +787,16 @@ object Term {
 
     private val CN = arrayOf("一", "二", "三", "四", "五", "六", "七", "八", "九")
 
+    /**
+     * 年级后面的学期后缀。学前（grade 0）没有上下册之分，返回空串 ——
+     * 不然界面会印出「学前上册 · 数学」，家长看着别扭。
+     */
+    fun suffix(grade: Int, term: Int): String =
+        if (grade == 0 || term == BOTH) "" else label(term)
+
     /** 卷标题 / 学生胶囊上的短后缀：「三上」「三下」。用汉字数字，幼儿园家长也一眼看懂 */
     fun short(grade: Int, term: Int): String {
+        if (grade == 0) return "学前"
         val g = CN.getOrElse(grade - 1) { grade.toString() }
         return when (term) {
             FIRST -> "${g}上"

@@ -38,7 +38,9 @@ const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
 export const FillBlankGenerator = {
   type: 'FILL_BLANK',
   subject: Subject.MATH,
-  minGrade: 1,
+  // 幼小衔接（v0.27.0）：这几个题型的最简单档（bound(0) 落到 10 以内）
+  // 正好是学前水平，放行 grade 0
+  minGrade: 0,
   maxGrade: 4,
   topic: '填括号',
 
@@ -76,7 +78,9 @@ export const FillBlankGenerator = {
 export const MakeTenGenerator = {
   type: 'MAKE_TEN',
   subject: Subject.MATH,
-  minGrade: 1,
+  // 幼小衔接（v0.27.0）：这几个题型的最简单档（bound(0) 落到 10 以内）
+  // 正好是学前水平，放行 grade 0
+  minGrade: 0,
   maxGrade: 2,
   topic: '凑十法',
 
@@ -239,7 +243,9 @@ export const UnitConvertGenerator = {
 export const CompareGenerator = {
   type: 'COMPARE',
   subject: Subject.MATH,
-  minGrade: 1,
+  // 幼小衔接（v0.27.0）：这几个题型的最简单档（bound(0) 落到 10 以内）
+  // 正好是学前水平，放行 grade 0
+  minGrade: 0,
   maxGrade: 4,
   topic: '比大小',
 
@@ -269,7 +275,9 @@ export const CompareGenerator = {
 export const NumberPatternGenerator = {
   type: 'NUMBER_PATTERN',
   subject: Subject.MATH,
-  minGrade: 1,
+  // 幼小衔接（v0.27.0）：这几个题型的最简单档（bound(0) 落到 10 以内）
+  // 正好是学前水平，放行 grade 0
+  minGrade: 0,
   maxGrade: 6,
   topic: '找规律',
 
@@ -290,7 +298,9 @@ export const NumberPatternGenerator = {
 export const CountingGenerator = {
   type: 'COUNTING',
   subject: Subject.MATH,
-  minGrade: 1,
+  // 幼小衔接（v0.27.0）：这几个题型的最简单档（bound(0) 落到 10 以内）
+  // 正好是学前水平，放行 grade 0
+  minGrade: 0,
   maxGrade: 2,
   topic: '数数与认数',
 

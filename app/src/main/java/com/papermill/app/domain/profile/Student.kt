@@ -30,8 +30,10 @@ data class Student(
     val subjects: List<Subject> = listOf(Subject.MATH),
     val note: String = "",
 ) {
-    /** 「三年级 · 上册」 */
-    val gradeLabel: String get() = "${GradeProfiles.gradeLabel(grade)} · ${Term.label(term)}"
+    /** 「三年级 · 上册」；学前没有学期，只写「学前」 */
+    val gradeLabel: String
+        get() = if (grade == 0) GradeProfiles.gradeLabel(0)
+        else "${GradeProfiles.gradeLabel(grade)} · ${Term.label(term)}"
 
     /** 卡片右上角的短标签：「三上」 */
     val shortLabel: String get() = Term.short(grade, term)
