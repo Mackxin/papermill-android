@@ -29,6 +29,9 @@ private fun freshWord(ctx: GenContext, prefix: String, pool: List<CnWord>): CnWo
 object PinyinGenerator : BaseGenerator() {
     override val type = QuestionType.PINYIN
     override val subject = Subject.CHINESE
+    // 幼小衔接（v0.27.0）：词表走 chineseFor() 的 coerceAtLeast(1)，
+    // 也就是一年级上册那批拼音识字内容 —— 这正是大班在学的东西。
+    override val minGrade = 0
     override val topic = "拼音与字词"
 
     override fun make(ctx: GenContext): Pair<String, String> {
@@ -47,6 +50,9 @@ object PinyinGenerator : BaseGenerator() {
 object HanziGenerator : BaseGenerator() {
     override val type = QuestionType.HANZI
     override val subject = Subject.CHINESE
+    // 幼小衔接（v0.27.0）：词表走 chineseFor() 的 coerceAtLeast(1)，
+    // 也就是一年级上册那批拼音识字内容 —— 这正是大班在学的东西。
+    override val minGrade = 0
     override val topic = "字音"
 
     override fun make(ctx: GenContext): Pair<String, String> {
@@ -65,6 +71,9 @@ object HanziGenerator : BaseGenerator() {
 object DictationGenerator : BaseGenerator() {
     override val type = QuestionType.DICTATION
     override val subject = Subject.CHINESE
+    // 幼小衔接（v0.27.0）：词表走 chineseFor() 的 coerceAtLeast(1)，
+    // 也就是一年级上册那批拼音识字内容 —— 这正是大班在学的东西。
+    override val minGrade = 0
     override val topic = "词语积累"
 
     override fun make(ctx: GenContext): Pair<String, String> {

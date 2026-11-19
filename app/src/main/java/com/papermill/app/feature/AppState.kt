@@ -1559,17 +1559,20 @@ class AppState(private val rawContext: Context) {
      */
     private fun pickFillType(map: Map<QuestionType, Int>, probe: Built?): QuestionType? {
         val used = map.filter { it.value > 0 }.keys
+        // 每个大类当前实际出了几道（题库见底时会少于目标数）
+        val have = probe?.paper?.sections?.associate { it.type to it.questions.size }.orEmpty()
         val exhausted = probe?.paper?.sections
             ?.filter { it.questions.size < (map[it.type] ?: 0) }
             ?.map { it.type }
             ?.toSet() ?: emptySet()
-        val last = probe?.paper?.sections?.lastOrNull()?.type
-        if (last != null && last in used && last !in exhausted) return last
-        return used.firstOrNull { it.answerLines == 0 && it !in exhausted }
-            ?: used.firstOrNull { it !in exhausted }
-            ?: used.firstOrNull { it.answerLines == 0 }
-            ?: used.firstOrNull()
-            ?: availableTypes.firstOrNull()
+        // 补满时按「谁出得最少」轮流补（v0.27.0）。
+        // 原来这里直接返回**最后一个大类**，于是每一次补满都往同一个题型上加题 ——
+        // 实测一张 33 道题的学前卷里有 18 道都是「找规律」，家长看到只会觉得卷子出歪了。
+        // 同题数时优先「没有答题线」的题型：口算那种一行能塞好几道，更省纸。
+        val pool = used.filter { it !in exhausted }.ifEmpty { used.toList() }
+        return pool.minWithOrNull(
+            compareBy({ have[it] ?: 0 }, { if (it.answerLines == 0) 0 else 1 })
+        ) ?: availableTypes.firstOrNull()
     }
 
     private fun currentSpec(
@@ -1671,6 +1674,11 @@ class AppState(private val rawContext: Context) {
         val spec = currentSpec(seed, useCounts, copySuffix)
         val recent = LocalStore.recentHashes(ctx, grade, subject)
         val gp = PaperComposer.compose(spec, recent)
+        android.util.Log.d(
+            "PapermillGen",
+            "buildOnce grade=$grade counts=${spec.counts} sections=${gp.sections.size} " +
+                "questions=${gp.questions.size} exam=${spec.exam} points=${spec.points.size}",
+        )
         val rendered = PaperRenderer.render(PaperAssembler.build(gp))
         val pages = if (withPreviews) PdfPreviewRenderer.render(ctx, rendered.bytes) else emptyList()
         val savedId = if (save) LocalStore.savePaper(ctx, gp, rendered.fileName).id else ""
@@ -1815,6 +1823,7 @@ class AppState(private val rawContext: Context) {
             previewOrigin = if (screen == Screen.CREATE) Screen.CREATE else Screen.HOME
             screen = Screen.PREVIEW
         } catch (t: Throwable) {
+            android.util.Log.e("PapermillGen", "生成失败 grade=$grade", t)
             toast = "生成失败：${t.message ?: t.javaClass.simpleName}"
         }
         busy = false

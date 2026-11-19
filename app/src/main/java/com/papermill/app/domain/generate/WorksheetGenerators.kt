@@ -41,6 +41,9 @@ private fun bound(grade: Int): Int = when {
 object FillBlankGenerator : BaseGenerator() {
     override val type = QuestionType.FILL_BLANK
     override val subject = Subject.MATH
+    // 幼小衔接（v0.27.0）：这个题型的最简单档（bound() 的 grade<=1 → 10 以内）
+    // 正好是学前水平，放行 g=0。整十数运算那种超纲的没放。
+    override val minGrade = 0
     override val maxGrade = 4
     override val topic = "填括号"
 
@@ -76,6 +79,9 @@ object FillBlankGenerator : BaseGenerator() {
 object MakeTenGenerator : BaseGenerator() {
     override val type = QuestionType.MAKE_TEN
     override val subject = Subject.MATH
+    // 幼小衔接（v0.27.0）：这个题型的最简单档（bound() 的 grade<=1 → 10 以内）
+    // 正好是学前水平，放行 g=0。整十数运算那种超纲的没放。
+    override val minGrade = 0
     override val maxGrade = 2
     override val topic = "凑十法"
 
@@ -228,6 +234,9 @@ object UnitConvertGenerator : BaseGenerator() {
 object CompareGenerator : BaseGenerator() {
     override val type = QuestionType.COMPARE
     override val subject = Subject.MATH
+    // 幼小衔接（v0.27.0）：这个题型的最简单档（bound() 的 grade<=1 → 10 以内）
+    // 正好是学前水平，放行 g=0。整十数运算那种超纲的没放。
+    override val minGrade = 0
     override val maxGrade = 4
     override val topic = "比大小"
 
@@ -261,6 +270,9 @@ object CompareGenerator : BaseGenerator() {
 object NumberPatternGenerator : BaseGenerator() {
     override val type = QuestionType.NUMBER_PATTERN
     override val subject = Subject.MATH
+    // 幼小衔接（v0.27.0）：这个题型的最简单档（bound() 的 grade<=1 → 10 以内）
+    // 正好是学前水平，放行 g=0。整十数运算那种超纲的没放。
+    override val minGrade = 0
     override val maxGrade = 6
     override val topic = "找规律"
 
@@ -279,6 +291,9 @@ object NumberPatternGenerator : BaseGenerator() {
 object CountingGenerator : BaseGenerator() {
     override val type = QuestionType.COUNTING
     override val subject = Subject.MATH
+    // 幼小衔接（v0.27.0）：这个题型的最简单档（bound() 的 grade<=1 → 10 以内）
+    // 正好是学前水平，放行 g=0。整十数运算那种超纲的没放。
+    override val minGrade = 0
     override val maxGrade = 2
     override val topic = "数数与认数"
 

@@ -143,8 +143,11 @@ object WordBank {
     )
 
     fun chineseFor(grade: Int): List<CnWord> {
-        val pool = chinese.filter { it.minGrade <= grade }
-        val firstNew = chinese.indexOfFirst { it.minGrade == grade }
+        // 幼小衔接（g=0）没有独立词表：它的拼音识字内容就是一年级上册那批字。
+        // 不 coerce 的话 pool 是空的（所有词的 minGrade 都 >= 1），语文卷会一道题都出不来。
+        val g = grade.coerceAtLeast(1)
+        val pool = chinese.filter { it.minGrade <= g }
+        val firstNew = chinese.indexOfFirst { it.minGrade == g }
         val offset = if (firstNew > 0) firstNew % pool.size else 0
         return pool.drop(offset) + pool.take(offset)
     }

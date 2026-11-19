@@ -1167,10 +1167,12 @@ private fun LazyListScope.homeScreenItems(state: AppState, scope: CoroutineScope
 
     item {
         Spacer(Modifier.height(12.dp))
-        SectionLabel("01", "年级", "小学 1–6 / 初中 7–9")
+        SectionLabel("01", "年级", "幼小衔接 / 小学 1–6 / 初中 7–9")
         Spacer(Modifier.height(8.dp))
         CompactChipGrid(
-            items = (1..9).toList(),
+            // 0 = 幼小衔接（v0.27.0）。排在最前面：它是「还没上学」那一档，
+            // 按年级顺序摆在 1 年级之前才符合家长的直觉。
+            items = listOf(0) + (1..9).toList(),
             perRow = 6,
             label = { GradeProfiles.gradeLabel(it) },
             selected = { it == state.grade },

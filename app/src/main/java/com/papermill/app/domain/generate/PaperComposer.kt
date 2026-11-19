@@ -79,9 +79,19 @@ object PaperComposer {
 
         // 真题卷：从真题库抽题，一个大类一个大题。
         // 开了真题就只出真题 —— 跟知识点专项同一个道理：混着出，用户会以为开关没生效。
-        val useExam = spec.points.isEmpty() && spec.exam && ExamBank.items.isNotEmpty()
+        //
+        // v0.27.0 加了「真题库里真有这个年级的题」这一条：真题库只覆盖 1–6 年级，
+        // 学前和初一一开真题就一道题都抽不到，最后渲染出一张 0 页 PDF，
+        // PdfRenderer 报的却是 "file not in PDF format or corrupted" —— 用户根本猜不到
+        // 是「这个年级没真题」。抽不到就回退到自编题，宁可出自己编的也不要出空卷。
+        val examSubjects = spec.effectiveSubjects().map { it.code }.toSet()
+        val useExam = spec.points.isEmpty() && spec.exam && ExamBank.items.isNotEmpty() &&
+            spec.examFamilies.any { family ->
+                ExamBank.items.any {
+                    it.grade == spec.grade && it.subject in examSubjects && it.type in family.types
+                }
+            }
         if (useExam) {
-            val subjects = spec.effectiveSubjects().map { it.code }.toSet()
             val per = spec.examPer.coerceIn(1, 30)
             spec.examFamilies.forEach { family ->
                 val rng = Random(GeneratorRegistry.sectionSeed(spec.seed, 900 + family.ordinal))
@@ -89,7 +99,7 @@ object PaperComposer {
                 // 「四年级同学去植树」—— 难度对不上年级，家长一眼就看出来。
                 // 不够就如实少给。
                 val pool = ExamBank.items.filter {
-                    it.grade == spec.grade && it.subject in subjects && it.type in family.types
+                    it.grade == spec.grade && it.subject in examSubjects && it.type in family.types
                 }
                 if (pool.isEmpty()) return@forEach
 
@@ -204,6 +214,15 @@ object PaperComposer {
                     columns = sheet.columns.coerceIn(1, 4),
                     answerLines = sheet.answerLines.coerceIn(0, 6),
                 )
+            )
+        }
+
+        // 一道题都没出：不要再往下走。渲染层拿到空 sections 会产出一个 0 页 PDF，
+        // Android 的 PdfRenderer 打不开，用户看到的是「file not in PDF format or corrupted」——
+        // 一句完全对不上病因的报错。在源头说人话。
+        if (sections.isEmpty()) {
+            throw IllegalStateException(
+                "这个年级/科目出不了题（真题库里没有，自编题也没抽到）—— 换个年级或科目试试"
             )
         }
 
@@ -365,6 +384,10 @@ object PaperComposer {
             val picked = orderByTilt(types, tilt, kind).take(kind.kinds)
             picked.forEachIndexed { i, t -> counts[t] = countFor(t, i, kind) }
         }
+        // 幼小衔接（v0.27.0）：常规卷是 40 题上下，学前孩子的有效专注时间撑不到一半 ——
+        // 印 40 道，家长做 15 道就停了，剩下的纸白扔。整卷折半，每型至少留 4 道
+        // （少于 4 道就不像一个大题了）。想更密可以从卷面设置里手动加题。
+        if (grade == 0) counts.replaceAll { _, n -> (n / 2).coerceAtLeast(4) }
         return specWith(grade, primary, counts, subjects = subjects, tilt = tilt, kind = kind)
     }
 
@@ -549,7 +572,11 @@ object PaperComposer {
         kind: PaperKind,
         points: List<MathPoint> = emptyList(),
     ): String {
-        val head = "${GradeProfiles.stageLabel(grade)} · ${GradeProfiles.gradeLabel(grade)}"
+        // 学前（g=0）的阶段名和年级名撞车（都是「学前」），拼出来是「学前 · 学前」——
+        // 印在卷头上就是一句废话。撞车时只留一个。
+        val stage = GradeProfiles.stageLabel(grade)
+        val gl = GradeProfiles.gradeLabel(grade)
+        val head = if (stage == gl) stage else "$stage · $gl"
         // 专项卷的标题直接写知识点：家长拿到一张纸，第一眼看的就是「练的哪一课」
         if (points.size == 1) return "$head · ${points[0].label}专项"
         if (points.size > 1) return "$head · 数学专项（${points.size} 个知识点）"
@@ -699,6 +726,11 @@ object PaperTemplates {
         return raw.mapNotNull { p ->
             val usable = p.wanted.filterKeys { it in available }
             if (usable.isEmpty()) null else p.copy(wanted = usable)
+        }.map { p ->
+            // 学前（g=0）的预设卡也折半：25 道比大小 + 找规律对 5 岁孩子是一小时的量，
+            // 跟 defaultSpec 那边同一个道理。每型至少留 3 道，少了不成一个大题。
+            if (grade != 0) p
+            else p.copy(wanted = p.wanted.mapValues { (_, n) -> (n / 2).coerceAtLeast(3) })
         }
     }
 

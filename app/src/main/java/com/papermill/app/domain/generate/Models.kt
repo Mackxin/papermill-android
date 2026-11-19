@@ -17,7 +17,9 @@ enum class Subject(val code: String, val label: String) {
 
     /** 哪些年级开这门课。UI 用它把不可选的科目置灰，不是靠写死 if-else。 */
     fun availableFor(grade: Int): Boolean = when (this) {
-        MATH, CHINESE -> grade in 1..9
+        // 0 = 幼小衔接（v0.27.0）。幼儿园没有科学和英语课，
+        // 所以只有语文（拼音识字）和数学（20 以内加减）这两门放行。
+        MATH, CHINESE -> grade in 0..9
         ENGLISH -> grade in 3..9
         // 小学科学按课标是 1–6 年级（初中分成了物理 / 化学 / 生物 / 地理）
         SCIENCE -> grade in 1..6
@@ -287,7 +289,8 @@ enum class PaperKind(
     val boost: Int = 0,
     val forceSubject: Subject? = null,
     val preferTypes: List<QuestionType> = emptyList(),
-    val minGrade: Int = 1,
+    /** 下界放到 0 是给幼小衔接（v0.27.0）留的口子；竞赛/奥数自己写回 1 */
+    val minGrade: Int = 0,
     val maxGrade: Int = 9,
 ) {
     ALL("全部", "不限定卷型：四类题型各来一点，按年级常规配比", 4, intArrayOf(16, 10, 8, 6)),
@@ -309,11 +312,12 @@ enum class PaperKind(
     ),
     CONTEST(
         "竞赛", "题量少而难：以找规律 / 应用题 / 巧算为主，题库难度上调一档",
-        4, intArrayOf(10, 6, 6, 4), boost = 1, preferTypes = THINKING_TYPES,
+        4, intArrayOf(10, 6, 6, 4), boost = 1, preferTypes = THINKING_TYPES, minGrade = 1,
     ),
     OLYMPIAD(
         "奥数", "数学思维专项：找规律、巧算、应用题（自动切到数学，难度上调一档）",
         3, intArrayOf(8, 6, 6), boost = 1, forceSubject = Subject.MATH, preferTypes = THINKING_TYPES,
+        minGrade = 1,
     ),
     GRADUATION(
         "小升初", "五六年级升学衔接：题型铺满、综合度最高，难度上调一档",
@@ -819,6 +823,9 @@ data class GradeProfile(
 
 object GradeProfiles {
     private val table = listOf(
+        // 0 = 幼小衔接（v0.27.0）。数域卡在 20：幼儿园大班的加法就是「20 以内」，
+        // 进位退位要放行（9+3 靠凑十），再往上（100 以内）就超纲了。
+        GradeProfile(0, 20, 0, 0, true, true, 0, 1),
         GradeProfile(1, 20, 0, 0, false, false, 0, 1),
         GradeProfile(2, 100, 9, 9, true, true, 0, 1),
         GradeProfile(3, 1000, 9, 9, true, true, 10, 2),
@@ -833,10 +840,17 @@ object GradeProfiles {
     fun of(grade: Int): GradeProfile = table.firstOrNull { it.grade == grade } ?: table[2]
 
     fun gradeLabel(grade: Int): String = when (grade) {
+        // 用「学前」而不是「幼小衔接」：年级是一行六格的 chip，四个字放不下，
+        // 实测「幼小衔接」会被截成「幼小衔」。全称留在分区标题的副标题里。
+        0 -> "学前"
         1 -> "一年级"; 2 -> "二年级"; 3 -> "三年级"; 4 -> "四年级"
         5 -> "五年级"; 6 -> "六年级"; 7 -> "初一"; 8 -> "初二"; 9 -> "初三"
         else -> "${grade}年级"
     }
 
-    fun stageLabel(grade: Int): String = if (grade <= 6) "小学" else "初中"
+    fun stageLabel(grade: Int): String = when {
+        grade == 0 -> "学前"
+        grade <= 6 -> "小学"
+        else -> "初中"
+    }
 }
