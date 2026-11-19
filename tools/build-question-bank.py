@@ -48,6 +48,10 @@ SEC_KW = re.compile(r'填空|选择|判断|计算|口算|竖式|脱式|简算|�
                     r'|作图|统计|算一算|填一填|选一选|比一比|想一想|画一画|分\s*[）)]'
                     r'|共\s*\d+\s*分')
 QNO_RE = re.compile(r'^(\d{1,3})\s*[.、．]\s*(.*)$')
+# 英语卷（也有部分低年级卷）把答题括号印在题号前面：`( )1.A. pig  B. goose`。
+# 括号里是空的 —— 这正是跟下面的 QNO_SUB_RE（`（1）` 小问编号）的区别。
+# v0.27.0 之前不认这个前缀，整行掉进「续行」分支，63 份英语卷只有 9 份切出了题。
+QNO_PAREN_RE = re.compile(r'^[（(]\s*[）)]\s*(\d{1,3})\s*[.、．]?\s*(.*)$')
 # 语文卷（也有部分科学的探究题）不用「1.」而用「（1）」编号。
 # 只在「这个大题里还没出现 1. 式题号」时才认它 —— 否则「解决问题」下面的
 # 「（1）（2）」是同一道题的小问，切开会把一道应用题拆成三截。
@@ -64,11 +68,26 @@ INLINE_CALC_RE = re.compile(r'(\d[\d.]*\s*[+\-×÷*\/]\s*\d[\d.]*\s*=\s*(?:（\s
 FIGURE_RE = re.compile(r'如图|下图|上图|右图|左图|图中|见图|图示|图\s*\d|示意图|统计图|条形图'
                        r'|折线图|扇形图|图片|图案|看图|照片')
 
+# ---- 来源卷名（v0.27.0）----
+# 出卷时要「按来源轮转」（别让一张卷霸占整个大题），抽查页要显示「这题出自哪份卷」，
+# 都得知道来源。题目里只留 id（数字，体积小），卷名在文件顶层 `sources` 里存一次 ——
+# 3615 道题各存一遍卷名会白胖 300 多 KB。
+SRC_NAME_JUNK = re.compile(r'免费下载|附答案|含答案|有答案|（答案）|\(答案\)|【答案】'
+                           r'|答案与解析|_?\d{8}_\d{6}')
+def source_title(name: str) -> str:
+    """把下载来的文件名收拾成像人话的卷名：「2025人教版…期末卷免费下载（附答案）.docx」。"""
+    t = re.sub(r'\.docx$', '', name, flags=re.I)
+    t = SRC_NAME_JUNK.sub('', t)
+    t = re.sub(r'[（(]\s*[）)]', '', t)
+    t = re.sub(r'\s{2,}', ' ', t).strip(' _-—')
+    return t[:40]
+
+
 # ---- 答案可信度校验（v0.26.0）----
 # 只收带答案的题之后，冒出来的新问题不是「没答案」而是「答案对不上」：
 # 英语卷整段错位时会给出「Where is the cinema? → bus」这种，家长照着批改就是教错。
 # 三条闸门：做不了的题整类剔、答案格式必须像答案、答案里不能混着解析或下一个题号。
-UNUSABLE_RE = re.compile(r'听录音|听对话|听问句|听短文|听音|听力|你所听到|听到的|听两遍|听一遍'
+UNUSABLE_RE = re.compile(r'听录音|听对话|听问句|听短文|听句子|听音|听力|你所听到|听到的|听两遍|听一遍'
                          r'|匹配题|连线题')
 ANS_JUNK_RE = re.compile(r'【|详解|句意|分析：|解析|考点|参考答?案')
 CHOICE_ANS_RE = re.compile(r'[A-Da-d]')
@@ -194,7 +213,7 @@ def split_options(line):
     试卷排版常把四个选项塞一行，只按行首匹配的话只有 A 被认出来，
     B/C/D 会被并进 A 的正文里。
     """
-    parts = re.split(r'(?=(?<![A-Za-z])[A-D]\s*[.．、]\s)', line)
+    parts = re.split(r'(?=(?<![A-Za-z])[A-D]\s*[.．、]\s*)', line)
     out = []
     for p in parts:
         p = p.strip()
@@ -259,10 +278,19 @@ def parse_paper(lines):
         if cur is None:
             continue
 
-        qm = QNO_RE.match(ln)
+        qm = QNO_RE.match(ln) or QNO_PAREN_RE.match(ln)
         if qm:
             cur['num_style'] = 'dot'
             body = qm.group(2).strip()
+            # `( )1.A. pig　B. goose　C. pear` —— 整行只有选项、没有题干。
+            # 这在英语卷里是常态（任务写在大题标题上：「选出不同类的一项」），
+            # 不是残题。题干留空会被「太短」那道闸剔掉，所以把大题名借来当题干，
+            # 印出来是「1. 选出不同类的一项 A. pig B. goose C. pear」，读得懂。
+            pre = split_options(body)
+            if pre and not re.sub(r'[A-D]\s*[.．、][^A-D]*', '', body).strip(' \t；;'):
+                cur_item = {'n': int(qm.group(1)), 'text': cur['name'], 'options': pre}
+                cur['items'].append(cur_item)
+                continue
             pieces = split_inline_calc(body)
             for k, piece in enumerate(pieces):
                 cur_item = {'n': int(qm.group(1)) if k == 0 else None,
@@ -347,6 +375,13 @@ MULTI_NO_RE = re.compile(r'(?<![.\d])\d{1,2}\s*[.．]\s*(?=[^\d\s])')
 # 一道计算题里混进了「解方程（8分）」这种下一个大题的小标题 —— 说明几个大题被粘在一起了
 MIX_SEC_RE = re.compile(r'(解方程|脱式计算|竖式计算|直接写得数|化简比|求比值|能简算的要简算)'
                         r'\s*[（(]?\s*\d+\s*分')
+# 题干中间又冒出一个大题编号：「（三）用所给单词的适当形式填空（每题1分，共6分）」。
+# 英语卷尤其多 —— 一个大题整块被排版粘到上一题末尾，切出来的题干是半截残句，
+# 而且从这道题起题号开始错位，后面所有题都对不上答案。整题不要。
+SEC_GLUE_RE = re.compile(r'[（(]\s*[一二三四五六七八九十]{1,3}\s*[）)]\s*'
+                         r'(填空|选择|判断|阅读|写作|书面|单词|句子|语音|词汇|交际|应用|计算|操作)')
+# 需要「答案就是一句话」的题型 —— 排除这些之后，填空题却给了长句子，必有鬼
+REWRITE_RE = re.compile(r'改为|改成|变(为|成)|划线|提问|否定句|一般疑问句|同义句|连词成句|翻译|写话|习作')
 
 
 def clean_text(t):
@@ -367,6 +402,7 @@ def build(max_files=None):
         files = files[:max_files]
 
     questions = []
+    sources = {}
     seen = set()
     stat = Counter()
     skipped_fig = 0
@@ -374,6 +410,7 @@ def build(max_files=None):
     for idx, fp in enumerate(files, 1):
         pid = fp.name.split('_')[0]
         meta = lib.get(pid, {})
+        sources[pid] = source_title(fp.name)
         try:
             lines = to_lines(read_docx(fp))
         except Exception as e:
@@ -420,6 +457,9 @@ def build(max_files=None):
                     continue
                 # 两个大题被粘成一题：「…×78 解方程（8分）…」
                 if MIX_SEC_RE.search(text[8:]):
+                    stat['mix'] += 1
+                    continue
+                if SEC_GLUE_RE.search(text):
                     stat['mix'] += 1
                     continue
                 if len(norm(text)) < 5:
@@ -516,15 +556,55 @@ def build(max_files=None):
                 elif len(answer) > 60 or STRAY_NO_RE.search(answer):
                     stat['ans_bad'] += 1
                     continue
+                # 答案是一串字母（`AEG` `BCFJ`）= 匹配题/连线题把左右两栏配对的
+                # 结果。这类题的题面在 docx 里是表格，切出来只剩「Colours: 2.Animals:」
+                # 这种残渣，印在卷上根本没法做 —— 答案格式正好是它的指纹。
+                if re.fullmatch(r'[A-Z]{2,8}', answer):
+                    stat['ans_match'] += 1
+                    continue
+                # 连词成句/排序题的答案是圈号**序列**（`③②④①`）。这种题只有题干里
+                # 也带圈号（「①with ②I ③play」）才配得上；题干里没圈号却说
+                # 「答案是③②④①」，说明答案串到隔壁题上去了 —— 留着就是教错。
+                # 注意只认两个以上圈号：语文卷用单个 `③` 表示「选第三项」，
+                # 那是正常的选择题答案，得留给下面 to_choice_letter 去转成 C。
+                if len(re.findall(r'[①-⑩]', answer)) >= 2 and '①' not in text:
+                    stat['ans_misplace'] += 1
+                    continue
+                # 答案是单个 A~D 却没有选项：卷子把选项排成了表格或图片，切出来丢了。
+                # 留着就是「1. Who's he? 答案 A」—— 学生连选项都没见过。
+                if re.fullmatch(r'[A-D]', answer) and not it['options']:
+                    stat['ans_orphan'] += 1
+                    continue
+                # 题干是填空（有 `____` 横线），答案却是一整句话：
+                # 「I want ____(play) football」配「The king likes new clothes very much.」——
+                # 这是答案串到隔壁题上去了。填空题的答案就该是那个词或那个短语。
+                # 改写句子/翻译这类题本来就要答整句，用 REWRITE_RE 放行。
+                if (not REWRITE_RE.search(text) and re.search(r'_{2,}', text)
+                        and len(answer) > 25 and answer.rstrip().endswith(('.', '。', '!', '?'))):
+                    stat['ans_long'] += 1
+                    continue
                 # 答案是问句 = 抄来的下一题题干（语文阅读卷尤其常见）。
                 # 数学里「第几页看起？」这种短问句不算，所以要求同时够长。
                 if len(answer) > 16 and re.search(r'[？?]', answer):
                     stat['ans_bad'] += 1
                     continue
 
+                # 英语只收「能自证」的那一类（v0.27.0）。
+                #
+                # 英语卷的答案区排版跟语文数学完全不是一套：答题括号印在题号前面、
+                # 大题号那一行后面直接跟一串答案、听力材料混在答案中间。上面这些闸门
+                # 挡掉大部分之后，仍然有三成是错的 ——「I like ____(春天)」配「lessons」、
+                # 「She ____ ____ three years ago」配「sunny」。家长照着批改就是教错。
+                #
+                # 所以英语退一步：只收有完整选项、答案就是选项字母的选择题。
+                # 这类题自己就能验——选项在题面里、答案在选项里，对不上当场就发现。
+                # 数量少，但每一道都敢让家长照着批。
+                if meta.get('s') == 'ENGLISH' and (qtype != 'CHOICE' or len(it['options']) < 2):
+                    stat['en_unverifiable'] += 1
+                    continue
+
                 q = {
-                    'q': text[:400],
-                    't': qtype,
+                    'q': text[:400],                    't': qtype,
                     'g': meta.get('g', 0),
                     's': meta.get('s', ''),
                     'sec': sec['name'][:12],
@@ -544,10 +624,14 @@ def build(max_files=None):
                 stat[qtype] += 1
         print(f'[{idx}/{len(files)}] {fp.name[:46]}  已收 {len(questions)}', flush=True)
 
+    # 只留下真出过题的卷名 —— 762 份 docx 里只有 299 份切得出题，
+    # 没出题的卷名存进去只会让文件白胖一圈，还得让 App 去解析一堆用不上的键。
+    used = {q['src'] for q in questions}
     doc = {
         'note': ('题目来自 downloads/papers 里下载的公开分享试卷，由 tools/build-question-bank.py '
                  '自动切分。题干保留原文，答案取卷内给出的参考答案；没有给出答案的题 a 字段为空。'),
         'count': len(questions),
+        'sources': {k: v for k, v in sources.items() if k in used},
         'items': questions,
     }
     OUT_WEB.parent.mkdir(parents=True, exist_ok=True)
@@ -559,6 +643,10 @@ def build(max_files=None):
     print('题数', len(questions))
     for k, v in stat.most_common():
         print(f'  {k:12s} {v}')
+    per_src = Counter(q['src'] for q in questions)
+    if per_src:
+        top = per_src.most_common(1)[0]
+        print(f'  来源 {len(per_src)} 份卷 · 单卷最多 {top[1]} 道（{doc["sources"][top[0]]}）')
     print('输出', OUT_WEB.relative_to(ROOT), f'{OUT_WEB.stat().st_size // 1024} KB')
 
 

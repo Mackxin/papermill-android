@@ -21,6 +21,10 @@ data class ExamQuestion(
     val subject: String,
     /** 原卷里的大题名（「填空题」「判断题」…），答案页与错题本按它归类 */
     val section: String,
+    /** 来源卷 id。同一份卷切出来的题共用它 —— 出卷时按它轮转，别让一张卷霸屏 */
+    val source: String = "",
+    /** 来源卷名（「人教版一年级数学上册期末卷」），抽查页显示出处用 */
+    val sourceTitle: String = "",
 )
 
 /**
@@ -73,6 +77,11 @@ object ExamBank {
     private fun parse(raw: String): List<ExamQuestion> {
         val root = JSONObject(raw)
         val arr = root.optJSONArray("items") ?: return emptyList()
+        // 卷名在顶层存了一份（题里只留 id）——先摊成 id → 卷名，再逐题挂上去
+        val names = HashMap<String, String>()
+        root.optJSONObject("sources")?.let { obj ->
+            obj.keys().forEach { k -> names[k] = obj.optString(k) }
+        }
         val out = ArrayList<ExamQuestion>(arr.length())
         for (i in 0 until arr.length()) {
             val o = arr.optJSONObject(i) ?: continue
@@ -86,6 +95,7 @@ object ExamBank {
             } else {
                 stem
             }
+            val src = o.optString("src")
             out.add(
                 ExamQuestion(
                     stem = full,
@@ -94,6 +104,8 @@ object ExamBank {
                     grade = o.optInt("g"),
                     subject = o.optString("s"),
                     section = o.optString("sec"),
+                    source = src,
+                    sourceTitle = names[src].orEmpty(),
                 )
             )
         }

@@ -1,6 +1,7 @@
 package com.papermill.app.domain.generate
 
 import com.papermill.app.domain.content.ExamBank
+import com.papermill.app.domain.content.ExamQuestion
 import java.util.Random
 
 /**
@@ -21,6 +22,38 @@ object PaperComposer {
      * 反而比单独一条说明更占地方。
      */
     const val LOW_GRADE_SCIENCE_NOTE = "请家长读题，孩子口头作答"
+
+    /**
+     * 按来源轮转抽题：同一份卷在一批题里尽量只出现一次（v0.27.0）。
+     *
+     * 为什么不用 `pool.shuffled(rng).take(n)`：题库里 299 份卷的出题量极不均，
+     * 最多的那份切出 35 道。纯随机抽 10 道，「一半来自同一张卷」是常态，
+     * 排在卷面上就是两次相邻的大题里出现同一份期末卷的题 —— 家长一眼看得出来。
+     *
+     * 做法是分三轮：① 卷内各自打乱 ② 卷间再打乱（否则永远是那几份下载最早的卷优先）
+     * ③ 每轮每份卷各出 1 道，出不满再走下一轮。想让某份卷多出也做不到，
+     * 顺序全由 [rng] 定 —— 同 seed 仍可复现，点「换一套」照样换一批。
+     */
+    private fun pickSpread(pool: List<ExamQuestion>, n: Int, rng: Random): List<ExamQuestion> {
+        if (n <= 0 || pool.isEmpty()) return emptyList()
+        // 没有来源 id 的题（旧题库）各算一组，免得全被并成一组又变成纯随机
+        val groups = pool.groupBy { it.source.ifEmpty { it.stem } }
+        val queues = groups.values
+            .map { g -> g.shuffled(rng).toMutableList() }
+            .shuffled(rng)
+        val out = ArrayList<ExamQuestion>(n)
+        while (out.size < n) {
+            var took = false
+            for (q in queues) {
+                if (q.isEmpty()) continue
+                out.add(q.removeAt(0))
+                took = true
+                if (out.size == n) break
+            }
+            if (!took) break // 全抽干了，如实少给
+        }
+        return out
+    }
 
     fun compose(spec: PaperSpec, historyHashes: Set<Long> = emptySet()): GeneratedPaper {
         val blocked = historyHashes.toMutableSet()
@@ -60,7 +93,7 @@ object PaperComposer {
                 }
                 if (pool.isEmpty()) return@forEach
 
-                val picked = pool.shuffled(rng).take(per)
+                val picked = pickSpread(pool, per, rng)
                 val questions = picked.mapIndexed { k, q ->
                     GeneratedQuestion(
                         no = nextNo + k,

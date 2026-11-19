@@ -94,6 +94,7 @@ import com.papermill.app.domain.generate.AnswerMode
 import com.papermill.app.domain.generate.CustomMode
 import com.papermill.app.domain.generate.CustomSheet
 import com.papermill.app.domain.content.ExamBank
+import com.papermill.app.domain.content.ExamQuestion
 import com.papermill.app.domain.generate.Density
 import com.papermill.app.domain.generate.ExamFamily
 import com.papermill.app.domain.generate.MathPoint
@@ -668,8 +669,118 @@ fun PaperMillRoot(state: AppState) {
                 },
             )
         }
+        // 真题抽查（v0.27.0）：跟批改面板一个道理，挂根节点 ——
+        // 触发按钮在参数页的真题卡片里，跟着 LazyColumn 滚走就没了。
+        if (state.examSampleOpen) {
+            ExamSampleDialog(
+                list = state.examSample,
+                grade = state.grade,
+                onShuffle = { state.shuffleExamSample() },
+                onDismiss = { state.closeExamSample() },
+            )
+        }
     }
 }
+
+/**
+ * 真题抽查浮层（v0.27.0）。
+ *
+ * 这个页面的全部意义是「让机器切出来的题库可以被验一眼」。所以它的排版目标跟
+ * 卷面预览正好相反：不看美观，只看**题干和答案挨在一起**。答案单独放一页、
+ * 或者要点开才看得见，都验不出「答案错配」这类问题 —— 那正是题库最怕的毛病。
+ *
+ * 出处一定要印出来：发现一道题不对劲，用户得能说清「是哪份卷的第几题」，
+ * 这样这条反馈才拿得去改。
+ */
+@Composable
+private fun ExamSampleDialog(
+    list: List<ExamQuestion>,
+    grade: Int,
+    onShuffle: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(20.dp))
+                .background(PaperColors.Surface)
+                .padding(18.dp),
+        ) {
+            Text(
+                "真题抽查",
+                fontSize = 18.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = PaperColors.OnSurface,
+            )
+            Spacer(Modifier.height(3.dp))
+            Text(
+                if (list.isEmpty()) {
+                    "这个年级还没有真题，换个年级试试。"
+                } else {
+                    "${GradeProfiles.gradeLabel(grade)} · 随机 ${list.size} 道 · 答案和题干摆在一起，扫一眼就知道对不对"
+                },
+                fontSize = PaperDimens.CaptionSp,
+                color = PaperColors.OnSurfaceVariant,
+                lineHeight = 16.sp,
+            )
+            Spacer(Modifier.height(12.dp))
+
+            LazyColumn(Modifier.heightIn(max = 400.dp)) {
+                items(list.size) { i ->
+                    val q = list[i]
+                    if (i > 0) Spacer(Modifier.height(14.dp))
+                    Column(Modifier.fillMaxWidth()) {
+                        Text(
+                            "${i + 1}. " + buildString {
+                                append(subjectLabelOf(q.subject))
+                                append(" · ")
+                                append(examTypeLabelOf(q.type))
+                                if (q.sourceTitle.isNotEmpty()) {
+                                    append(" · ")
+                                    append(q.sourceTitle)
+                                }
+                            },
+                            fontSize = PaperDimens.TinySp,
+                            color = PaperColors.Muted,
+                            lineHeight = 14.sp,
+                        )
+                        Spacer(Modifier.height(3.dp))
+                        Text(
+                            q.stem,
+                            fontSize = PaperDimens.BodySp,
+                            color = PaperColors.OnSurface,
+                            lineHeight = 20.sp,
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            "答案：${q.answer}",
+                            fontSize = PaperDimens.CaptionSp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = PaperColors.Accent,
+                            lineHeight = 17.sp,
+                        )
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(14.dp))
+            Row {
+                MiniAction("换一批", enabled = list.isNotEmpty(), onClick = onShuffle)
+                Spacer(Modifier.width(10.dp))
+                MiniAction("关闭", onClick = onDismiss)
+            }
+        }
+    }
+}
+
+/** 真题库里的科目代码 → 中文（「MATH」→「数学」），认不出来就原样显示 */
+private fun subjectLabelOf(code: String): String =
+    Subject.entries.firstOrNull { it.code == code }?.label ?: code
+
+/** 真题库里的题型 → 中文，跟 [ExamFamily] 同一张表；落不进任何一类的显示「其他」 */
+private fun examTypeLabelOf(type: String): String =
+    ExamFamily.entries.firstOrNull { type in it.types }?.label ?: "其他"
 
 /**
  * 「批改记错题」面板（v0.18.0）。
@@ -1340,6 +1451,16 @@ private fun CreateScreen(state: AppState, scope: CoroutineScope) {
                         fontSize = PaperDimens.CaptionSp,
                         color = PaperColors.Muted,
                     )
+                    // 真题卷：题量由「每类几题」定死，题库里能用的真题就这么多，
+                    // 「自动补满」在这里加不了题。以前落到下面那支会说「当前题量
+                    // 已经排满，不需要再加」—— 可纸上明明空着一截，等于在骗人。
+                    state.exam && state.points.isEmpty() -> Text(
+                        "真题卷按「每类几题」出题，这个年级能用的带答案真题就这么多 —— " +
+                            "最后一页留白是正常的。想更满就调大每类题数，或关掉真题用自编题。",
+                        fontSize = PaperDimens.CaptionSp,
+                        color = PaperColors.Muted,
+                        lineHeight = 16.sp,
+                    )
                     state.autoFillPage -> Text(
                         "自动补满已开启，当前题量已经排满，不需要再加。",
                         fontSize = PaperDimens.CaptionSp,
@@ -1603,7 +1724,14 @@ private fun CreateScreen(state: AppState, scope: CoroutineScope) {
                     // 英语单独说明：它的问题是「真题大多是听力题（没音频做不了）+ 带答案的太少」，
                     // 干巴巴一句「还没有真题」会让人以为自己选错了年级或科目。
                     if (state.subjects.size == 1 && state.subjects.first().code == "ENGLISH") {
-                        "英语真题大多是听力题（没有音频做不了），能用的带答案真题太少 —— 这门建议用自编题。"
+                        // v0.27.0 改口径：以前说「大多是无音频的听力题」，只说对一半。
+                        // 另一半是英语卷的笔试区大量是连线、看图、看表格，题面在 docx 里
+                        // 是图片或表格，切出来只剩散词；剩下能切的选择题里，答案区的排版
+                        // 又跟语文数学完全不是一套，三成对不上。与其塞一堆错答案，
+                        // 现在只收「选项齐全、答案能自证」的笔试选择题，数量少但每道都敢批。
+                        "英语只有 ${pool} 道可用的真题 —— 英语卷一半是听力题（没音频做不了），" +
+                            "笔试区又多是连线和看图题，切不出来；剩下能切的选择题里还有一部分" +
+                            "答案对不上，已经剔掉了。这门建议直接用自编题，质量更稳。"
                     } else {
                         "${GradeProfiles.gradeLabel(state.grade)}${state.subjects.joinToString("、") { it.label }}还没有带答案的真题，换个年级或科目试试。"
                     }
@@ -1615,6 +1743,12 @@ private fun CreateScreen(state: AppState, scope: CoroutineScope) {
                 lineHeight = 15.sp,
                 modifier = Modifier.padding(top = 3.dp),
             )
+            // 抽查（v0.27.0）：机器切的题，家长总得能自己验一眼。
+            // 放在真题区里而不是设置页底部 —— 想验的人就在这个位置想验。
+            if (pool > 0) {
+                Spacer(Modifier.height(6.dp))
+                MiniAction("抽查 20 道看看答案对不对") { state.openExamSample() }
+            }
         } else if (state.points.isEmpty()) {
             Text(
                 "真题库是公开分享的期末/期中/单元卷切出来的原题，带答案。开了真题就只出真题，一个大类一个大题；" +

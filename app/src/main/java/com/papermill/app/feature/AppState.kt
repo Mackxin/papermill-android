@@ -38,6 +38,7 @@ import com.papermill.app.core.update.UpdateChecker
 import com.papermill.app.domain.content.CurricUnit
 import com.papermill.app.domain.content.CurriculumBank
 import com.papermill.app.domain.content.ExamBank
+import com.papermill.app.domain.content.ExamQuestion
 import com.papermill.app.domain.content.ScienceBank
 import com.papermill.app.domain.content.TextbookCatalog
 import com.papermill.app.domain.generate.AnswerMode
@@ -347,6 +348,42 @@ class AppState(private val rawContext: Context) {
     /** 真题库读完了没有：没读完时卡片显示「正在读取」，按钮点不动 */
     var examBankReady by mutableStateOf(false)
         private set
+
+    /**
+     * 真题抽查（v0.27.0）：随机抽一批真题给家长过一眼。
+     *
+     * 为什么要这么个东西：题库是从 760 份 docx 里机器切出来的，答案靠正则对上，
+     * 「题干和答案是一对」这件事没法百分百自动验证（v0.26.0 只能挡住格式不对的）。
+     * 与其让用户某天在这张卷子上撞见一道错答案，不如给个入口让他一次看 20 道 ——
+     * 看两眼就知道整体靠谱不靠谱。纯看的页面，不写回题库。
+     */
+    var examSample by mutableStateOf<List<ExamQuestion>>(emptyList())
+        private set
+
+    /** 抽查浮层开着没有 */
+    var examSampleOpen by mutableStateOf(false)
+        private set
+
+    /** 抽查范围：勾着的科目；一个都没勾就退回来用当前科目 */
+    private fun examSamplePool(): List<ExamQuestion> {
+        val codes = (if (subjects.isEmpty()) listOf(subject) else subjects).map { it.code }.toSet()
+        return ExamBank.items.filter { it.grade == grade && it.subject in codes }
+    }
+
+    fun openExamSample() {
+        examSample = examSamplePool().shuffled().take(20)
+        examSampleOpen = true
+    }
+
+    /** 「换一批」：同一个池再洗一次，不关浮层 */
+    fun shuffleExamSample() {
+        examSample = examSamplePool().shuffled().take(20)
+    }
+
+    fun closeExamSample() {
+        examSampleOpen = false
+        examSample = emptyList()
+    }
 
     fun chooseExam(on: Boolean) {
         exam = on
