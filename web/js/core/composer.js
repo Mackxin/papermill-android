@@ -11,7 +11,7 @@ import {
   GradeProfiles, effectiveSubjects, makeContext, kindOf,
   pointsOf, pointTotal, POINT_BY_KEY, EXAM_FAMILIES, examFamilyOf,
 } from './models.js';
-import { Rng, sectionSeed } from './models.js';
+import { Rng, sectionSeed, stableHash } from './models.js';
 // data 层不反向依赖 core，这里单向引用不会成环
 import { DATA } from '../data/store.js';
 import { availableTypes, generatorOf, isCrossSubject, runGenerator, subjectOf, generatorCount } from './registry.js';
@@ -135,9 +135,83 @@ function pickSpread(pool, per, rng) {
   return out;
 }
 
-/** 出卷主流程：spec → 带题号与分值的卷子 */
-export function compose(spec, historyHashes = new Set()) {
+/**
+ * 真题库的「坏题闸门」。
+ *
+ * 为什么要在出卷时再筛一遍，而不是只靠导入脚本：
+ *  · 题库换数据源时导入脚本不一定跟着更新，闸门放在这里等于最后一道关；
+ *  · 判断依据是「答案长得像评分标准，题干却没有要人写字」——
+ *    这类题的成因是切卷时答案整体错位一位（答案是下一题的「示例…酌情给分」），
+ *    印到纸上就是「这软件出错了」，宁可少一道也不能上纸。
+ */
+const SUBJECTIVE_ANS = /(示例|评分标准|酌情|答案不唯一|合理即可|言之有理|每空|每小?题|得分)/;
+const ASK_WRITE = /(写|说|画|连|仿照|补充|读一读|口语|看图|观察|扩写|缩写|改写|解释|举|谈谈|想一想|理解|体会)/;
+
+export function isBadExam(q) {  const a = String(q?.a ?? '').trim();
+  if (!a) return true;
+  const stem = String(q?.q ?? '');
+  const writing = ASK_WRITE.test(stem);
+  if (!writing && SUBJECTIVE_ANS.test(a)) return true;
+  // 答案比题干长一倍半以上、题干又不要求写字 —— 十有八九是答案串到了别处
+  if (!writing && a.length > Math.max(40, stem.length * 1.5)) return true;
+  return false;
+}
+
+/**
+ * 难度阶梯：同一个大题里由易到难。
+ *
+ * 以前真题卷是纯随机的，一道卷可能前面全是两步应用题、后面全是直接写得数，
+ * 家长看着就像「乱七八糟」。题库带 d（1~3）就排一下；没有 d 的老题一律算 2。
+ * 稳定排序 —— 同难度之间保留抽到的先后，同 seed 仍然出同一张卷。
+ */
+function stagedByDifficulty(list) {
+  return [...list].sort((a, b) => (a.d ?? 2) - (b.d ?? 2));
+}
+
+/**
+ * 错题优先（v0.28.0）。
+ *
+ * 三级抽取，逐级放宽：
+ *  1. 题干 hash 命中的（**同一道题**做错过）—— 先占 40% 名额，基本保证抽回来；
+ *  2. 大类名命中的（同一类题老错，比如「应用题」）—— 再占一部分；
+ *  3. 剩下的名额留给没做过的新题。
+ *
+ * 只用 ② 不用 ① 的话，命中的是「同一大类」几十道，随机抽三道很难正好抽回那道错题 ——
+ * 用户会觉得「我明明记了错题，怎么没考到」。
+ */
+function pickWithPreference(pool, per, rng, isHash, isTopic) {
+  if (!isHash && !isTopic) return pickSpread(pool, per, rng);
+  const byHash = isHash ? pool.filter(isHash) : [];
+  const byTopic = isTopic ? pool.filter((q) => !isHash?.(q) && isTopic(q)) : [];
+  if (!byHash.length && !byTopic.length) return pickSpread(pool, per, rng);
+
+  const took = [];
+  if (byHash.length) {
+    took.push(...pickSpread(byHash, Math.min(byHash.length, Math.max(1, Math.ceil(per * 0.4))), rng));
+  }
+  const leftForTopic = per - took.length;
+  if (byTopic.length && leftForTopic > 0) {
+    took.push(...pickSpread(byTopic, Math.min(byTopic.length, Math.ceil(leftForTopic * 0.7)), rng));
+  }
+  const rest = per - took.length;
+  if (rest <= 0) return took;
+  const taken = new Set(took.map((q) => q.q));
+  return [...took, ...pickSpread(pool.filter((q) => !taken.has(q.q)), rest, rng)];
+}
+
+/**
+ * 出卷主流程：spec → 带题号与分值的卷子
+ *
+ * @param {object} spec
+ * @param {Set<number>} historyHashes 最近几张卷用过的题干 hash（同卷不重出旧题）
+ * @param {{hashes?: Set<number>, topics?: Set<string>}|null} pref 错题优先：命中的题干 hash
+ *        与大题名（真题库的「sec」）。不传就等于不启用。
+ */
+export function compose(spec, historyHashes = new Set(), pref = null) {
   const blocked = new Set(historyHashes);
+  // 整卷共用一份「已用过的素材」：同一个词不能既考看拼音写词、又考组词。
+  // 以前每个大题各建一份，跨大题就拦不住了。
+  const usedKeys = new Set();
   const sections = [];
   let nextNo = 1;
 
@@ -169,7 +243,8 @@ export function compose(spec, historyHashes = new Set()) {
   const examAllowed = new Set(examFams);
   const examPool = !usePoints && spec.exam && examAllowed.size
     ? (DATA.examBank ?? []).filter((q) => q.q && q.q.length >= 6 && q.t
-      && examSubjects.includes(q.s) && examAllowed.has(examFamilyOf(q.t)) && q.g === spec.grade)
+      && examSubjects.includes(q.s) && examAllowed.has(examFamilyOf(q.t)) && q.g === spec.grade
+      && !isBadExam(q))
     : [];
   const useExam = examPool.length > 0;
   if (useExam) {
@@ -185,7 +260,14 @@ export function compose(spec, historyHashes = new Set()) {
       const pool = usable.filter((q) => def.types.includes(q.t) && q.g === spec.grade);
       if (!pool.length) return;
 
-      const picked = pickSpread(pool, per, rng).map((q, k) => ({
+      const prefHashes = pref?.hashes ?? null;
+      const prefTopics = pref?.topics ?? null;
+      // 错题本存的是「卷面上那一刻的题干」：选择题已经把选项并进去了，
+      // 这里要按同样的拼法算 hash，不然选择题永远匹配不上。
+      const fullStem = (q) => (q.o && q.o.length ? `${q.q}　${q.o.join('　')}` : q.q);
+      const isHash = prefHashes ? (q) => prefHashes.has(stableHash(fullStem(q))) : null;
+      const isTopic = prefTopics ? (q) => !!q.sec && prefTopics.has(q.sec) : null;
+      const picked = stagedByDifficulty(pickWithPreference(pool, per, rng, isHash, isTopic)).map((q, k) => ({
         no: nextNo + k,
         type: 'EXAM',
         // 选择题的选项直接并进题干，跟自编题库生成器的做法一致（渲染层不认独立选项字段）
@@ -226,6 +308,8 @@ export function compose(spec, historyHashes = new Set()) {
       topicIds: spec.topicIds ?? [],
       term: spec.term ?? 0,
     });
+    // 整卷共用素材账本：上一大题考过的词，这一大题不再考
+    ctx.usedKeys = usedKeys;
     const drawn = runGenerator(gen, ctx).map((q, i) => ({ ...q, no: nextNo + i }));
     nextNo += drawn.length;
     if (!drawn.length) return;

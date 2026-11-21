@@ -1,5 +1,6 @@
 package com.papermill.app.domain.generate
 
+import com.papermill.app.core.store.MistakeItem
 import com.papermill.app.domain.content.ExamBank
 import com.papermill.app.domain.content.ExamQuestion
 import java.util.Random
@@ -12,6 +13,46 @@ import java.util.Random
  * 同 spec + 同 seed 在任何手机上出同一张卷；点「换一套」只换 seed。
  */
 object PaperComposer {
+
+    /**
+     * 错题优先的输入（v0.28.0）—— 跟网页端 compose 的第三参是同一件事。
+     *
+     * 手机上错题本没有存题干 hash，所以这里用「题干前 12 个字」当指纹：
+     * 足够长不会撞，又不用改存档格式。题库侧的题干是「题干 + 选项」拼起来的，
+     * 前 12 个字正好落在题干本体里，选择题也能对上。
+     */
+    data class MistakeBias(
+        val stems: Set<String> = emptySet(),
+        val topics: Set<String> = emptySet(),
+    ) {
+        val isEmpty: Boolean get() = stems.isEmpty() && topics.isEmpty()
+
+        /** 同一道题（题干前 12 字相同）—— 优先度最高 */
+        fun hitsStem(stem: String): Boolean {
+            if (stems.isEmpty()) return false
+            val head = headOf(stem)
+            return head.isNotEmpty() && head in stems
+        }
+
+        /** 同一大类（题库里的「sec」跟错题的大题名对上）—— 次一级 */
+        fun hitsTopic(section: String): Boolean =
+            topics.isNotEmpty() && section.isNotEmpty() && section in topics
+
+        companion object {
+            private const val PREFIX = 12
+            private val WS = Regex("\\s+")
+
+            private fun headOf(stem: String) = stem.trim().replace(WS, "").take(PREFIX)
+
+            fun of(mistakes: List<MistakeItem>): MistakeBias? {
+                if (mistakes.isEmpty()) return null
+                val stems = mistakes.map { headOf(it.stem) }.filter { it.isNotEmpty() }.toSet()
+                val topics = mistakes.map { it.topic.trim() }.filter { it.isNotEmpty() }.toSet()
+                val bias = MistakeBias(stems, topics)
+                return if (bias.isEmpty) null else bias
+            }
+        }
+    }
 
     private val CN_NUM = arrayOf("一", "二", "三", "四", "五", "六", "七", "八", "九", "十")
 
@@ -55,8 +96,82 @@ object PaperComposer {
         return out
     }
 
-    fun compose(spec: PaperSpec, historyHashes: Set<Long> = emptySet()): GeneratedPaper {
+    /**
+     * 真题库的「坏题闸门」（v0.28.0）—— 跟网页端 composer.js 的 isBadExam 同一套判断。
+     *
+     * 为什么要在出卷时再筛一遍，而不是只靠导入脚本：题库换数据源时导入脚本不一定跟着更新，
+     * 闸门放在这里等于最后一道关。判据是「答案长得像评分标准，题干却没有要人写字」——
+     * 这类题的成因是切卷时答案整体错位一位（答案是下一题的「示例…酌情给分」），
+     * 印到纸上就是「这软件出错了」，宁可少一道也不能上纸。
+     */
+    private val SUBJECTIVE_ANS = Regex("示例|评分标准|酌情|答案不唯一|合理即可|言之有理|每空|每小?题|得分")
+    private val ASK_WRITE = Regex("写|说|画|连|仿照|补充|读一读|口语|看图|观察|扩写|缩写|改写|解释|举|谈谈|想一想|理解|体会")
+
+    fun isBadExam(q: ExamQuestion): Boolean {
+        val answer = q.answer.trim()
+        if (answer.isEmpty()) return true
+        val writing = ASK_WRITE.containsMatchIn(q.stem)
+        if (!writing && SUBJECTIVE_ANS.containsMatchIn(answer)) return true
+        // 答案比题干长一倍半以上、题干又不要求写字 —— 十有八九是答案串到了别处
+        if (!writing && answer.length > maxOf(40, q.stem.length * 3 / 2)) return true
+        return false
+    }
+
+    /**
+     * 难度阶梯（v0.28.0）：同一个大题里由易到难。
+     *
+     * 以前真题卷是纯随机的，一张卷可能前面全是两步应用题、后面全是直接写得数，
+     * 家长看着就像「乱七八糟」。题库带 difficulty 就排一下；没有的一律算 2，
+     * 排不动就等于不排。用 sortedBy 是稳定排序 —— 同难度之间保留抽到的先后，
+     * 同 seed 仍然出同一张卷。
+     */
+    private fun stagedByDifficulty(list: List<ExamQuestion>): List<ExamQuestion> =
+        list.sortedBy { it.difficulty }
+
+    /**
+     * 错题优先的三级抽取（v0.28.0），跟网页端 pickWithPreference 同一套规矩：
+     *  1. 同一道题（题干前 12 字相同）先占 40% 名额 —— 保证抽得回来；
+     *  2. 同一大类（错题的「topic」对上题库的「sec」）再占一部分；
+     *  3. 剩下的名额留给没做过的新题。
+     *
+     * 只做第 ② 级的话，命中的是几十道同类题，随机抽五道很难正好抽回那道错题 ——
+     * 用户会觉得「我明明记了错题，怎么没考到」。
+     */
+    private fun pickWithPreference(
+        pool: List<ExamQuestion>,
+        n: Int,
+        rng: Random,
+        bias: MistakeBias?,
+    ): List<ExamQuestion> {
+        if (bias == null || bias.isEmpty) return pickSpread(pool, n, rng)
+        val byStem = pool.filter { bias.hitsStem(it.stem) }
+        val byTopic = pool.filter { !bias.hitsStem(it.stem) && bias.hitsTopic(it.section) }
+        if (byStem.isEmpty() && byTopic.isEmpty()) return pickSpread(pool, n, rng)
+
+        val took = ArrayList<ExamQuestion>(n)
+        if (byStem.isNotEmpty()) {
+            took += pickSpread(byStem, minOf(byStem.size, maxOf(1, Math.ceil(n * 0.4).toInt())), rng)
+        }
+        val leftForTopic = n - took.size
+        if (byTopic.isNotEmpty() && leftForTopic > 0) {
+            val want = minOf(byTopic.size, Math.ceil(leftForTopic * 0.7).toInt())
+            took += pickSpread(byTopic, want, rng)
+        }
+        val rest = n - took.size
+        if (rest <= 0) return took
+        val taken = took.map { it.stem }.toSet()
+        return took + pickSpread(pool.filter { it.stem !in taken }, rest, rng)
+    }
+
+    fun compose(
+        spec: PaperSpec,
+        historyHashes: Set<Long> = emptySet(),
+        mistakeBias: MistakeBias? = null,
+    ): GeneratedPaper {
         val blocked = historyHashes.toMutableSet()
+        // 整卷共用一份「已用过的素材」：同一个词不能既考看拼音写词、又考组词。
+        // 以前每个大题各建一份（GenContext 的默认值），跨大题就拦不住了。
+        val usedMaterials = mutableSetOf<String>()
         val sections = ArrayList<GeneratedSection>()
         var nextNo = 1
 
@@ -99,11 +214,12 @@ object PaperComposer {
                 // 「四年级同学去植树」—— 难度对不上年级，家长一眼就看出来。
                 // 不够就如实少给。
                 val pool = ExamBank.items.filter {
-                    it.grade == spec.grade && it.subject in examSubjects && it.type in family.types
+                    it.grade == spec.grade && it.subject in examSubjects && it.type in family.types &&
+                        !isBadExam(it)
                 }
                 if (pool.isEmpty()) return@forEach
 
-                val picked = pickSpread(pool, per, rng)
+                val picked = stagedByDifficulty(pickWithPreference(pool, per, rng, mistakeBias))
                 val questions = picked.mapIndexed { k, q ->
                     GeneratedQuestion(
                         no = nextNo + k,
@@ -153,6 +269,7 @@ object PaperComposer {
                 subjects = spec.effectiveSubjects().toSet(),
                 topicIds = spec.topicIds,
                 term = spec.term,
+                usedMaterials = usedMaterials,
             )
             val questions = generator.generate(ctx)
                 .mapIndexed { i, q -> q.copy(no = nextNo + i) }

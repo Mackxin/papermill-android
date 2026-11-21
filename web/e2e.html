@@ -1424,6 +1424,95 @@ await test('真题库 · 关掉真题回到自编，题型配比重新生效', a
   return `关掉真题 · 按题型配比出了 ${qs.length} 题`;
 });
 
+// ---------------------------------------------------------------- 末页补满 / 错题优先
+
+await test('末页补满 · 开了以后末页不再是半张纸，页数不增', async () => {
+  goCreate();
+  await waitFor(() => q('#view .create-actions'), '出卷页');
+  // 上一条用例把页数上限设成了 2 页，这里必须先还原 —— 限页时不补满（两个开关会打架）
+  viewChip('页数上限', '不限').click();
+  await sleep(80);
+  // 用「练习题」卷型（只出一个大题）把整卷压到半张纸 —— 这样末页一定空着
+  viewChip('卷型', '练习题').click();
+  await sleep(120);
+  viewChip('末页补满', '严格按题量').click();
+  await sleep(80);
+  const num = q('#view .type-item input.num');
+  if (!num) throw new Error('出卷页没有题型题量输入框');
+  setControl(num, '3');
+  await sleep(200);
+  const off = await generate();
+
+  goCreate();
+  await waitFor(() => q('#view .create-actions'), '出卷页');
+  viewChip('末页补满', '自动补满').click();
+  await sleep(150);
+  if (!viewChip('末页补满', '自动补满').classList.contains('on')) throw new Error('「自动补满」没选中');
+  const on = await generate();
+
+  const lenOff = off.text.replace(/\s/g, '').length;
+  const lenOn = on.text.replace(/\s/g, '').length;
+  if (lenOn <= lenOff) throw new Error(`开了补满卷面没变多（${lenOff} → ${lenOn} 字），末页本来就满？`);
+  if (on.n > off.n) throw new Error(`补满多印了一页（${off.n} → ${on.n} 页）`);
+
+  // 收尾：把这个开关拨回出厂值，后面的用例按「严格按题量」跑
+  goCreate();
+  await waitFor(() => q('#view .create-actions'), '出卷页');
+  viewChip('末页补满', '严格按题量').click();
+  await sleep(80);
+  return `${off.n} 页 ${lenOff} 字 → ${on.n} 页 ${lenOn} 字`;
+});
+
+await test('错题优先 · 真题卷里错过的题会被优先抽回来', async () => {
+  await freshApp();
+  // 真题库里三年级数学一道都没有，先切到六年级
+  const sel = [...D().querySelectorAll('#view select')]
+    .find((x) => [...x.options].some((o) => T(o).includes('六年级')));
+  if (!sel) throw new Error('找不到年级下拉');
+  sel.value = '6';
+  sel.dispatchEvent(new frame.contentWindow.Event('change', { bubbles: true }));
+  await sleep(500);
+  const card = await examReady();
+  const open = [...card.querySelectorAll('button')].find((b) => T(b) === '用真题出卷');
+  if (!open) throw new Error('没有「用真题出卷」按钮');
+  open.click();
+  await sleep(400);
+  await generate();
+
+  // 记两道错题，顺手记下它们的题干片段
+  const btn = qa('#view .preview-toolbar .btn').find((b) => T(b) === '批改');
+  if (!btn) throw new Error('工具栏没有「批改」');
+  btn.click();
+  await waitFor(() => modal(), '批改弹窗');
+  const rows = [...modal().querySelectorAll('.grading-row')];
+  if (rows.length < 4) throw new Error(`批改列表只有 ${rows.length} 道`);
+  const snippets = rows.slice(0, 2).map((r) => T(r.querySelector('b')).replace(/^\d+[.、]\s*/, '').replace(/\s/g, '').slice(0, 10));
+  rows.slice(0, 2).forEach((r) => {
+    const b = r.querySelector('input');
+    b.checked = true;
+    b.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  modalBtn('记进错题本').click();
+  await sleep(300);
+
+  // 从错题本页读一遍真实存下来的题干（比弹窗里猜可靠）
+  dock('错题本');
+  await waitFor(() => q('#view .mistake-list'), '错题本页');
+  const saved = qa('#view .mistake-item')
+    .slice(0, 2)
+    .map((x) => T(x).replace(/\s/g, '').slice(0, 10))
+    .filter(Boolean);
+  if (saved.length < 2) throw new Error(`错题本里只存下 ${saved.length} 道`);
+
+  dock('出卷');
+  await waitFor(() => q('#view .create-actions'), '出卷页');
+  const next = await generate();
+  const flat = next.text.replace(/\s/g, '');
+  const hit = saved.filter((s) => flat.includes(s));
+  if (!hit.length) throw new Error(`新卷里一道错题都没抽回来（错题：${saved.join(' / ')}）`);
+  return `记 2 道错题 → 新卷抽回 ${hit.length} 道`;
+});
+
 // ---------------------------------------------------------------- 收尾
 
 paint();

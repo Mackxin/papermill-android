@@ -1672,11 +1672,17 @@ class AppState(private val rawContext: Context) {
     ): Built {
         val spec = currentSpec(seed, useCounts, copySuffix)
         val recent = LocalStore.recentHashes(ctx, grade, subject)
-        val gp = PaperComposer.compose(spec, recent)
+        // 错题优先：只认同年级同科目的错题 —— 三年级的错题不该影响六年级的卷子。
+        // 错题本为空时 of() 返回 null，compose 走原来的纯随机路径。
+        val bias = PaperComposer.MistakeBias.of(
+            mistakes.filter { it.grade == spec.grade && it.subject == spec.subject.name },
+        )
+        val gp = PaperComposer.compose(spec, recent, bias)
         android.util.Log.d(
             "PapermillGen",
             "buildOnce grade=$grade counts=${spec.counts} sections=${gp.sections.size} " +
-                "questions=${gp.questions.size} exam=${spec.exam} points=${spec.points.size}",
+                "questions=${gp.questions.size} exam=${spec.exam} points=${spec.points.size} " +
+                "bias=${bias?.let { "${it.stems.size}题/${it.topics.size}类" } ?: "-"}",
         )
         val rendered = PaperRenderer.render(PaperAssembler.build(gp))
         val pages = if (withPreviews) PdfPreviewRenderer.render(ctx, rendered.bytes) else emptyList()

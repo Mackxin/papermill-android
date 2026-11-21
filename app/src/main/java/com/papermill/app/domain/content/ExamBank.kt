@@ -25,6 +25,11 @@ data class ExamQuestion(
     val source: String = "",
     /** 来源卷名（「人教版一年级数学上册期末卷」），抽查页显示出处用 */
     val sourceTitle: String = "",
+    /**
+     * 难度 1~3（v0.28.0）。出卷时同一个大题按它「由易到难」排。
+     * 下载来的真题没有这个字段，一律算 2 —— 排不动就等于不排，不会出乱序。
+     */
+    val difficulty: Int = 2,
 )
 
 /**
@@ -106,6 +111,8 @@ object ExamBank {
                     section = o.optString("sec"),
                     source = src,
                     sourceTitle = names[src].orEmpty(),
+                    // 老题库没有 d 字段 → optInt 给 0 → 收敛到 2（中等）
+                    difficulty = o.optInt("d", 2).coerceIn(1, 3),
                 )
             )
         }

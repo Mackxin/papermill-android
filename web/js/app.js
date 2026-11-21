@@ -206,12 +206,111 @@ const specTotal = (spec) => (pointsOf(spec).length ? pointTotal(spec) : totalCou
 
 // ------------------------------------------------------------------ 出卷
 
+/**
+ * 错题优先：把错题本里的两个指纹递给 compose ——
+ * 题干 hash（同一道题再做错）和大题名（同一类题老错）。
+ * 没有错题时返回 null，compose 就按原样抽，不会平白改变既有出卷手感。
+ *
+ * 只认同年级同科目的错题：三年级的错题不该影响六年级的卷子。
+ * 老记录（还没有 grade/subject 字段）一律放行 —— 宁可多偏一点，也别让用户
+ * 存了几十道错题却一道都不生效。
+ */
+function mistakePreference() {
+  if (!state.mistakes?.length) return null;
+  const { grade, subject } = state.spec ?? {};
+  const mine = state.mistakes.filter((m) => (m.grade == null || m.grade === grade)
+    && (m.subject == null || m.subject === subject));
+  if (!mine.length) return null;
+  const hashes = new Set(mine.map((m) => m.hash).filter((h) => h != null));
+  const topics = new Set(mine.map((m) => m.topic).filter(Boolean));
+  if (!hashes.size && !topics.size) return null;
+  return { hashes, topics };
+}
+
+/** 最后一页正文纸的填充率（0~1）；没有 fillRatios 就当作排满了，别乱补 */
+const lastFill = (r) => {
+  const n = r?.contentPageCount ?? r?.pageCount ?? 0;
+  if (!n || !r.fillRatios?.length) return 1;
+  return r.fillRatios[Math.min(n, r.fillRatios.length) - 1] ?? 1;
+};
+
+/**
+ * 补题补哪个题型：优先挑「不要答题线」的（口算、填空、选择、判断）里题量最多的那个。
+ *
+ * 为什么不能随便挑：应用题每题留三行横线，加两道就顶到下一页，
+ * 「不许增页」的约束会立刻把这一轮整轮否掉 —— 试了五轮等于没试。
+ * 密排题一道只占一行，补三五行才明显移动页边界，才补得进最后一页的空白。
+ */
+function biggestType(counts) {
+  let dense = null;
+  let denseMost = 0;
+  let any = null;
+  let anyMost = 0;
+  Object.entries(counts ?? {}).forEach(([k, v]) => {
+    if (v > anyMost) { anyMost = v; any = k; }
+    const lines = TYPE[k]?.answerLines ?? 0;
+    if (lines === 0 && v > denseMost) { denseMost = v; dense = k; }
+  });
+  return dense ?? any;
+}
+
+const FILL_THRESHOLD = 0.4;
+const FILL_ROUNDS = 3;
+
+/**
+ * 末页补满（v0.28.0）—— App 侧「自动补满整页」的网页版。
+ *
+ * 只处理一种情况：最后一张正文纸用了不到 40%。正常卷子（60% 以上）一个字都不动，
+ * 所以既有的出卷手感不会变。三条约束照抄 App：
+ *  1. **不许增页** —— 补完比原来多一张纸就整轮回退，宁可少补；
+ *  2. **不许空转** —— 加了两道题但题数没涨（题源抽干）就停；
+ *  3. **每轮只 +2 道** —— 一次补太多容易越过页边界，反而被判「增页」整轮回退。
+ */
+function fillPageOnce(spec, pref) {
+  let paper = compose(spec, new Set(), pref);
+  if (!paper.questions.length) return paper;
+
+  // 试排不改 state：把临时卷塞进去量一下再拿出来，调用方拿到的仍是最终卷
+  const measure = (p) => {
+    const prev = state.paper;
+    state.paper = p;
+    try { return renderPaper(assemble(spec, p)); } finally { state.paper = prev; }
+  };
+
+  let best = paper;
+  const first = measure(paper);
+  let bestRatio = lastFill(first);
+  const basePages = first.contentPageCount;
+  if (bestRatio >= FILL_THRESHOLD) return best;
+
+  let counts = { ...spec.counts };
+  for (let round = 0; round < FILL_ROUNDS; round++) {
+    const type = biggestType(counts);
+    if (!type) break;
+    counts = { ...counts, [type]: (counts[type] ?? 0) + 4 };
+    const next = compose({ ...spec, counts }, new Set(), pref);
+    if (next.questions.length <= paper.questions.length) break; // 题源见底
+    paper = next;
+    const r = measure(next);
+    if (r.contentPageCount > basePages) break;                  // 多一张纸就不补
+    const ratio = lastFill(r);
+    if (ratio <= bestRatio + 0.005) break;                      // 加了不到半成，停
+    best = next;
+    bestRatio = ratio;
+  }
+  return best;
+}
+
 async function generatePaper(spec = ensureSpec()) {
   const subs = effectiveSubjects(spec);
   // 课标题库是按科目分文件懒加载的：要用到哪些科目就先读进来
   const needCurric = Object.keys(spec.counts).some((k) => k.startsWith('CURRIC_'));
   if (needCurric) await loadCurriculumFor(subs);
-  const paper = compose(spec);
+  const pref = mistakePreference();
+  // 设了「页数上限」就不补满：用户已经明确说了「最多印两页」，
+  // 这时候还要加题，等于一边加一边压字号，两个开关互相打架。
+  const canFill = spec.autoFill !== false && !(spec.targetPages > 0);
+  const paper = canFill ? fillPageOnce(spec, pref) : compose(spec, new Set(), pref);
   if (!paper.questions.length) {
     toast('这个组合一道题都没出出来，换个题型试试');
     return null;
@@ -748,6 +847,14 @@ function layoutCard() {
     field('页数上限', chips([0, 1, 2, 3, 4, 5, 6].map((n) => ({ value: n, label: n === 0 ? '不限' : `${n} 页` })), spec.targetPages, (v) => {
       spec.targetPages = Number(v); save(); render();
     })),
+    // 末页补满：跟 App 的「自动补满整页」同一个功能（v0.28.0 网页版补齐）
+    field('末页补满', chips([
+      { value: true, label: '自动补满' },
+      { value: false, label: '严格按题量' },
+    ], spec.autoFill === true, (v) => {
+      spec.autoFill = v === true; save(); render();
+    })),
+    h('p', { class: 'hint', text: '「自动补满」只在最后一张纸用了不到四成时才加几道同型题，而且不许因此多印一张纸；正常排满的卷子不会被动。' }),
     field('答案', chips(ANSWER_MODES.map((a) => ({ value: a.key, label: a.label })), spec.answerMode, (v) => {
       spec.answerMode = v; save(); render();
     })),
@@ -1517,6 +1624,9 @@ function gradingDialog() {
 
 function addMistakes(list) {
   const seen = new Set(state.mistakes.map((m) => m.hash));
+  // 记下这道题属于哪个年级哪一科：出下一张卷时只让同年级同科目的错题参与「错题优先」，
+  // 三年级的错题不该影响六年级的卷子。老记录没有这两个字段，读的时候放行。
+  const { grade, subject } = state.spec ?? {};
   let added = 0;
   list.forEach((q) => {
     const hash = stableHash(q.stem);
@@ -1524,6 +1634,7 @@ function addMistakes(list) {
     seen.add(hash);
     state.mistakes.unshift({
       hash, stem: q.stem, answer: q.answer, topic: q.topic ?? '', type: q.type,
+      grade, subject,
       date: new Date().toISOString().slice(0, 10),
     });
     added++;
