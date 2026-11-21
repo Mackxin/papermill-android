@@ -639,6 +639,13 @@ def build(max_files=None):
     OUT_APP.parent.mkdir(parents=True, exist_ok=True)
     OUT_APP.write_text(OUT_WEB.read_text(encoding='utf-8'), encoding='utf-8')
 
+    # 切出来的题里有「表格压扁」的残题（原卷是表格，docx 里的横线变成了空白/制表符）。
+    # 清洗规则统一放在 scrub-bank.py，两处题库共用同一套，别在这里再抄一遍。
+    import scrub_bank  # noqa: E402
+    print('\n=== 题干清洗 ===')
+    scrub_bank.run(OUT_WEB)
+    scrub_bank.run(OUT_APP)
+
     print('\n=== 统计 ===')
     print('题数', len(questions))
     for k, v in stat.most_common():

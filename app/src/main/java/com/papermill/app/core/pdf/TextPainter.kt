@@ -138,6 +138,15 @@ class TextPainter {
                     len--
                 }
 
+                // 下划线组整组不劈（v0.29.1）：行尾若落在「＿＿＿」中间，退到这一组开头。
+                // 题库清洗后填空位印的是全角下划线，半条横线留在上一行、下一行只剩
+                // 「＿＿。」，印出来像漏印，孩子也不知道该在哪写。跟网页端 measure.js 同一条规则。
+                if (para[i + len - 1] == BLANK_CHAR) {
+                    var g = i + len
+                    while (g > i && para[g - 1] == BLANK_CHAR) g--
+                    if (g > i && g < i + len) len = g - i
+                }
+
                 // 避头：行首不能是这些标点 → 把下一个字符也拉进本行
                 while (i + len < para.length && NO_LINE_START.indexOf(para[i + len]) >= 0) {
                     len++
@@ -158,5 +167,8 @@ class TextPainter {
     private companion object {
         /** 不能出现在行首的字符 */
         const val NO_LINE_START = "，。、；：？！）〕］｝》」』】”’%,.;:?!)]}"
+
+        /** 题干里的填空横线（U+FF3F 全角下划线）：一组三条，不能被折行切开 */
+        const val BLANK_CHAR = '\uFF3F'
     }
 }

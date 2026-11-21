@@ -334,6 +334,12 @@ def main() -> int:
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(text, encoding='utf-8')
         print(f'写入 {out.relative_to(ROOT)} · {len(text.encode()) // 1024} KB')
+
+    # zx 的题里也有被题库自身压扁的题干（制表符、连续全角空格），
+    # 统一走 scrub_bank 那套规则，别在导入脚本里另写一份。
+    import scrub_bank  # noqa: E402
+    for out in (WEB_OUT, APP_OUT):
+        scrub_bank.run(out)
     return 0
 
 

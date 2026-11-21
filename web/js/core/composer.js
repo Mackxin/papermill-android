@@ -147,9 +147,54 @@ function pickSpread(pool, per, rng) {
 const SUBJECTIVE_ANS = /(示例|评分标准|酌情|答案不唯一|合理即可|言之有理|每空|每小?题|得分)/;
 const ASK_WRITE = /(写|说|画|连|仿照|补充|读一读|口语|看图|观察|扩写|缩写|改写|解释|举|谈谈|想一想|理解|体会)/;
 
-export function isBadExam(q) {  const a = String(q?.a ?? '').trim();
+/**
+ * 题干里还剩着「版面残渣」吗？
+ *
+ * 这类题的共同点是：原卷靠**表格线 / 横线**定位答题位置，docx 提取成制表符或空白后，
+ * 分组信息就没了。最典型的是「在横线里填上＞＜＝」：原卷是格子，每格两个数，
+ * 提取后印成「6　9　4+3　5　8+4　1220　12」——「12」「20」黏成一串，
+ * 孩子根本不知道要填什么。宁可这道题不出，也不能印到纸上。
+ *
+ * 三道判据（与 tools/scrub_bank.py 同口径，那边管存量、这边管兜底）：
+ *   · 制表符 —— PDF/docx 的单元格分隔符，正常题干里不会有；
+ *   · 括号外的连续空格 —— 括号里的（　　）是合法答题位，不算；
+ *   · LaTeX 命令 —— `\uline`、`\frac` 这类不该出现在小学卷面上。
+ */
+const SPACE_RUN_RE = /[\u3000 ]{2,}/g;
+const LATEX_RE = /\\[a-zA-Z]+/;
+
+function hasFlattenedLayout(stem) {
+  if (stem.includes('\t')) return true;
+  if (LATEX_RE.test(stem)) return true;
+  let depth = 0;
+  const open = new Set(['（', '(', '【', '[']);
+  const close = new Set(['）', ')', '】', ']']);
+  // 逐字符记括号层数：`逮捕(dǎi　　dài)` 里的空白两头都是字母，
+  // 只看紧邻是不是括号会漏，得看它在不在括号里面
+  const inside = [];
+  for (const ch of stem) {
+    if (open.has(ch)) { inside.push(depth); depth += 1; } else if (close.has(ch)) { depth = Math.max(0, depth - 1); inside.push(depth); } else inside.push(depth);
+  }
+  SPACE_RUN_RE.lastIndex = 0;
+  let m = SPACE_RUN_RE.exec(stem);
+  while (m) {
+    const before = stem[m.index - 1] ?? '';
+    const after = stem[m.index + m[0].length] ?? '';
+    const inParen = inside[m.index] > 0 || open.has(before) || close.has(after);
+    // 下划线旁的长空白是它自己排出来的横线，不算残渣
+    const nearRule = before === '＿' || before === '_' || after === '＿' || after === '_';
+    if (!inParen && !nearRule) return true;
+    m = SPACE_RUN_RE.exec(stem);
+  }
+  return false;
+}
+
+export function isBadExam(q) {
+  const a = String(q?.a ?? '').trim();
   if (!a) return true;
   const stem = String(q?.q ?? '');
+  // 版面残渣：题干已经读不明白了，有答案也不能用
+  if (hasFlattenedLayout(stem)) return true;
   const writing = ASK_WRITE.test(stem);
   if (!writing && SUBJECTIVE_ANS.test(a)) return true;
   // 答案比题干长一倍半以上、题干又不要求写字 —— 十有八九是答案串到了别处

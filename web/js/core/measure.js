@@ -68,6 +68,14 @@ export class TextPainter {
           && isWordChar(para[i + len - 1]) && isWordChar(para[i + len])) {
           len--;
         }
+        // 下划线组整组不劈：行尾若落在「＿＿＿」中间，退到这一组的开头，
+        // 整组挪到下一行。否则半条横线留在上一行、下一行只剩「＿＿。」，
+        // 印出来像漏印，家长也不知道该在哪写。
+        if (para[i + len - 1] === '＿') {
+          let g = i + len;
+          while (g > i && para[g - 1] === '＿') g--;
+          if (g > i && g < i + len) len = g - i;
+        }
         // 避头：行首不能是禁则标点
         while (i + len < para.length && NO_LINE_START.includes(para[i + len])) {
           len++;

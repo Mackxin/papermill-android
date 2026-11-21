@@ -106,14 +106,55 @@ object PaperComposer {
      */
     private val SUBJECTIVE_ANS = Regex("示例|评分标准|酌情|答案不唯一|合理即可|言之有理|每空|每小?题|得分")
     private val ASK_WRITE = Regex("写|说|画|连|仿照|补充|读一读|口语|看图|观察|扩写|缩写|改写|解释|举|谈谈|想一想|理解|体会")
+    private val LATEX_CMD = Regex("""\\[a-zA-Z]+""")
+
+    /**
+     * 题干里还剩着「版面残渣」吗？（v0.29.1）
+     *
+     * 原卷靠表格线 / 横线定位答题位，docx 提取成制表符或空白之后，分组信息就没了。
+     * 最典型的是「在横线里填上＞＜＝」：原卷是格子，每格两个数，提取后印成
+     * 「6　9　4+3　5　8+4　1220　12」——「12」「20」黏成一串，孩子不知道要填什么。
+     * 宁可这道题不出，也不能印到纸上。跟网页端 composer.js 的判据逐条一致。
+     */
+    private fun hasFlattenedLayout(stem: String): Boolean {
+        if (stem.contains('\t')) return true
+        if (LATEX_CMD.containsMatchIn(stem)) return true
+        val open = "（(【["
+        val close = "）)】]"
+        // 逐字记括号层数：`逮捕(dǎi　　dài)` 的空白两头都是字母，只看紧邻会漏
+        val inside = IntArray(stem.length)
+        var depth = 0
+        stem.forEachIndexed { i, ch ->
+            if (ch in open) { inside[i] = depth; depth += 1 }
+            else if (ch in close) { depth = maxOf(0, depth - 1); inside[i] = depth }
+            else inside[i] = depth
+        }
+        var i = 0
+        while (i < stem.length) {
+            val isSpace = stem[i] == '\u3000' || stem[i] == ' '
+            if (!isSpace) { i += 1; continue }
+            val start = i
+            while (i < stem.length && (stem[i] == '\u3000' || stem[i] == ' ')) i += 1
+            if (i - start < 2) continue
+            val before = if (start > 0) stem[start - 1] else ' '
+            val after = if (i < stem.length) stem[i] else ' '
+            val inParen = inside[start] > 0 || before in open || after in close
+            val nearRule = before == '＿' || before == '_' || after == '＿' || after == '_'
+            if (!inParen && !nearRule) return true
+        }
+        return false
+    }
 
     fun isBadExam(q: ExamQuestion): Boolean {
         val answer = q.answer.trim()
         if (answer.isEmpty()) return true
-        val writing = ASK_WRITE.containsMatchIn(q.stem)
+        val stem = q.stem
+        // 版面残渣：题干已经读不明白了，有答案也不能用
+        if (hasFlattenedLayout(stem)) return true
+        val writing = ASK_WRITE.containsMatchIn(stem)
         if (!writing && SUBJECTIVE_ANS.containsMatchIn(answer)) return true
         // 答案比题干长一倍半以上、题干又不要求写字 —— 十有八九是答案串到了别处
-        if (!writing && answer.length > maxOf(40, q.stem.length * 3 / 2)) return true
+        if (!writing && answer.length > maxOf(40, stem.length * 3 / 2)) return true
         return false
     }
 
