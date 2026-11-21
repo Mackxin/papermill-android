@@ -7,6 +7,7 @@
  */
 
 let activeModal = null;
+let escHandler = null;
 
 export function openModal({ title, body, actions = [], wide = false }) {
   closeModal();
@@ -44,10 +45,20 @@ export function openModal({ title, body, actions = [], wide = false }) {
   mask.addEventListener('click', (e) => { if (e.target === mask) closeModal(); });
   document.body.appendChild(mask);
   activeModal = mask;
+  // Esc 关窗：以前只有 ✕ 和「取消」两条出路，鼠标点开了想撤就得挪到按钮上。
+  // 只关窗、不触发底部按钮的 onClick —— Esc 是「我改主意了」，不是「确认」。
+  escHandler = (e) => {
+    if (e.key === 'Escape') { e.preventDefault(); closeModal(); }
+  };
+  document.addEventListener('keydown', escHandler);
   return content;
 }
 
 export function closeModal() {
+  if (escHandler) {
+    document.removeEventListener('keydown', escHandler);
+    escHandler = null;
+  }
   if (activeModal) {
     activeModal.remove();
     activeModal = null;

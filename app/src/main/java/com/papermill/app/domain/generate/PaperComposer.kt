@@ -107,6 +107,8 @@ object PaperComposer {
     private val SUBJECTIVE_ANS = Regex("示例|评分标准|酌情|答案不唯一|合理即可|言之有理|每空|每小?题|得分")
     private val ASK_WRITE = Regex("写|说|画|连|仿照|补充|读一读|口语|看图|观察|扩写|缩写|改写|解释|举|谈谈|想一想|理解|体会")
     private val LATEX_CMD = Regex("""\\[a-zA-Z]+""")
+    /** ①②③…⑳：横排选项的序号（选项之间用两个全角空格分隔） */
+    private val CIRCLED = Regex("[\u2460-\u2473]")
 
     /**
      * 题干里还剩着「版面残渣」吗？（v0.29.1）
@@ -140,7 +142,10 @@ object PaperComposer {
             val after = if (i < stem.length) stem[i] else ' '
             val inParen = inside[start] > 0 || before in open || after in close
             val nearRule = before == '＿' || before == '_' || after == '＿' || after == '_'
-            if (!inParen && !nearRule) return true
+            // 横排选项统一写成「①…　　②…」：空白后面紧跟圈号是选项间隔，
+            // 不是表格压扁的残渣（与 scrub_bank.py 的改写形态对齐，否则清洗过的题全被拦死）
+            val beforeOption = CIRCLED.matches(after.toString())
+            if (!inParen && !nearRule && !beforeOption) return true
         }
         return false
     }

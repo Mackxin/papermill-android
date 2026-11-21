@@ -94,7 +94,9 @@ def inline_data() -> tuple[str, int]:
         json.loads(raw.decode("utf-8"))
 
         if len(raw) > 64 * 1024:
-            gz = gzip.compress(raw, 9)
+            # mtime=0：不把构建时刻写进 gzip 头，否则同样源码每次构建出的
+            # 字节都不同，git 里每次都多出一个 4 MB 的假 diff。
+            gz = gzip.compress(raw, 9, mtime=0)
             packed = base64.b64encode(gz).decode("ascii")
             # base64 会比 gzip 大 1/3；压完还不如原文就老实写明文体
             if len(packed) < len(raw):

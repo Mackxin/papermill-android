@@ -324,12 +324,23 @@ async function generatePaper(spec = ensureSpec()) {
   return { paper, result: state.result };
 }
 
-/** 每道题一个稳定编号：编辑器靠它把「纸上点的那块」和「数据里那道题」对上 */
+/** 每道题一个稳定编号：编辑器靠它把「纸上点的那块」和「数据里那道题」对上。
+ *
+ * 编号必须**全卷唯一**：热区是按 uid 对到题上的，两道题共用一个 uid 就会出现
+ * 「点 A 弹出 B」。所以先收集已有的，新编号跳过被占用的号 ——
+ * 以前是简单的 `n += 1`，一旦出现「部分题已有 uid」的情况（加题、打开旧卷库）
+ * 就会从 q1 重新发号，把前面的题覆盖掉。
+ */
 function ensureUids(paper) {
+  const all = (paper?.sections ?? []).flatMap((s) => s.questions);
+  const used = new Set(all.map((q) => q.uid).filter(Boolean));
   let n = 0;
-  (paper?.sections ?? []).forEach((s) => s.questions.forEach((q) => {
-    if (!q.uid) { n += 1; q.uid = `q${n}`; }
-  }));
+  all.forEach((q) => {
+    if (q.uid) return;
+    do { n += 1; } while (used.has(`q${n}`));
+    q.uid = `q${n}`;
+    used.add(q.uid);
+  });
 }
 
 async function openPreview() {
@@ -1668,6 +1679,8 @@ async function appendSection(type, count) {
     instruction: t.instruction ?? '',
     padWithLines: t.padWithLines !== false,
   });
+  // 新题的 uid 要补上，否则纸上没有它的热区 —— 加了题却双击改不了、点也选不中
+  ensureUids(paper);
   paper.questions = paper.sections.flatMap((s) => s.questions);
   refreshPreview();
   toast(`已加：${t.label} ${qs.length} 道`);

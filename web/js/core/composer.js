@@ -162,6 +162,8 @@ const ASK_WRITE = /(写|说|画|连|仿照|补充|读一读|口语|看图|观察
  */
 const SPACE_RUN_RE = /[\u3000 ]{2,}/g;
 const LATEX_RE = /\\[a-zA-Z]+/;
+// ①②③…⑳：横排选项的序号
+const CIRCLED_RE = /[\u2460-\u2473]/;
 
 function hasFlattenedLayout(stem) {
   if (stem.includes('\t')) return true;
@@ -183,7 +185,11 @@ function hasFlattenedLayout(stem) {
     const inParen = inside[m.index] > 0 || open.has(before) || close.has(after);
     // 下划线旁的长空白是它自己排出来的横线，不算残渣
     const nearRule = before === '＿' || before === '_' || after === '＿' || after === '_';
-    if (!inParen && !nearRule) return true;
+    // 横排选项的统一写法是「①…　　②…」—— 空白后面紧跟圈号就是选项间隔，
+    // 不是表格压扁的残渣。scrub_bank.py 正是按这个形态改写选项的，
+    // 这里不放行的话，清洗过的 21 道题会被闸门永久拦死（白洗一遍）。
+    const beforeOption = CIRCLED_RE.test(after);
+    if (!inParen && !nearRule && !beforeOption) return true;
     m = SPACE_RUN_RE.exec(stem);
   }
   return false;
