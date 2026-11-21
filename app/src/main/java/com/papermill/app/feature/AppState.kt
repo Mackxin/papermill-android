@@ -39,6 +39,7 @@ import com.papermill.app.domain.content.CurricUnit
 import com.papermill.app.domain.content.CurriculumBank
 import com.papermill.app.domain.content.ExamBank
 import com.papermill.app.domain.content.ExamQuestion
+import com.papermill.app.domain.content.RefBank
 import com.papermill.app.domain.content.ScienceBank
 import com.papermill.app.domain.content.TextbookCatalog
 import com.papermill.app.domain.generate.AnswerMode
@@ -1671,6 +1672,9 @@ class AppState(private val rawContext: Context) {
         copySuffix: String = "",
     ): Built {
         val spec = currentSpec(seed, useCounts, copySuffix)
+        // 参考资料库（词表 / 英语单词）必须在取词之前就绪，否则这一卷只用手写的 80 个词，
+        // 跟网页版对不上。出卷本来就在 IO 线程上，这里同步等一下不卡界面。
+        RefBank.ensure(ctx)
         val recent = LocalStore.recentHashes(ctx, grade, subject)
         // 错题优先：只认同年级同科目的错题 —— 三年级的错题不该影响六年级的卷子。
         // 错题本为空时 of() 返回 null，compose 走原来的纯随机路径。

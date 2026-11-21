@@ -5,6 +5,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.remember
 import com.papermill.app.core.design.PaperMillTheme
+import com.papermill.app.domain.content.RefBank
 import com.papermill.app.feature.AppState
 import com.papermill.app.feature.PaperMillRoot
 
@@ -16,6 +17,10 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // 参考资料库（3,652 词表 / 873 英语单词）先在后台读：
+        // 出卷时会 ensure 同步等它，这里只是把那几十毫秒挪到用户还没点「生成」之前。
+        // 放在 debug 体检分支之前，几种 dump 出来的卷子才会跟正式出卷用同一套词表。
+        RefBank.warmUp(this)
         // 纸张批量体检（仅 debug）：不解 UI，直接把所有内置纸张渲成 PNG 落盘
         if (BuildConfig.DEBUG && intent?.getBooleanExtra("dumpSheets", false) == true) {
             DebugSheetDump.dump(this)

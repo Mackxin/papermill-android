@@ -21,6 +21,7 @@ export const DATA = {
   bank: [],
   catalog: [],
   examBank: [],        // 真题库：从下载的 docx 试卷切出来的题，见 tools/build-question-bank.py
+  refs: { cnWords: [], enWords: [], classifiers: [] },  // 参考资料库（v0.28.0），见 refs/*.json
   stats: null,
   loadedSubjects: new Set(),
 };
@@ -57,18 +58,23 @@ async function getJson(path) {
 }
 
 export async function loadCoreData() {
-  const [content, science, bank, catalog, stats] = await Promise.all([
+  const [content, science, bank, catalog, stats, cnWords, enWords, classifiers] = await Promise.all([
     getJson('data/content.json'),
     getJson('data/science/bank.json'),
     getJson('data/bank/builtin_questions.json'),
     getJson('data/textbook/catalog.json'),
     getJson('data/taxonomy/index.json'),
+    // 参考资料库（词表 / 英语单词 / 量词）—— 和 App 的 assets/refs 是同一份文件
+    getJson('data/refs/cn_words.json').catch(() => []),
+    getJson('data/refs/en_words.json').catch(() => []),
+    getJson('data/refs/classifiers.json').catch(() => []),
   ]);
   DATA.content = content;
   DATA.science = science.questions ?? [];
   DATA.bank = bank.questions ?? [];
   DATA.catalog = catalog.books ?? [];
   DATA.stats = stats;
+  DATA.refs = { cnWords: cnWords ?? [], enWords: enWords ?? [], classifiers: classifiers ?? [] };
 }
 
 /**

@@ -1,5 +1,7 @@
 package com.papermill.app.domain.generate
 
+import com.papermill.app.domain.content.RefBank
+
 /**
  * 内置字词表（语文 / 英语）。
  *
@@ -13,6 +15,16 @@ data class CnWord(val word: String, val pinyin: String, val minGrade: Int)
 data class EnWord(val en: String, val zh: String, val minGrade: Int)
 
 object WordBank {
+
+    /**
+     * 手写核心表（80 个词 / 42 个单词）。**永远排在最前面**，下标不动。
+     *
+     * v0.28.0 起它不再是全部：真正的词源是 assets 里的 refs/cn_words.json
+     * （3,652 个词，见 [com.papermill.app.domain.content.RefBank]）。
+     * 之所以保留这批并固定在最前，是因为 [chineseFor] 的轮换偏移按「本年级第一个新词」
+     * 在原表里的下标算 —— 一旦这批词的相对位置变了，同一份 spec + 同一个 seed
+     * 出的就是另一张卷，跟网页版也对不上。
+     */
 
     private val chinese = listOf(
         CnWord("太阳", "tài yáng", 1),
@@ -142,24 +154,33 @@ object WordBank {
         EnWord("industry", "工业", 9),
     )
 
+    /** 核心词 + 参考资料词，按「核心在前、参考在后」拼 — 网页版 CN_WORDS 是同一个顺序 */
+    private val chineseAll: List<CnWord>
+        get() = if (RefBank.ready && RefBank.cnWords.isNotEmpty()) chinese + RefBank.cnWords else chinese
+
+    private val englishAll: List<EnWord>
+        get() = if (RefBank.ready && RefBank.enWords.isNotEmpty()) english + RefBank.enWords else english
+
     fun chineseFor(grade: Int): List<CnWord> {
+        val all = chineseAll
         // 幼小衔接（g=0）没有独立词表：它的拼音识字内容就是一年级上册那批字。
         // 不 coerce 的话 pool 是空的（所有词的 minGrade 都 >= 1），语文卷会一道题都出不来。
         val g = grade.coerceAtLeast(1)
-        val pool = chinese.filter { it.minGrade <= g }
-        val firstNew = chinese.indexOfFirst { it.minGrade == g }
+        val pool = all.filter { it.minGrade <= g }
+        val firstNew = all.indexOfFirst { it.minGrade == g }
         val offset = if (firstNew > 0) firstNew % pool.size else 0
         return pool.drop(offset) + pool.take(offset)
     }
 
     fun englishFor(grade: Int): List<EnWord> {
-        val pool = english.filter { it.minGrade <= grade }
-        val firstNew = english.indexOfFirst { it.minGrade == grade }
+        val all = englishAll
+        val pool = all.filter { it.minGrade <= grade }
+        val firstNew = all.indexOfFirst { it.minGrade == grade }
         val offset = if (firstNew > 0) firstNew % pool.size else 0
         return pool.drop(offset) + pool.take(offset)
     }
 
     /** 关于页实时统计用 */
-    val chineseCount: Int get() = chinese.size
-    val englishCount: Int get() = english.size
+    val chineseCount: Int get() = chineseAll.size
+    val englishCount: Int get() = englishAll.size
 }

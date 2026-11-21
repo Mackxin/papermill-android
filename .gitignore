@@ -13,5 +13,7 @@ captures/
 *.keystore
 tools/.baidu-session.json
 tools/.probe-cache.json
+# 导入脚本跑出来的抽查日志（拼音与源数据的差异、被挡下的词），可重跑，不入库
+tools/out/
 downloads/
 tools/__pycache__/

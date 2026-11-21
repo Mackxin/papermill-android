@@ -138,6 +138,28 @@ function nextFreshWord(ctx, pool, keyOf = (w) => w.word) {
   return w;
 }
 
+/**
+ * 把手写的核心表与参考资料库（data/refs/*.json）拼起来。
+ *
+ * 顺序必须是「核心在前、参考在后」—— 这是 [rotatedPool] 轮换偏移的前提，
+ * 也是跟 App 端 WordBank 对得上的唯一依据（那边同样是 core + RefBank.cnWords）。
+ * 每张卷的 seed 相同、词表顺序相同，出的题才相同。
+ *
+ * 只该调用一次：重复调用会把参考词追加两遍，词表里每个词都出现两次，
+ * 轮换偏移跟着变，同一份 seed 出的卷子就跟 App 对不上了。
+ */
+let refWordsApplied = false;
+export function applyRefWords(cn = [], en = []) {
+  if (refWordsApplied) return;
+  if (!cn.length && !en.length) return;
+  refWordsApplied = true;
+  for (const w of cn) CN_WORDS.push({ word: w.word, pinyin: w.pinyin, minGrade: w.grade });
+  for (const w of en) EN_WORDS.push({ en: w.en, zh: w.zh, minGrade: w.grade });
+}
+
+/** 词表规模（关于页 / 自检页用） */
+export const wordBankSize = () => ({ cn: CN_WORDS.length, en: EN_WORDS.length });
+
 // ------------------------------------------------------------------ 语文
 
 /** 看拼音写词语 */
