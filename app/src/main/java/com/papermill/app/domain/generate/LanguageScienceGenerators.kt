@@ -7,7 +7,7 @@ package com.papermill.app.domain.generate
  * 「这一道没出来」跳过，最终这一大题少几道题，而不是在同一张卷子上印两遍同一个词。
  * 这比「凑满题数」重要：重复题印出去，家长第一个发现。
  */
-private fun <T> freshWord(
+internal fun <T> freshWord(
     ctx: GenContext,
     prefix: String,
     pool: List<T>,

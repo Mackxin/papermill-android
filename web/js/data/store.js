@@ -21,7 +21,7 @@ export const DATA = {
   bank: [],
   catalog: [],
   examBank: [],        // 真题库：从下载的 docx 试卷切出来的题，见 tools/build-question-bank.py
-  refs: { cnWords: [], enWords: [], classifiers: [] },  // 参考资料库（v0.28.0），见 refs/*.json
+  refs: { cnWords: [], enWords: [], classifiers: [], antonyms: [] },  // 参考资料库（v0.28.0 / v0.29.0），见 refs/*.json
   stats: null,
   loadedSubjects: new Set(),
 };
@@ -33,24 +33,52 @@ const subjectKey = (s) => String(s).toLowerCase();
  * 构建脚本 tools/build-single.py 会把 data/ 下每个 JSON 塞成
  *   <script type="application/json" data-pm="data/content.json">{…}</script>
  * 这里按路径找标签、解析一次就缓存 —— 启动时一个字节都不解析，用到哪科解哪科。
+ *
+ * 大文件（真题库 11 MB）走的是压缩版：
+ *   <script type="application/json-gz" data-pm="data/papers/questions.json">H4sI…</script>
+ * gzip 后 1.88 MB、base64 后 2.4 MB，单文件体积掉一半还多。
+ * 解压用浏览器自带的 DecompressionStream（Chrome 80+ / Safari 16.4+ / Firefox 113+），
+ * 不引任何第三方库 —— 这个项目从头到尾没有运行时依赖。
  */
 const inlineCache = new Map();
-function inlineJson(path) {
+
+async function inlineJson(path) {
   const key = String(path).replace(/^\.\//, '');
   if (inlineCache.has(key)) return inlineCache.get(key);
-  const node = document.querySelector(`script[type="application/json"][data-pm="${key}"]`);
+
+  const sel = (type) => document.querySelector(`script[type="${type}"][data-pm="${key}"]`);
+  const plain = sel('application/json');
+  const packed = plain ? null : sel('application/json-gz');
+
   let value = null;
-  if (node) {
-    try { value = JSON.parse(node.textContent); } catch (err) {
+  if (plain) {
+    try { value = JSON.parse(plain.textContent); } catch (err) {
       throw new Error(`内置数据 ${key} 解析失败：${err.message}`);
     }
+  } else if (packed) {
+    value = await gunzipJson(packed.textContent, key);
   }
   inlineCache.set(key, value);
   return value;
 }
 
+/** base64 → gzip 解压 → JSON。走流式，省掉「先解成字符串再 parse」那一次整拷。 */
+async function gunzipJson(b64, key) {
+  if (typeof DecompressionStream !== 'function') {
+    throw new Error(
+      `内置数据 ${key} 是压缩过的，这个浏览器不支持 DecompressionStream。` +
+      '请用较新的 Chrome / Edge，或 Safari 16.4 以上打开。',
+    );
+  }
+  const raw = atob(b64.trim());
+  const bytes = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i += 1) bytes[i] = raw.charCodeAt(i);
+  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
+  return new Response(stream).json();
+}
+
 async function getJson(path) {
-  const hit = inlineJson(path);
+  const hit = await inlineJson(path);
   if (hit) return hit;
   const res = await fetch(new URL(path, document.baseURI));
   if (!res.ok) throw new Error(`读取 ${path} 失败：${res.status}`);
@@ -58,23 +86,30 @@ async function getJson(path) {
 }
 
 export async function loadCoreData() {
-  const [content, science, bank, catalog, stats, cnWords, enWords, classifiers] = await Promise.all([
-    getJson('data/content.json'),
-    getJson('data/science/bank.json'),
-    getJson('data/bank/builtin_questions.json'),
-    getJson('data/textbook/catalog.json'),
-    getJson('data/taxonomy/index.json'),
-    // 参考资料库（词表 / 英语单词 / 量词）—— 和 App 的 assets/refs 是同一份文件
-    getJson('data/refs/cn_words.json').catch(() => []),
-    getJson('data/refs/en_words.json').catch(() => []),
-    getJson('data/refs/classifiers.json').catch(() => []),
-  ]);
+  const [content, science, bank, catalog, stats, cnWords, enWords, classifiers, antonyms] =
+    await Promise.all([
+      getJson('data/content.json'),
+      getJson('data/science/bank.json'),
+      getJson('data/bank/builtin_questions.json'),
+      getJson('data/textbook/catalog.json'),
+      getJson('data/taxonomy/index.json'),
+      // 参考资料库（词表 / 英语单词 / 量词 / 反义词）—— 和 App 的 assets/refs 是同一份文件
+      getJson('data/refs/cn_words.json').catch(() => []),
+      getJson('data/refs/en_words.json').catch(() => []),
+      getJson('data/refs/classifiers.json').catch(() => []),
+      getJson('data/refs/antonyms.json').catch(() => []),
+    ]);
   DATA.content = content;
   DATA.science = science.questions ?? [];
   DATA.bank = bank.questions ?? [];
   DATA.catalog = catalog.books ?? [];
   DATA.stats = stats;
-  DATA.refs = { cnWords: cnWords ?? [], enWords: enWords ?? [], classifiers: classifiers ?? [] };
+  DATA.refs = {
+    cnWords: cnWords ?? [],
+    enWords: enWords ?? [],
+    classifiers: classifiers ?? [],
+    antonyms: antonyms ?? [],
+  };
 }
 
 /**

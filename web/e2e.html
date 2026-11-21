@@ -987,6 +987,67 @@ await test('词表 · 参考资料库并进来以后一年级能出满一整大�
 });
 
 // 29 --------------------------------------------------------------
+await test('量词填空 · 一年级就出得满，题干都是「一（　）X」且填得出量词', async () => {
+  // v0.29.0：数据来自 refs/classifiers.json（255 条，人工逐条核过）。
+  // 这条只验「出得来、形状对、答案非空」，具体搭配对不对在导入脚本那边卡。
+  const { compose, defaultSpec } = await import('./js/core/composer.js');
+  // 自检页自己不跑 app.js 的 boot，答案表是空的 —— 这两条要先把参考资料库读进来
+  const store = await import('./js/data/store.js');
+  if (!store.DATA.refs?.classifiers?.length) await store.loadCoreData();
+  const report = [];
+  for (const grade of [1, 3]) {
+    const spec = defaultSpec(grade, ['CHINESE']);
+    spec.counts = { CLASSIFIER_FILL: 12 };
+    const paper = compose(spec);
+    if (paper.questions.length < 8) {
+      throw new Error(`${grade} 年级量词题只出了 ${paper.questions.length} 道（数据池不够？）`);
+    }
+    for (const item of paper.questions) {
+      if (!/一（　）\S/.test(item.stem)) {
+        throw new Error(`题干形状不对：${item.stem}`);
+      }
+      if (!item.answer || item.answer.length > 2) {
+        throw new Error(`答案不像量词：${item.stem} → ${item.answer}`);
+      }
+    }
+    const nouns = paper.questions.map((x) => x.stem.replace(/^.*一（　）/, ''));
+    const dup = [...new Set(nouns.filter((x, i) => nouns.indexOf(x) !== i))];
+    if (dup.length) throw new Error(`同一张卷里重复的名词：${dup.join(' / ')}`);
+    report.push(`${grade} 年级 ${paper.questions.length} 道`);
+  }
+  return report.join('，');
+});
+
+// 30 --------------------------------------------------------------
+await test('写反义词 · 只出单字对，同一对的两个方向不会同时出现', async () => {
+  // 数据里「上→下」和「下→上」都有，导入脚本已按无序对去重；
+  // 这条守着「一张卷里不许出现同一对的两个方向」（那等于同一道题印两遍）。
+  const { compose, defaultSpec } = await import('./js/core/composer.js');
+  const store = await import('./js/data/store.js');
+  if (!store.DATA.refs?.antonyms?.length) await store.loadCoreData();
+  const spec = defaultSpec(3, ['CHINESE']);
+  spec.counts = { ANTONYM: 10 };
+  const paper = compose(spec);
+  if (paper.questions.length < 6) {
+    throw new Error(`三年级反义词只出了 ${paper.questions.length} 道`);
+  }
+  const seen = [];
+  for (const item of paper.questions) {
+    const m = item.stem.match(/反义词：(\S+?)——/);
+    if (!m) throw new Error(`题干形状不对：${item.stem}`);
+    const a = m[1];
+    const b = item.answer;
+    if ([...a].length !== 1 || [...b].length !== 1) {
+      throw new Error(`不是单字对：${a}——${b}`);
+    }
+    const key = [a, b].sort().join('|');
+    if (seen.includes(key)) throw new Error(`同一对出了两遍：${a}——${b}`);
+    seen.push(key);
+  }
+  return `${paper.questions.length} 道，均为单字对且互不重复`;
+});
+
+// 31 --------------------------------------------------------------
 await test('编辑排版 · 标题并成一行、每大题单独定栏数', async () => {
   if (frame.clientWidth < 1024) return '窗口太窄，跳过（电脑端功能）';
   goCreate();

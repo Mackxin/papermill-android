@@ -22,6 +22,7 @@ import { generators as bankGens } from '../gen/bank.js';
 import { generators as curricGens } from '../gen/curric.js';
 import { generators as scienceGens } from '../gen/science.js';
 import { generators as figureGens } from '../gen/figures.js';
+import { generators as refGens } from '../gen/refs.js';
 
 /** 顺序即「默认卷取前 N 种」的顺序，和 App 一致：看图题排最后 */
 export const ALL_GENERATORS = [
@@ -29,6 +30,7 @@ export const ALL_GENERATORS = [
   ...worksheetGens,
   ...languageGens,
   ...contentGens,
+  ...refGens,
   ...themeGens,
   ...englishGens,
   ...bankGens,

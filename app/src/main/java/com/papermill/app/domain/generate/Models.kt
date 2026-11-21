@@ -138,6 +138,11 @@ enum class QuestionType(
     POEM_FILL("古诗接句", 1),
     POEM_MATCH("古诗常识", 1),
 
+    // v0.29.0 参考资料库驱动：量词搭配与反义词（数据见 assets/refs/classifiers.json、antonyms.json）
+    // 题干都很短（「一（　）书」十来个字），三栏一排正好，留白也比两栏少
+    CLASSIFIER_FILL("量词填空", 3),
+    ANTONYM("写反义词", 3),
+
     // v0.9.0 课标题库（cn-math-taxonomy，CC BY-NC 4.0）：五科知识点配套题，跨科通用
     // 题干普遍是整句（数学中位 33 字、英语最长 136 字），半栏会折成竖条，只能整行
     CURRIC_BLANK("知识点填空", 1),
@@ -203,6 +208,7 @@ enum class QuestionType(
             PINYIN, HANZI, DICTATION, ENGLISH_WORD, FILL_BLANK, UNIT_CONVERT,
             NUMBER_PATTERN, LETTER_ORDER, WORD_SCRAMBLE, THEME_PINYIN, THEME_GROUP,
             PHONETIC_WRITE, TEXTBOOK_HANZI, TEXTBOOK_WORD, IDIOM_FILL, POEM_FILL,
+            CLASSIFIER_FILL, ANTONYM,
             CURRIC_BLANK, SCIENCE_BLANK, CUSTOM,
             -> QuestionFamily.BLANK
         }
@@ -260,6 +266,8 @@ private val BASIC_TYPES = listOf(
     QuestionType.ORAL, QuestionType.PINYIN, QuestionType.DICTATION, QuestionType.HANZI,
     QuestionType.ENGLISH_WORD, QuestionType.FILL_BLANK, QuestionType.UNIT_CONVERT,
     QuestionType.KNOWLEDGE, QuestionType.CURRIC_BLANK, QuestionType.SCIENCE_JUDGE,
+    // v0.29.0：量词与反义词都是「积累」类，跟拼音、生字一个性质
+    QuestionType.CLASSIFIER_FILL, QuestionType.ANTONYM,
 )
 
 /** 拼音卷的题型（语文专项）：看拼音写词语打头，往下依次是字、词、补全 */

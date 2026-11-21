@@ -20,6 +20,8 @@
 产物：  项目根目录 / 试卷工坊.html（约 3.6MB）
 """
 
+import base64
+import gzip
 import json
 import pathlib
 import re
@@ -73,17 +75,36 @@ def inline_css(html: str) -> tuple[str, int]:
 
 
 def inline_data() -> tuple[str, int]:
-    """data/ 下每个 JSON 一条 <script type="application/json">，路径即 store.js 用的 key。"""
+    """data/ 下每个 JSON 一条 <script>，路径即 store.js 用的 key。
+
+    v0.29.0 起大的走 gzip：真题库 11.1 MB 明文 gzip 后只有 1.88 MB，
+    base64 再涨三分之一也就 2.4 MB —— 单文件从 14.8 MB 掉到 6 MB 出头。
+    小的（几 KB）继续明文体，省掉一次解压，也方便出问题时直接翻源码。
+
+    压缩版标签写成 type="application/json-gz"，store.js 按这个类型认，
+    用 DecompressionStream 现解。明文版仍要把 '<' 转成 \\u003c，
+    否则题库里的「<」会提前闭合 </script>；base64 里没有这种字符，不用管。
+    """
     blocks = []
     total = 0
     for f in sorted((WEB / "data").rglob("*.json")):
         rel = f.relative_to(WEB).as_posix()
-        text = f.read_text(encoding="utf-8").strip()
-        # JSON 语法里 '<' 只可能出现在字符串内，统一转成 \u003c，
-        # 免得题库里出现 "</script" 把标签提前闭合（数学题里真有 '<'）
-        text = text.replace("<", "\\u003c")
-        # 顺手确认这份 JSON 本身是好的，坏数据宁可在构建期炸
-        json.loads(f.read_text(encoding="utf-8"))
+        raw = f.read_bytes()
+        # 构建期先把这份 JSON 校验一遍，坏数据宁可在打包时炸
+        json.loads(raw.decode("utf-8"))
+
+        if len(raw) > 64 * 1024:
+            gz = gzip.compress(raw, 9)
+            packed = base64.b64encode(gz).decode("ascii")
+            # base64 会比 gzip 大 1/3；压完还不如原文就老实写明文体
+            if len(packed) < len(raw):
+                blocks.append(
+                    f'<script type="application/json-gz" data-pm="{rel}">{packed}</script>'
+                )
+                total += len(packed.encode())
+                continue
+
+        text = raw.decode("utf-8").strip().replace("<", "\\u003c")
         blocks.append(
             f'<script type="application/json" data-pm="{rel}">{text}</script>'
         )

@@ -213,6 +213,10 @@ object GeneratorRegistry {
         TextbookHanziGenerator, TextbookWordGenerator,
         // v0.8.0 成语 / 古诗题库题型（内容见 domain/content/Idioms.kt、Poems.kt）
         IdiomFillGenerator, IdiomMeaningGenerator, PoemFillGenerator, PoemMatchGenerator,
+        // v0.29.0 参考资料库驱动（内容见 assets/refs/classifiers.json、antonyms.json）
+        // 跟成语 / 古诗排在一起：都是语文的「积累」类，但排在它们后面，
+        // 保证默认卷取前 N 种时不会把原来的题型挤掉
+        ClassifierFillGenerator, AntonymGenerator,
         // v0.8.0 口算变式（找未知项 / 带余数除法）
         OralMissingGenerator, OralRemainderGenerator,
         // v0.9.0 课标题库（cn-math-taxonomy · CC BY-NC 4.0，内容见 domain/content/CurriculumBank.kt）

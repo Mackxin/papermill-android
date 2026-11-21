@@ -7,7 +7,23 @@ import org.json.JSONArray
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * 参考资料库（v0.28.0）—— 词表 / 英语单词 / 量词搭配，来自 zx-study（MIT）的 ref_* 表。
+ * 一条量词搭配（v0.29.0 量词填空题）。
+ *
+ * [grade] = 名词与量词两侧里最难的那个字在几年级学。学生要同时认出名词、
+ * 写出量词，所以按它过滤，而不是另编一套难度。
+ */
+data class NounClassifier(val noun: String, val classifier: String, val grade: Int)
+
+/**
+ * 一对反义词（v0.29.0 写反义词题）。
+ *
+ * 只有**单字对**（上／下、大／小），而且一字只对应一个反义词 ——
+ * 双字对（春天／秋天、渐渐／逐渐）里对义与近义占两成以上，已由导入脚本整批剔除。
+ */
+data class AntonymPair(val a: String, val b: String, val grade: Int)
+
+/**
+ * 参考资料库（v0.28.0）—— 词表 / 英语单词 / 量词 / 反义词，来自 zx-study（MIT）的 ref_* 表。
  *
  * ============================================================
  * 为什么放在 assets 里，不写成 Kotlin 字面量
@@ -48,7 +64,12 @@ object RefBank {
 
     /** 名词 → 量词（「上衣」→「件」），量词搭配速查表与量词题用 */
     @Volatile
-    var classifiers: List<Pair<String, String>> = emptyList()
+    var classifiers: List<NounClassifier> = emptyList()
+        private set
+
+    /** 反义词单字对（「高」→「矮」），写反义词题用 */
+    @Volatile
+    var antonyms: List<AntonymPair> = emptyList()
         private set
 
     /**
@@ -97,7 +118,16 @@ object RefBank {
                 val o = cl.optJSONObject(i) ?: return@mapNotNull null
                 val n = o.optString("noun")
                 val c = o.optString("classifier")
-                if (n.isEmpty() || c.isEmpty()) null else n to c
+                if (n.isEmpty() || c.isEmpty()) null
+                else NounClassifier(n, c, o.optInt("grade", 3).coerceIn(1, 9))
+            }
+            val an = readArray(app, "refs/antonyms.json")
+            antonyms = (0 until an.length()).mapNotNull { i ->
+                val o = an.optJSONObject(i) ?: return@mapNotNull null
+                val a = o.optString("a")
+                val b = o.optString("b")
+                if (a.isEmpty() || b.isEmpty()) null
+                else AntonymPair(a, b, o.optInt("grade", 3).coerceIn(1, 9))
             }
             ready = true
         }

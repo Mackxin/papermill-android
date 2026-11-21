@@ -2144,7 +2144,7 @@ function moreScreen() {
     h('p', { class: 'hint', text: '网页版与安卓 App 同一套出题与排版逻辑，数据存在这台设备的浏览器里，不上传任何内容。' }),
     h('p', { class: 'hint', html: `课标题库来自 <a href="${CURRIC_META.source}" target="_blank" rel="noreferrer">cn-math-taxonomy</a>，许可 ${CURRIC_META.license}（署名—非商业性使用）；一旦商业化必须下线该数据与相关题型。` }),
     h('p', { class: 'hint', text: '成语 / 古诗 / 音标 / 语法 / 生字词全部自编或取自语言事实，不收录任何教材原文。' }),
-    h('p', { class: 'hint', text: `词表来自 zx-study（MIT）：中文 ${wordBankSize().cn} 词、英语 ${wordBankSize().en} 词；古诗 ${DATA.content?.poems?.length ?? 0} 首。` }),
+    h('p', { class: 'hint', text: `词表来自 zx-study（MIT）：中文 ${wordBankSize().cn} 词、英语 ${wordBankSize().en} 词；古诗 ${DATA.content?.poems?.length ?? 0} 首；量词搭配 ${DATA.refs?.classifiers?.length ?? 0} 条、反义词 ${DATA.refs?.antonyms?.length ?? 0} 对（逐条核过，只留答案唯一的）。` }),
     h('div', { class: 'row' }, [
       button('学生档案', 'ghost', () => { state.tab = 'students'; render(); }),
       button('清空本地数据', 'ghost danger', () => {

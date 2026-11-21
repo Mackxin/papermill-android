@@ -129,7 +129,7 @@ function rotatedPool(list, grade) {
  * 所以这里按**素材本身**（词）记一份账：用过的踢出去；词用完了返回 null，
  * 宁可这一大题少出两题，也不在同一张卷子上印两遍同一个词。
  */
-function nextFreshWord(ctx, pool, keyOf = (w) => w.word) {
+export function nextFreshWord(ctx, pool, keyOf = (w) => w.word) {
   const used = (ctx.usedKeys ??= new Set());
   const fresh = pool.filter((w) => !used.has(keyOf(w)));
   if (!fresh.length) return null;

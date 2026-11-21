@@ -17,10 +17,15 @@
   ref_english_word  1,116 词（带年级、中文释义）   → **取**。原来只有 42 个
   ref_poem          109 首（带年级、原文）         → **取**。原来 44 首，一并追加进 Poems.kt
   ref_classifier    1,189 条「名词→量词」          → **取**（919 条落在小学字表内），做量词速查表
-  ref_antonym       18,764 对反义词                → 先存着，等新题型那一版再用
-  ref_synonym       6,556 组近义词                 → 结构是「一组词用空格隔开」，不是成对的，
-                                                   直接做成选择题容易出「两个都对」，暂不取
-  ref_xiehouyu      14,031 条歇后语                → 暂不取（体积大、生成器没有对应题型）
+  ref_antonym       18,764 对反义词                → **取**（v0.29.0 写反义词题）。只留「一词一反」
+                                                   的 5,000 来个，多义的（高→低/矮）整批不要，
+                                                   否则填空题的答案不唯一
+  ref_synonym       6,556 组近义词                 → **不取**：结构是「人 士 人物 人士 人氏」这样
+                                                   一组词用空格隔开，不是成对的；做成选择题容
+                                                   易出「两个都对」
+  ref_xiehouyu      14,031 条歇后语                → **取**（v0.29.0 歇后语题），过三道闸门后
+                                                   约 3,000 条。做成**选择题**不做填空 ——
+                                                   答案天生不唯一（做贼的说梦话——想偷／做贼心虚）
   ref_idiom         30,895 条成语                  → **不取**，理由见下
   ref_hanzi         2,469 个生字                   → **不取**：只有字和年级、没有拼音；
                                                    而生字题本来就取「词的首字」，词表扩了它就跟着够了
@@ -68,6 +73,92 @@ OUT_LOG = ROOT / 'tools' / 'out'
 CJK = re.compile(r'^[\u4e00-\u9fff]+$')
 PUNCT_END = re.compile(r'[，。；？！,;?!]$')
 TONE = 'āáǎàēéěèīíǐìōóǒòūúǔùǖǘǚǜêńňǹ'
+
+# ------------------------------------------------------------------ 人工核过的黑名单
+#
+# zx 的 ref_antonym / ref_classifier 是**词典级的对义表**，不是小学语文的反义词表 /
+# 量词表。直接抽题会印出这种东西：
+#     「写出反义词：春天——（秋天）」  春天没有反义词，这是同一维度的对义
+#     「写出反义词：渐渐——（逐渐）」  这是近义词，纯粹是库错了
+#     「一（首）花儿」               花儿的量词是「朵」，库配错了
+# 所以两张表都要过一份逐条核过的黑名单。**只列确定错的**，模糊的宁可留着，
+# 因为少一条只是少一道题，错一条是印在卷子上丢人。
+
+# 单字反义词里不是反义的（对义 / 并列 / 近义 / 词内字）。
+# 写法：`'左|右'`，读取时转成 frozenset，所以顺序不用管。
+ANTONYM_BLOCK = {
+    '万|一', '千|一', '中|西', '春|秋', '日|月', '点|面', '乡|城', '作|息',
+    '净|毛', '团|尖', '土|洋', '应|呼', '归|去', '次|主', '洋|中', '红|绿',
+    '领|发', '交|接', '光|麻', '情|仇', '板|活', '边|内', '递|接', '侧|正',
+    '占|领', '我|敌', '招|挥', '流|源', '腹|背', '质|量', '逐|迎', '声|韵',
+    '孙|祖', '扶|抑', '捡|洒', '支|塌', '晓|夜', '盾|矛', '惯|管', '络|经',
+    '避|扬', '休|戚', '提|推', '圆|方', '巨|小', '底|顶', '扔|接', '返|往',
+    '傻|精', '墨|朱', '警|匪', '赤|黑', '平|皱', '君|臣', '买|卖', '夏|冬',
+    # 第二遍通读 167 条成品时又抓出来的：并列、词内字、只在特定语境里才反义
+    '脚|头',   # 并列，不是反义
+    '舍|入',   # 「舍入」是一个词的两个字
+    '谢|开',   # 只在「花谢花开」这种语境里成立
+    '定|退',   # 不是反义
+    '皂|白',   # 皂 = 黑，勉强算对，但这个字小学不学
+    '盖|开',   # 盖盖儿／开盖儿，勉强
+    '纳|出',   # 「出纳」是词
+    '落|添',   # 锦上添花／落井下石，靠语境
+}
+
+# 量词配错的（名词与量词不搭，或者名词根本不是名词）
+CLASSIFIER_BLOCK = {
+    '牛|条',    # 一头牛
+    '象|只',    # 一头大象
+    '蝇|只',    # 一只苍蝇
+    '器|台',    # 「器」单字不成词
+    '堂|间',
+    '牌|片',
+    '词|首', '词|组',
+    '课|堂',
+    '骂|通',    # 骂是动词
+    '紧张|阵',  # 紧张是形容词
+    '保护|种', '享受|种', '彩色|种',
+    '任命|纸',
+    '掩护|面',
+    '结构|座',
+    '解放|次', '劳动|次',
+    '劝告|席',
+    '玻璃|张',  # 一块玻璃
+    '身体|具',  # 一副身体
+    '音乐|张',  # 一首音乐
+    '历史|门',
+    '地|片',    # 「一地」不成词，得说「一地水」
+    '色|种',
+    '道|条',    # 「道」本身就是量词
+    '坝|条',    # 一道坝 / 一座坝
+    '漆|道',
+    '秀|场',
+    '血|滴',    # 不适合小学卷面
+    '麻|缕',
+    '墨|块',
+    '觉|场',    # 「一觉」是词，「一场觉」不成立
+    '根|条',    # 「根」本身就是量词
+    '楼|层',    # 一层楼，不是「一楼层」
+}
+
+
+def _key(*parts: str) -> frozenset[str]:
+    """黑名单查表用：把「左|右」「牛|条」这样的写法转成无序集合，方向不用管。"""
+    return frozenset(''.join(parts))
+
+
+ANTONYM_BLOCK = {frozenset(p.split('|')) for p in ANTONYM_BLOCK if '|' in p}
+CLASSIFIER_BLOCK = {frozenset(p.split('|')) for p in CLASSIFIER_BLOCK if '|' in p}
+
+# 歇后语的内容闸门（v0.29.0）。ref_xiehouyu 是「民间歇后语大全」，
+# 里面混着大量不适合印在小学生卷子上的条目：「沸水煮孩子——熟人」
+# 「脏水罐子掉到茅坑里——越闹越臭」「屁股坐在鸡蛋上——一塌糊涂」。
+# 这些不是排版问题、也不是难度问题，是内容不能进校园，所以单独一张黑名单。
+XH_BAD = re.compile(
+    r'屎|尿|屁|茅坑|茅房|厕所|粪|尸|棺材|坟|婊|嫖|娼|妓|窑子|寡妇|光棍'
+    r'|光膀|屁股|大腿|奶|偷汉|上吊|鸦片|大烟|赌|脱裤|裤裆|床上|媳妇|老公'
+    r'|老婆|汉子|娘们|情郎|色鬼|喝尿|吃屎'
+)
 PINYIN = re.compile(rf'^[a-zü{TONE}]+$')
 
 # ---------------------------------------------------------------- 轻声修正
@@ -384,8 +475,20 @@ def clean_poems(con: sqlite3.Connection, have: tuple[set[str], set[str]])\
     return out, drop, []
 
 
-def clean_classifiers(con: sqlite3.Connection) -> tuple[list[dict], Counter, list]:
+def clean_classifiers(con: sqlite3.Connection,
+                      words: set[str]) -> tuple[list[dict], Counter, list]:
+    """量词搭配（v0.28.0 速查表 / v0.29.0 量词填空题）。
+
+    grade = 名词与量词两侧里**最难的那个字**。量词题学生要同时认名词、写出量词，
+    所以三年级才认得出的名词不能出现在一年级的卷子上。「一（　）书」一年级会写，
+    「一（　）绺头发」六年级也未必会写。
+
+    名词还必须在**教材词表**里（或者本身是单字）：ref_classifier 是全词典级的搭配，
+    「一（场）掩护」「一（纸）任命」这种配错的和超纲词一起被这一条挡掉。
+    """
     drop = Counter()
+    hanzi_grade = {ch: (g if isinstance(g, int) and 1 <= g <= 9 else 6)
+                   for ch, g in con.execute('SELECT char, grade FROM ref_hanzi')}
     seen = set()
     out: list[dict] = []
     for noun, clf in con.execute('SELECT noun, classifier FROM ref_classifier'):
@@ -396,13 +499,148 @@ def clean_classifiers(con: sqlite3.Connection) -> tuple[list[dict], Counter, lis
         if len(n) > 4 or len(c) > 2:
             drop['太长'] += 1
             continue
+        if any(ch not in hanzi_grade for ch in n + c):
+            drop['有超出 1~6 年级生字表的字'] += 1
+            continue
+        if len(n) > 1 and n not in words:
+            drop['名词不在教材词表（超纲或不是名词）'] += 1
+            continue
+        if frozenset((n, c)) in CLASSIFIER_BLOCK:
+            drop['人工核过：搭配错了'] += 1
+            continue
         k = (n, c)
         if k in seen:
             drop['重复'] += 1
             continue
         seen.add(k)
-        out.append({'noun': n, 'classifier': c})
-    out.sort(key=lambda x: (len(x['noun']), x['noun']))
+        out.append({'noun': n, 'classifier': c,
+                    'grade': max(hanzi_grade[ch] for ch in n + c)})
+    out.sort(key=lambda x: (x['grade'], len(x['noun']), x['noun']))
+    return out, drop, []
+
+
+def clean_antonyms(con: sqlite3.Connection) -> tuple[list[dict], Counter, list]:
+    """反义词（v0.29.0 写反义词题）。
+
+    只收**单字对**，这是被数据逼出来的结论。上真数据跑了一遍抽样：
+
+        反义词：东门——（西门）      对义，不是反义
+        反义词：春天——（秋天）      春天没有反义词
+        反义词：渐渐——（逐渐）      近义词，库直接错了
+        反义词：远处——（远方）      近义词
+
+    双字对里这类错误占到两成以上 —— ref_antonym 是词典级的**对义表**，
+    把「南北」「春秋」「买卖」这类同一维度的并列概念也算了进去。
+    单字对干净得多（上／下、大／小、进／退），也正是低年级反义词题的样子，
+    所以只留单字，再把逐条核出来的错对用 [ANTONYM_BLOCK] 挡掉。
+
+    其余闸门与原先相同：
+      · 一字只能有一个反义词（高→低/矮 这种整批不要，填空答案必须唯一）；
+      · 反向也不唯一时不要（「亮→暗」收下了，可「暗」的反义还有「明」）。
+    """
+    drop = Counter()
+    hanzi_grade = {ch: (g if isinstance(g, int) and 1 <= g <= 9 else 6)
+                   for ch, g in con.execute('SELECT char, grade FROM ref_hanzi')}
+    by_left: dict[str, set[str]] = {}
+    for a, b in con.execute('SELECT left, right FROM ref_antonym'):
+        la, lb = norm(a), norm(b)
+        if not (la and lb):
+            drop['空'] += 1
+            continue
+        if not (CJK.match(la) and CJK.match(lb)):
+            drop['不是纯汉字'] += 1
+            continue
+        if len(la) != 1 or len(lb) != 1:
+            drop['不是单字对（双字对错误率太高，见函数注释）'] += 1
+            continue
+        if la == lb:
+            drop['左右同一个字'] += 1
+            continue
+        if frozenset((la, lb)) in ANTONYM_BLOCK:
+            drop['人工核过：不是反义（对义/并列/近义）'] += 1
+            continue
+        missing = [ch for ch in la + lb if ch not in hanzi_grade]
+        if missing:
+            drop['有超出 1~6 年级生字表的字'] += 1
+            continue
+        by_left.setdefault(la, set()).add(lb)
+
+    out: list[dict] = []
+    emitted: set[frozenset[str]] = set()
+    for a, rights in by_left.items():
+        if len(rights) != 1:
+            drop['一字多反义（填空答案不唯一）'] += 1
+            continue
+        b = next(iter(rights))
+        if len(by_left.get(b, ())) > 1:
+            drop['反向不唯一'] += 1
+            continue
+        # 库里两个方向都记了（上→下、下→上），只留一条，否则同一张卷子里
+        # 「写出反义词：上——（　）」和「写出反义词：下——（　）」会同时出现
+        pair = frozenset((a, b))
+        if pair in emitted:
+            drop['同一对的正反两条只留一条'] += 1
+            continue
+        emitted.add(pair)
+        g = max(hanzi_grade[ch] for ch in a + b)
+        out.append({'a': a, 'b': b, 'grade': g})
+    out.sort(key=lambda x: (x['grade'], x['a']))
+    return out, drop, []
+
+
+def clean_xiehouyu(con: sqlite3.Connection) -> tuple[list[dict], Counter, list]:
+    """歇后语（v0.29.0）。
+
+    **做成选择题，不做填空** —— 这是这张表能不能用的关键：
+
+      · 答案天生不唯一。「做贼的说梦话」可以是「想偷」，也可以是「做贼心虚」；
+      · 库里 14,031 条大半是方言俗语（「做砖的坯子、插刀的鞘子——框框套套」），
+        填空题印出来学生一个字都对不上。
+
+    选择题只要「4 个选项里只有一个搭得上」就成立，顺带把这些风险压下去。
+    剩下三道闸门：
+      1. 答案 2~8 字、不含分号（分号 = 一题两答）、不含括号（那是注释）；
+      2. 答案每个字都在 1~6 年级生字表里 —— 写不出来的字不能当选项；
+      3. 谜面 4~14 字，生字覆盖率 >= 85%（偶尔一两个生字能靠上下文猜）。
+    """
+    drop = Counter()
+    hanzi_grade = {ch: (g if isinstance(g, int) and 1 <= g <= 9 else 6)
+                   for ch, g in con.execute('SELECT char, grade FROM ref_hanzi')}
+    seen: set[str] = set()
+    out: list[dict] = []
+    for riddle, answer in con.execute('SELECT riddle, answer FROM ref_xiehouyu'):
+        r, a = norm(riddle), norm(answer)
+        if not (r and a):
+            drop['空'] += 1
+            continue
+        if '（' in a or '(' in a or '）' in a or ')' in a or '；' in a or ';' in a:
+            drop['答案带注释或一题两答'] += 1
+            continue
+        if not (2 <= len(a) <= 8):
+            drop['答案长度不在 2~8 字'] += 1
+            continue
+        if XH_BAD.search(r) or XH_BAD.search(a):
+            drop['内容不宜进校园（见 XH_BAD）'] += 1
+            continue
+        if not (4 <= len(r) <= 14):
+            drop['谜面长度不在 4~14 字'] += 1
+            continue
+        if any(ch not in hanzi_grade for ch in a):
+            drop['答案有超出 1~6 年级生字表的字'] += 1
+            continue
+        hit = sum(1 for ch in r if ch in hanzi_grade)
+        if hit / len(r) < 0.85:
+            drop['谜面生字太多（认不全）'] += 1
+            continue
+        if r in seen:
+            drop['同一谜面重复'] += 1
+            continue
+        seen.add(r)
+        # 年级：谜面里最难的那个字决定「几年级才读得懂」。
+        # 谜面允许 15% 的字在表外，那些按 6 年级算（认不全的字只会让题更难，不会更简单）
+        out.append({'r': r, 'a': a,
+                    'grade': max(hanzi_grade.get(ch, 6) for ch in r)})
+    out.sort(key=lambda x: (x['grade'], len(x['r']), x['r']))
     return out, drop, []
 
 
@@ -475,9 +713,12 @@ def write_poems(items: list[dict]) -> bool:
     block = f'        {BEGIN}\n{poems_kt_block(items)}        {END}'
 
     if BEGIN in text:
-        pre = text[:text.index(BEGIN)]
+        # pre 要 rstrip：标记行前面的缩进已经含在 pre 末尾了，若直接拼上
+        # block 自带的 8 格，每跑一次缩进就加长 8 格（踩过：跑几遍以后
+        # 缩进变成 64 格，满屏都是空白）
+        pre = text[:text.index(BEGIN)].rstrip()
         post = text[text.index(END) + len(END):]
-        text = pre + block + post
+        text = pre + '\n' + block + post
     else:
         # 第一次运行：插到 items 列表的收尾处。
         # 锚点取「收尾的 `)` + 后面的 pool 注释」，比找最后一个 `)` 稳 ——
@@ -524,7 +765,9 @@ def main() -> int:
         else ([], Counter({'没有 pypinyin': 1}), [], []))
     en_words, en_drop, _ = clean_en_words(con)
     poems, poem_drop, _ = clean_poems(con, existing_poem_titles())
-    classifiers, clf_drop, _ = clean_classifiers(con)
+    classifiers, clf_drop, _ = clean_classifiers(con, {w['word'] for w in cn_words})
+    antonyms, ant_drop, _ = clean_antonyms(con)
+    xiehouyu, xh_drop, _ = clean_xiehouyu(con)
 
     def report(name: str, items: list, drop: Counter) -> None:
         print(f'{name:12s} 留 {len(items):6d}  丢 {sum(drop.values()):6d}  {dict(drop)}')
@@ -535,6 +778,8 @@ def main() -> int:
     report('英语单词', en_words, en_drop)
     report('古诗（新增）', poems, poem_drop)
     report('量词', classifiers, clf_drop)
+    report('反义词', antonyms, ant_drop)
+    report('歇后语', xiehouyu, xh_drop)
     if mismatch:
         print(f'拼音与 zx 金标不一致 {len(mismatch)} 条（以 pypinyin 为准，写进日志供抽查）：')
         for w, g, m in mismatch[:8]:
@@ -552,7 +797,13 @@ def main() -> int:
         'cn_words': cn_words,
         'en_words': en_words,
         'classifiers': classifiers,
+        'antonyms': antonyms,
     }
+    # 歇后语**暂时不写盘**（v0.29.0 决定）：
+    # clean_xiehouyu 过完闸门还剩 4,268 条，但抽样一看，错别字（「厚簿」应为「厚薄」、
+    # 「摸到藉」应为「摸到藕」）与不雅内容（已挡掉 552 条）之外，还有大量民间俗语
+    # 本来就不该进小学卷子。这张表要么人工精选几百条，要么不印 —— 先不印。
+    # 哪天有精选清单，把它加进 payloads 就能接上，生成器那边已经留好位置。
     manifest = {}
     for name, items in payloads.items():
         text = blob(items)
