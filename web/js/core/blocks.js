@@ -60,7 +60,7 @@ export function figureLayout(spec, width) {
  * 以前它是一条独立说明块，占掉整整一行高度；这类一句话提示本来就只该是标题的尾巴。
  * 一行放不下（窄纸 / 大字号）时才退化成第二行 —— 不会压到右边出血。
  */
-export function sectionHeader(title, size = SECTION_SIZE, columnHint = 0, note = '') {
+export function sectionHeader(title, size = SECTION_SIZE, columnHint = 0, note = '', columnGap = 0) {
   const TOP_PAD = 10;
   const BOTTOM_PAD = 6;
   const lh = size * 1.5;
@@ -74,6 +74,8 @@ export function sectionHeader(title, size = SECTION_SIZE, columnHint = 0, note =
     fullWidth: true,
     keepWithNext: true,
     columnHint,
+    /** 这一大题自己的列间距（0 = 沿用全卷）；只在换段时生效，见 FlowLayout.applyGeometry */
+    columnGapHint: columnGap,
     note,
     measure(tp, width) {
       // 只有真的会换到第二行时才多算一行 —— 否则这条提示等于白吃一行纸
@@ -124,7 +126,7 @@ export function noteBlock(str, size = NOTE_SIZE) {
 
 // ------------------------------------------------------------------ 一道题
 
-export function questionBlock({ no, uid = null, stem, answerLines = 0, size = BODY_SIZE, itemGap = 4, figure = null }) {
+export function questionBlock({ no, uid = null, stem, answerLines = 0, size = BODY_SIZE, itemGap = 4, figure = null, minHeight = 0 }) {
   const NUMBER_W = 20;
   const ANSWER_LINE_FACTOR = 1.55;
   const FIGURE_GAP = 5;
@@ -158,6 +160,8 @@ export function questionBlock({ no, uid = null, stem, answerLines = 0, size = BO
     answerLines,
     itemGap,
     figure,
+    /** 这一格的最低高度（大题版式里填了「每格高」时用）：同一大题每题都按它算，行才齐 */
+    minHeight,
     /** 这道题不折行需要多宽：排版拿它定栏数 */
     singleLineWidth(tp) {
       return numberWidth(tp) + tp.measure(stem, size);
@@ -167,7 +171,7 @@ export function questionBlock({ no, uid = null, stem, answerLines = 0, size = BO
       const textH = linesFor(tp, width).length * lh;
       const extra = answerLines > 0 ? answerLines * lh * ANSWER_LINE_FACTOR : 0;
       const figH = figure ? figureLayout(figure, Math.max(60, width - numberWidth(tp))).h : 0;
-      return textH + (figure ? figH + FIGURE_GAP : 0) + extra + itemGap;
+      return Math.max(textH + (figure ? figH + FIGURE_GAP : 0) + extra + itemGap, minHeight);
     },
     draw(tp, x, y, width) {
       const lh = tp.lineHeight(size);

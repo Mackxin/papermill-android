@@ -54,7 +54,8 @@ export class FlowLayout {
     if (!blocks.length) return [{ items: [] }];
 
     let cols = Math.max(this.columns, 1);
-    let colW = (this.contentW - this.columnGap * (cols - 1)) / cols;
+    let gap = this.columnGap;
+    let colW = (this.contentW - gap * (cols - 1)) / cols;
     const pages = [];
 
     let items = [];
@@ -74,11 +75,20 @@ export class FlowLayout {
       colUsed = new Array(cols).fill(0);
     };
 
-    /** 换栏数：整宽块刚把 colUsed 清零，此刻换最安全 */
-    const applyColumns = (hint) => {
-      if (!hint || hint <= 0 || hint === cols) return;
-      cols = Math.max(hint, 1);
-      colW = (this.contentW - this.columnGap * (cols - 1)) / cols;
+    /**
+     * 换段几何：栏数 / 列间距。整宽块刚把 colUsed 清零，此刻换最安全。
+     *
+     * 每个大题可以有自己的列间距（「这一个大题的两道题挨近点」），
+     * 所以列宽不能只算一次 —— 但它一改，本段之后的 x 坐标全部重算，
+     * 只能在大题标题（整宽块）那里换，不能夹在题目中间换。
+     */
+    const applyGeometry = (columns, columnGap) => {
+      const nextCols = columns && columns > 0 ? Math.max(columns, 1) : cols;
+      const nextGap = columnGap && columnGap > 0 ? columnGap : this.columnGap;
+      if (nextCols === cols && Math.abs(nextGap - gap) < 0.01) return;
+      cols = nextCols;
+      gap = nextGap;
+      colW = (this.contentW - gap * (cols - 1)) / cols;
       colUsed = new Array(cols).fill(0);
     };
 
@@ -114,7 +124,7 @@ export class FlowLayout {
         y += h;
         segTop = y;
         colUsed = colUsed.map(() => 0);
-        applyColumns(block.columnHint);
+        applyGeometry(block.columnHint, block.columnGapHint);
         continue;
       }
 
@@ -126,7 +136,7 @@ export class FlowLayout {
       }
       if (col < 0) col = 0; // 单块比整页还高：硬放第 0 栏，保证不死循环
 
-      items.push({ block, x: col * (colW + this.columnGap), y: segTop + colUsed[col], w: colW });
+      items.push({ block, x: col * (colW + gap), y: segTop + colUsed[col], w: colW });
       colUsed[col] += h;
       y = Math.max(y, segTop + colUsed[col]);
     }

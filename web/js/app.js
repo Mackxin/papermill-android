@@ -25,7 +25,7 @@ import {
 } from './core/composer.js';
 import { availableTypes, generatorOf, runGenerator, generatorCount } from './core/registry.js';
 import { applyRefWords, wordBankSize } from './gen/language.js';
-import { renderPaper, assemble, repaintQuestion, repaintAnswer } from './core/renderer.js';
+import { renderPaper, assemble, repaintQuestion, repaintAnswer, maxColumnsFor } from './core/renderer.js';
 import { renderPages, applyZoom, printPaper, describe, printNodes } from './ui/paper.js';
 import { exportPdf, exportPngs } from './ui/export.js';
 import { referenceSheet, practiceSheet } from './ui/sheets.js';
@@ -1318,6 +1318,110 @@ function removeQuestion(hit) {
   setTimeout(() => render(), 0);
 }
 
+/**
+ * 「这一大题的版式」—— 编辑排版里对大题做深度排版的那一组旋钮。
+ *
+ * 为什么按**大题**而不是按**整卷**做：
+ *  一张卷里各个大题想要的样子根本不一样 —— 口算要 4 列排得密、应用题要 1 列留够写字的空、
+ *  填空想让每格高一点好写字。整卷一个「栏数」滑杆管不了这些，只能把它拆到每个大题上。
+ *
+ * 五个旋钮各自对应排版里的一个量（缺省 = 跟随全卷，只有拖过才写进 layout）：
+ *   · 每行几道  → 该大题排几列（等价于原来的「这一大题 N 栏」，但更直白）
+ *   · 每格高    → 每题占的最低高度，同一大题等高，行才齐（「按行对齐」就是它）
+ *   · 列间距    → 左右两列之间空多少
+ *   · 题间距    → 上下两题之间空多少
+ *   · 每题留白  → 每题下面额外留多少手写空间
+ *
+ * 改完必须**重排**（版式变了，不是改字），但只重排不动数据 —— 这是用户点名的例外：
+ * 「改字绝不洗牌」管的是改题干；主动改版式本来就该重排。
+ */
+function sectionLayoutCard(section, line, card) {
+  const L = section.layout ?? {};
+  /**
+   * 改一个旋钮。
+   *
+   * [rerender] 只有「换控件显示的值会跟着变」的情况才传 true（点 chip 改列数）。
+   * 滑杆拖动时绝不能重建面板 —— 面板一重建，正在拖的那个 input 就被换成新的，
+   * 手指还按着，滑杆已经跳走了。
+   */
+  const patch = (key, value, rerender = false) => {
+    // 第一次动任何旋钮时，把当前生效值全部落实下来 ——
+    // 否则「只改了列间距」的大题会连带把行距重置成全卷默认，看着像点一下全变了
+    if (!section.layout) {
+      const base = TYPE[section.type];
+      section.layout = {
+        cols: section.columns ?? base?.columns ?? 2,
+        cellH: 0,
+        colGap: 20,
+        rowGap: state.editOpt?.gap ?? 6,
+        blank: 0,
+      };
+    }
+    if (value == null) delete section.layout[key];
+    else section.layout[key] = value;
+    if (key === 'cols' && value) section.columns = value;
+    save();
+    scheduleStage();
+    if (rerender) setTimeout(() => render(), 80);
+  };
+  const cur = {
+    cols: L.cols ?? section.columns ?? 2,
+    cellH: L.cellH ?? 0,
+    colGap: L.colGap ?? 20,
+    rowGap: L.rowGap ?? (state.editOpt?.gap ?? 6),
+    blank: L.blank ?? 0,
+  };
+  const reset = () => {
+    const base = TYPE[section.type];
+    section.layout = null;
+    section.columns = base
+      ? (base.columns <= 1 ? 1 : base.answerLines > 0 ? base.columns : Math.max(base.columns, state.spec.columns ?? 2))
+      : 2;
+    save();
+    scheduleStage();
+    setTimeout(() => render(), 80);
+  };
+
+  // 这一大题的题有多宽 → 物理上最多排几列。
+  // 用户点 4 但只能排 3 时必须当场说清楚，别等印出来发现右边空一截。
+  let fitCols = 0;
+  try {
+    fitCols = maxColumnsFor(
+      section.questions,
+      state.result?.geometry?.contentW ?? 515,
+      state.result?.bodySize ?? 11,
+      cur.colGap,
+    );
+  } catch { fitCols = 0; }
+  const shown = Math.min(cur.cols || fitCols || 2, fitCols || 6);
+  const fitNote = fitCols && cur.cols > fitCols
+    ? `这几道题最多排 ${fitCols} 列（再宽括号就被挤到下一行了），现在自动按 ${fitCols} 列排`
+    : `实际排 ${shown} 列`;
+
+  return card('这一大题的版式', [
+    h('p', { class: 'edit-tip', text: '只影响这一大题。每行几道 = 几列；每格高填了就按行对齐。' }),
+    // 这两行的单位用 tight（不占整行）：加减器本身窄，硬把「列」挤到下一行会显得散
+    h('div', { class: 'edit-line' }, [
+      h('span', { class: 'edit-label', text: '每行几道' }),
+      stepper(cur.cols, (v) => patch('cols', v, true), { min: 1, max: 6, step: 1 }),
+      h('em', { class: 'edit-hint tight', text: '列' }),
+    ]),
+    h('div', { class: 'edit-line' }, [
+      h('span', { class: 'edit-label', text: '每格高' }),
+      stepper(cur.cellH, (v) => patch('cellH', v || null, true), { min: 0, max: 80, step: 4 }),
+      h('em', { class: 'edit-hint tight', text: 'pt · 0 为自动' }),
+    ]),
+    line('列间距', slider(cur.colGap, (v) => patch('colGap', v === 20 ? null : v), { min: 0, max: 60, step: 2, unit: 'pt' })),
+    line('题间距', slider(cur.rowGap, (v) => patch('rowGap', v), { min: 0, max: 30, step: 1, unit: 'pt' })),
+    line('每题留白', slider(cur.blank, (v) => patch('blank', v || null), { min: 0, max: 48, step: 2, unit: 'pt' }),
+      '给手写留的空当，不印答题线'),
+    h('p', { class: 'edit-tip', text: fitNote }),
+    h('div', { class: 'edit-actions' }, [
+      button('恢复全卷版式', 'ghost', reset),
+    ]),
+  ]);
+}
+
 function fillEditorPanel(panel) {
   const o = state.editOpt;
   panel.innerHTML = '';
@@ -1381,19 +1485,14 @@ function fillEditorPanel(panel) {
         repaintAnswer(state.result.pages, hit.q.uid, v);
         stageCtx?.draw();
       }), '算式题改题干会自动重算'),
-      line('这一大题', chips([1, 2, 3, 4].map((n) => ({ value: n, label: `${n} 栏` })), section.columns ?? 2, (v) => {
-        // 每大题单独定栏数：整卷栏数管不了「大计算题想窄、填空想宽」这种
-        section.columns = Number(v);
-        save();
-        scheduleStage();
-        setTimeout(() => render(), 60);
-      }), '只影响这一大题'),
       h('div', { class: 'edit-actions' }, [
         button('↑ 上移', 'ghost', () => moveQuestion(hit, -1)),
         button('↓ 下移', 'ghost', () => moveQuestion(hit, 1)),
         button('删除', 'ghost danger', () => removeQuestion(hit)),
       ]),
     ], ' is-selected'));
+
+    panel.appendChild(sectionLayoutCard(section, line, card));
   } else {
     panel.appendChild(h('p', { class: 'panel-tip', text: '点纸面上的任意一道题：光标会在那道题的位置出现，改完点别处就落纸。' }));
   }

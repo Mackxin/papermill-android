@@ -29,6 +29,8 @@ const NOTE_SIZE = 9;
 const MIN_TYPE_SCALE = 0.72;
 const ANSWER_MIN_FILL = 0.86;
 const BODY_FILL_TARGET = 0.96;
+/** 单道题为了塞进一列能缩到原字号的百分之多少（再窄就降列数） */
+const SHRINK_FLOOR = 0.85;
 
 const TITLE_SIZE = 17;
 const TITLE_H = 26;
@@ -69,6 +71,37 @@ function fillColumns(widths, contentW, gap, floor, ceiling, strict = false) {
 }
 
 /**
+ * 用户要的列数，物理上排得下几列？
+ *
+ * 「每行 4 道」是他点的，但 `9 + 9 = （　　）` 这种题干在 4 列宽度里放不下 ——
+ * 强行按 4 排，结尾的「）」就被挤到第二行，一行一道题变成两行，比 3 列还难看；
+ * 更糟的是**只有一道题折行**，那一列就被它撑高，整段版面参差不齐。
+ *
+ * 所以门槛放宽到「缩到 85% 字号能放下」：buildBody 里真放不下时会把这一道题
+ * 的字号按比例收一点（不折行），收不动的才降列数。
+ */
+function columnsThatFit(widths, contentW, gap, ceiling) {
+  if (!widths.length) return ceiling;
+  const widest = Math.max(...widths) * SHRINK_FLOOR;
+  for (let c = Math.max(1, ceiling); c >= 1; c--) {
+    const colW = (contentW - gap * (c - 1)) / c;
+    if (widest <= colW) return c;
+  }
+  return 1;
+}
+
+/**
+ * 这一大题的这几道题，最多排几列不折行？
+ *
+ * 编辑面板拿它给「每行几道」标一句实话：用户点 4 但它只能排 3 时，
+ * 得让他当场知道，而不是等印出来才发现右边空一截、或者括号被挤到下一行。
+ */
+export function maxColumnsFor(questions, contentW, bodySize = BODY_SIZE, gap = COLUMN_GAP, tp = TP) {
+  const widths = questions.map((q) => questionBlock({ no: q.no, stem: q.stem, size: bodySize }).singleLineWidth(tp));
+  return columnsThatFit(widths, contentW, gap, MAX_BODY_COLUMNS);
+}
+
+/**
  * 业务卷子 → 渲染文档（对应 PaperAssembler）。
  * 卷头题数用「实际生成出来的题数」：某些题型受去重/题库容量限制会少给。
  */
@@ -81,6 +114,8 @@ export function assemble(spec, paper) {
     instruction: s.instruction,
     titleNote: s.titleNote ?? '',
     padWithLines: s.padWithLines !== false,
+    /** 这一大题自己的深度版式（每行几道 / 每格高 / 列间距 / 题间距 / 每题留白）；null = 跟随全卷 */
+    layout: s.layout ?? null,
     isAnswer: false,
   }));
 
@@ -175,33 +210,71 @@ export function renderPaper(doc, tp = TP) {
   function buildBody({ scale = 1, itemGap = gap.base, extraLines = 0, forceColumns = 0, typeScale = 1 } = {}) {
     const blocks = [];
     let firstHint = 0;
+
+    /**
+     * 这一道题在这个列宽里用多大字号才不折行。
+     *
+     * 只缩「差一点就放不下」的那几道（底 85%），不缩整段 ——
+     * 一道长题让整段字号集体变小，比它自己小半号更难看。
+     * 缩到 85% 还放不下就是列数的问题了，交给 columnsThatFit 去降列。
+     */
+    const fitSize = (q, base, colW) => {
+      if (!(colW > 0)) return base;
+      let size = base;
+      for (let k = 0; k < 3; k++) {
+        const need = questionBlock({ no: q.no, stem: q.stem, size }).singleLineWidth(tp);
+        if (need <= colW) break;
+        size = Math.max(base * SHRINK_FLOOR, size * (colW / need) * 0.98);
+      }
+      return size;
+    };
+
     doc.sections.filter((s) => !s.isAnswer).forEach((section) => {
+      // 这一大题自己的版式（编辑器里「深度排版」调的那几个旋钮）。
+      // 全部缺省 = 跟随全卷，只有用户真的拖过才生效。
+      const L = section.layout ?? {};
+      const secItemGap = L.rowGap != null ? L.rowGap : itemGap;
+      const secBlank = L.blank ?? 0;
+      const secColGap = L.colGap ?? 0;
+      // 「每格高」只撑不压：比内容矮就按内容走，免得字压在格子里
+      const cellH = L.cellH && L.cellH > 0 ? L.cellH : 0;
+
       const forceFullWidth = section.columns <= 1;
       let hint = 0;
       if (!forceFullWidth && section.questions.length) {
-        if (forceColumns > 0) {
+        const widths = section.questions.map((q) => questionBlock({ no: q.no, stem: q.stem, size: bodySize * typeScale }).singleLineWidth(tp));
+        const secGapV = secColGap || COLUMN_GAP;
+        // 优先级：这一大题自己的版式 > 整卷「每行栏数」滑杆 > 自动试排。
+        // 具体的覆盖通用的 —— 用户专门为这一大题点过「每行 4 道」，
+        // 整卷滑杆就不该再把它改成 2 栏（那等于设置没生效）。
+        if (L.cols && L.cols > 0) {
+          // 他要 4 列，但这几道题在 4 列宽度里放不下就自动降到放得下的列数
+          hint = columnsThatFit(widths, g.contentW, secGapV, L.cols);
+        } else if (forceColumns > 0) {
           hint = section.answerLines > 0 ? section.columns : forceColumns;
         } else {
           hint = fillColumns(
-            section.questions.map((q) => questionBlock({ no: q.no, stem: q.stem, size: bodySize * typeScale }).singleLineWidth(tp)),
-            g.contentW, COLUMN_GAP, Math.max(1, section.columns),
+            widths, g.contentW, secGapV, Math.max(1, section.columns),
             section.answerLines > 0 ? Math.min(Math.max(section.columns, 2), MAX_BODY_COLUMNS) : MAX_BODY_COLUMNS,
           );
         }
       }
       if (firstHint === 0 && hint > 0) firstHint = hint;
 
-      blocks.push(sectionHeader(section.title, sectionSize * typeScale, hint, section.titleNote));
+      blocks.push(sectionHeader(section.title, sectionSize * typeScale, hint, section.titleNote, secColGap));
       if (section.instruction && section.instruction.trim()) {
         blocks.push(noteBlock(section.instruction, noteSize * typeScale));
       }
+      // 这一列到底有多宽：单栏时就是整张纸的正文宽
+      const colW = hint > 1 ? (g.contentW - (secColGap || COLUMN_GAP) * (hint - 1)) / hint : g.contentW;
       section.questions.forEach((q) => {
         const lines = section.answerLines > 0
           ? section.answerLines + (section.padWithLines ? extraLines : 0)
           : 0;
         const qb = questionBlock({
           no: q.no, uid: q.uid ?? null, stem: q.stem, answerLines: lines,
-          size: bodySize * typeScale, itemGap, figure: q.figure,
+          size: fitSize(q, bodySize * typeScale, colW), itemGap: secItemGap + secBlank, figure: q.figure,
+          minHeight: cellH,
         });
         blocks.push((forceFullWidth || q.figure) ? fullWidth(qb) : qb);
       });

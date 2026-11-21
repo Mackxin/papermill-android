@@ -757,6 +757,12 @@ input[type="number"]::-webkit-inner-spin-button {
   color: var(--ink-3);
 }
 
+/* 加减器后面的单位不占一整行：控件本身窄，独占一行会让「列」「pt」孤零零挂在那儿 */
+.edit-hint.tight {
+  flex: 0 0 auto;
+  margin-top: 0;
+}
+
 /* 选中题的题干预览：能看清是哪一题就行，改字去纸面上改 */
 .edit-quote {
   margin: 0;
