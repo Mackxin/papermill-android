@@ -291,9 +291,15 @@ def clean_cn_words(con: sqlite3.Connection, to_pinyin) -> tuple[list[dict], Coun
 
 
 def clean_en_words(con: sqlite3.Connection) -> tuple[list[dict], Counter, list]:
+    """英语单词表。
+
+    两道去重，都是为了「答案唯一」：
+      · **同一个中文释义只留一个**（看见 → see 与 watch 都算对，印成汉译英就是错的）；
+      · **同一个英文单词只留一个义项**（drink 既是「饮料」又是「喝」，同理）。
+    两个都留、都去重之后，一条词对应一个唯一答案，英译汉 / 汉译英都能批改。
+    """
     drop = Counter()
-    seen: set[str] = set()
-    out: list[dict] = []
+    rows: list[dict] = []
     for word, grade, meaning in con.execute(
             'SELECT word, grade, meaning FROM ref_english_word'):
         en = norm(word).lower()
@@ -307,11 +313,23 @@ def clean_en_words(con: sqlite3.Connection) -> tuple[list[dict], Counter, list]:
         if len(zh) > 12:
             drop['释义太长'] += 1
             continue
-        if zh in seen:
-            drop['重复（同一释义）'] += 1
+        rows.append({'en': en, 'zh': zh, 'grade': as_grade(grade)})
+
+    # 按年级升序后去重：同一个词的多个义项，留最早出现的那个（最基础的那个义项）
+    rows.sort(key=lambda x: (x['grade'], x['en']))
+    seen_en: set[str] = set()
+    seen_zh: set[str] = set()
+    out: list[dict] = []
+    for r in rows:
+        if r['en'] in seen_en:
+            drop['同一单词的另一个义项'] += 1
             continue
-        seen.add(zh)
-        out.append({'en': en, 'zh': zh, 'grade': as_grade(grade)})
+        if r['zh'] in seen_zh:
+            drop['同一释义的另一个词'] += 1
+            continue
+        seen_en.add(r['en'])
+        seen_zh.add(r['zh'])
+        out.append(r)
     return out, drop, []
 
 

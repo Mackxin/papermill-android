@@ -946,33 +946,44 @@ await test('词表 · 参考资料库并进来以后一年级能出满一整大�
   // v0.28.0：词表从手写的 80 个词扩到 3,652 个（refs/cn_words.json，来自 zx-study MIT）。
   // 一年级的拼音题原来只有 8 个词可用，要 30 道最多出 8 道；现在应当能出满。
   await freshApp();
-  dock('更多');
-  await waitFor(() => q('#view .card'), '更多页');
-  const about = T(q('#view'));
-  const hit = about.match(/中文\s*(\d+)\s*词/);
-  if (!hit) throw new Error('关于页没印词表规模，看不出参考资料库有没有并进来');
-  const cn = Number(hit[1]);
-  if (cn < 3000) throw new Error(`中文字词表只有 ${cn} 个（参考资料库没并进来？）`);
+  try {
+    dock('更多');
+    await waitFor(() => q('#view .card'), '更多页');
+    const hit = T(q('#view')).match(/中文\s*(\d+)\s*词/);
+    if (!hit) throw new Error('关于页没印词表规模，看不出参考资料库有没有并进来');
+    const cn = Number(hit[1]);
+    if (cn < 3000) throw new Error(`中文字词表只有 ${cn} 个（参考资料库没并进来？）`);
 
-  goCreate();
-  await waitFor(() => q('#view .create-actions'), '出卷页');
-  viewChip('卷型', '拼音').click();
-  await sleep(250);
-  const p = await generate();
+    goCreate();
+    await waitFor(() => q('#view .create-actions'), '出卷页');
+    // 先切到语文：拼音题只对语文开放，留在数学里题型列表里根本没有它
+    viewChip('科目（可多选）', '语文').click();
+    await sleep(250);
+    // 只留拼音题、要 30 道：一口气要满一整大题，词不够就会少出
+    qa('#view .type-tools .btn').find((b) => T(b) === '清空')?.click();
+    await sleep(150);
+    const item = qa('#view .type-item').find((n) => /拼音/.test(T(n.querySelector('.type-name'))));
+    if (!item) throw new Error('题型列表里没有「看拼音写词」');
+    item.querySelector('input[type="checkbox"]').click();
+    await sleep(250);
+    const num = item.querySelector('input.num');
+    if (num) setControl(num, '30');
+    await sleep(250);
+    await generate();
 
-  // 三种措辞：「看拼音写词 X（　）」「读拼音写词 X（　）」「拼音 X（　）」
-  const SYL = '[a-züāáǎàēéěèīíǐìōóǒòūúǔùǖǘǚǜ]';
-  const stems = [...p.text.matchAll(
-    new RegExp(`(?:看拼音写词|读拼音写词|拼音)\\s*(${SYL}+(?:\\s+${SYL}+)*)\\s*（`, 'g'),
-  )].map((m) => m[1].trim());
-  if (stems.length < 25) throw new Error(`一年级拼音卷只排出 ${stems.length} 道拼音题`);
-  const dup = stems.filter((x, i) => stems.indexOf(x) !== i);
-  if (dup.length) throw new Error(`同一张卷子里重复的拼音：${[...new Set(dup)].join(' / ')}`);
-
-  // 收尾：「拼音」卷型会把科目锁死在语文并写进存档，后面的用例要出数学题。
-  // 直接重开一次最稳 —— 只拨「卷型」不会把科目拨回数学（这块状态是联动的）。
-  await freshApp();
-  return `中文 ${cn} 词 · 拼音题 ${stems.length} 道且互不重复`;
+    // 直接读排版结果，比在卷面文字里正则抠拼音可靠
+    const W = D().defaultView;
+    const qs = (W.__papermill?.paper?.questions ?? []).filter((x) => x.type === 'PINYIN');
+    if (qs.length < 30) throw new Error(`一年级 30 道拼音题只出了 ${qs.length} 道（词池不够？）`);
+    const answers = qs.map((x) => x.answer);
+    const dup = [...new Set(answers.filter((x, i) => answers.indexOf(x) !== i))];
+    if (dup.length) throw new Error(`同一张卷子里重复的词：${dup.join(' / ')}`);
+    return `中文 ${cn} 词 · 一年级 30 道拼音题全出满且无重复词`;
+  } finally {
+    // 「清空 + 只勾拼音」会把科目锁在语文并写进存档，后面的用例要出数学题。
+    // 用 finally：断言失败也要把状态拨回去，否则后面几条会跟着连环失败。
+    await freshApp();
+  }
 });
 
 // 29 --------------------------------------------------------------
