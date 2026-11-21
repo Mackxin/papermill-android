@@ -7,7 +7,9 @@
 | 改什么 | App 端 | 网页端 |
 |---|---|---|
 | 出题算法 / 新增题型 | `domain/generate/*.kt` | `web/js/gen/*.js`（同名生成器、同一 `Rng`） |
-| 内置数据（词表/古诗/成语/速查表/格纸） | 先改 Kotlin 数据源 | 再跑 `tools/dump/Dump.kt` 导出 `web/data/content.json`，禁止手抄 JSON |
+| 内置数据（古诗/成语/速查表/格纸） | 先改 Kotlin 数据源 | 再跑 `tools/dump/Dump.kt` 导出 `web/data/content.json`，禁止手抄 JSON |
+| 词表 / 英语单词 / 量词（v0.28.0 起） | 跑 `tools/import-zx-refs.py` | 同一脚本同时写 `app/src/main/assets/refs/` 与 `web/data/refs/`，两份必须**逐字节一致**（md5 对齐） |
+| 真题库 | 跑 `tools/import-zx-study.py` | 同一脚本同时写 `assets/papers/` 与 `web/data/papers/` |
 | 排版规则（分栏/避头尾/页脚/试排） | `core/pdf/` | `web/js/core/` 同名模块 |
 | 界面功能 | `feature/Screens.kt` | `web/js/app.js` |
 
@@ -69,3 +71,16 @@
 - 原生 `<select>` 与 `input[type=number]` 的箭头在 macOS 上又灰又小且无法改样式 → 统一用自绘 `.dd` 下拉与 `.stepper` 加减器（`ui/dialogs.js`）。
 - 导出 PDF 走「Canvas 按 pt 重画每页 → JPEG → 手写 PDF」，不引第三方库；测试用 `buildPdfBlob()`，不要调 `exportPdf()`（会触发下载）。
 - 编辑器手动覆盖走 `doc.forceTypeScale / forceItemGap / forceColumns / margin`，一旦设置就跳过全部自动试排，否则滑杆拖出来的结果会被「自动优化」改回去。
+
+## 词表与拼音（v0.28.0）
+
+- 词表数据在 `refs/cn_words.json`（3,652 词，带 pinyin/grade），不写在 Kotlin 里 ——
+  3,652 个元素的 `listOf` 会撞 JVM 单方法 64 KB 字节码上限。
+- `WordBank.chineseFor` = **手写核心 80 词（固定在最前）+ RefBank 参考词**。
+  核心不许挪位置：轮换偏移按「本年级第一个新词」的下标算，动一个位置同一 seed 就换卷。
+- 网页端顺序必须一致（`applyRefWords` 只追加在 CN_WORDS 末尾，且只跑一次）。
+- 加词/改词一律走 `tools/import-zx-refs.py` 重跑，**不要手改那两个 JSON**。
+- 拼音三条规矩：一、不标原调（yī/bù）；叠字与高频词标轻声；每个音节必须等于该字
+  单念的标准读音（滤掉 pypinyin 词组词典的真错，如「古朴 gǔ piáo」）。
+  多音字靠词组才念对的词（音乐/长城/数学）因此被挡下，要放行就在 `APPROVED_READINGS` 里写死。
+- 英语两道去重（同一中文释义、同一英文单词各留一个），否则汉译英答案不唯一。
