@@ -229,14 +229,14 @@ await test('卷型 · 拼音只到六年级、小升初从五年级起', async (
   const gradeSel = () => findField(q('#view'), '年级').querySelector('select');
   setControl(gradeSel(), '3');
   await sleep(220);
-  if (!viewChip('卷型', '小升初').disabled) throw new Error('三年级竟然能选「小升初」');
+  if (!viewChip('卷型', '小升初').classList.contains('off')) throw new Error('三年级竟然能选「小升初」');
   setControl(gradeSel(), '7');
   await sleep(240);
-  if (!viewChip('卷型', '拼音').disabled) throw new Error('七年级竟然能选「拼音」');
+  if (!viewChip('卷型', '拼音').classList.contains('off')) throw new Error('七年级竟然能选「拼音」');
   setControl(gradeSel(), '6');
   await sleep(240);
-  if (viewChip('卷型', '小升初').disabled) throw new Error('六年级选不了「小升初」');
-  if (viewChip('卷型', '拼音').disabled) throw new Error('六年级选不了「拼音」');
+  if (viewChip('卷型', '小升初').classList.contains('off')) throw new Error('六年级选不了「小升初」');
+  if (viewChip('卷型', '拼音').classList.contains('off')) throw new Error('六年级选不了「拼音」');
   setControl(gradeSel(), '3');
   await sleep(240);
   return '三年级无小升初 · 七年级无拼音 · 六年级两个都能选';
@@ -250,8 +250,10 @@ await test('学前 · 只开数学语文，卷面没有乘除、卷头不重复'
   setControl(gradeSel(), '0');
   await sleep(260);
 
+  // 能不能选看的是 .off（置灰只是外观 + 点了给解释），不是 disabled：
+  // disabled 的按钮连 click 都不派发，用户点了彻底没反馈
   const chips = () => [...findField(q('#view'), '科目（可多选）').querySelectorAll('.chip')];
-  const enabled = chips().filter((c) => !c.disabled).map(T);
+  const enabled = chips().filter((c) => !c.classList.contains('off')).map(T);
   if (enabled.join() !== '数学,语文') throw new Error('学前能选的科目是：' + enabled.join('、'));
 
   const p = await generate();
@@ -282,6 +284,77 @@ await test('学前 · 只开数学语文，卷面没有乘除、卷头不重复'
   setControl(gradeSel(), '3');
   await sleep(240);
   return `学前数学 ${total} 题 · 只开数学语文 · 语文卷出得来`;
+});
+
+// 5.6 -------------------------------------------------------------
+await test('题型倾向 · 置灰项点得动、点了说要换什么', async () => {
+  goCreate();
+  await waitFor(() => q('#view .create-actions'), '出卷页');
+  const gradeSel = () => findField(q('#view'), '年级').querySelector('select');
+  setControl(gradeSel(), '3');
+  await sleep(260);
+
+  // 三年级数学：判断题（只有科学有）、阅读理解（只有英语有）都该置灰
+  const grey = ['判断题偏多', '阅读理解偏多'].map((n) => viewChip('题型倾向', n));
+  if (!grey.every((c) => c.classList.contains('off'))) throw new Error('三年级数学这两项该是置灰的');
+  // 关键：置灰不能用 disabled —— disabled 的按钮连 click 都不派发，点了没反馈
+  if (grey.some((c) => c.disabled)) throw new Error('置灰项用了 disabled，点了不会有任何反馈');
+
+  const tilt = () => D().defaultView.__papermill.spec.tilt;
+  const before = tilt();
+  viewChip('题型倾向', '阅读理解偏多').click();
+  await sleep(420);
+  const msg = T(q('.toast') || document.createElement('div'));
+  if (!msg.includes('英语')) throw new Error('点置灰项没说清换哪科：' + msg);
+  if (tilt() !== before) throw new Error('点了置灰项竟然改了倾向');
+
+  const hint = [...q('#view').querySelectorAll('.hint')].map(T).find((t) => t.includes('已置灰'));
+  if (!hint) throw new Error('没有「当前科目没有…已置灰」这行说明');
+
+  // 能用的项照旧一点就生效
+  viewChip('题型倾向', '选择题偏多').click();
+  await sleep(420);
+  if (tilt() !== 'CHOICE') throw new Error('正常项点了没生效');
+  // 收尾复原：后面的用例按默认配比算页数
+  viewChip('题型倾向', '均衡搭配').click();
+  await sleep(320);
+  return `置灰项会解释（换成英语）· 倾向不变 · ${hint.slice(0, 18)}…`;
+});
+
+// 5.7 -------------------------------------------------------------
+await test('科学混科 · 点「选择题偏多」也能出卷（曾因缺 science.json 静默失败）', async () => {
+  goCreate();
+  await waitFor(() => q('#view .create-actions'), '出卷页');
+  const gradeSel = () => findField(q('#view'), '年级').querySelector('select');
+  setControl(gradeSel(), '3');
+  await sleep(260);
+
+  const chips = () => [...findField(q('#view'), '科目（可多选）').querySelectorAll('.chip')];
+  const sci = chips().find((c) => T(c) === '科学');
+  if (!sci || sci.classList.contains('off')) throw new Error('三年级勾不了科学');
+  if (!sci.classList.contains('on')) { sci.click(); await sleep(300); }
+
+  // 「选择题偏多」会排进 CURRIC_CHOICE（课标选择）→ 出卷前要读课标语料。
+  // 科学没有 taxonomy/science.json，以前这一步 404 直接把出卷链路带崩，
+  // 表现是点「生成卷子」页面上一点变化都没有。
+  viewChip('题型倾向', '选择题偏多').click();
+  await sleep(360);
+  const want = Number(/（(\d+) 题）/.exec(T(q('#view .create-actions .btn')))?.[1] ?? 0);
+  if (!want) throw new Error('按钮上没显示题数');
+
+  const p = await generate();
+  const head = Number((p.text.match(/共\s*(\d+)\s*题/) ?? [])[1] ?? 0);
+  if (head !== want) throw new Error(`卷头印 ${head} 题，按钮说 ${want} 题`);
+  if (!/科学/.test(p.text)) throw new Error('卷面没有科学题');
+
+  // 收尾：退回只勾数学 + 均衡搭配
+  goCreate();
+  await waitFor(() => q('#view .create-actions'), '出卷页');
+  chips().find((c) => T(c) === '科学' && c.classList.contains('on')).click();
+  await sleep(300);
+  viewChip('题型倾向', '均衡搭配').click();
+  await sleep(300);
+  return `数学+科学 选择题偏多：按钮 ${want} 题 = 卷头 ${head} 题`;
 });
 
 // 6 ---------------------------------------------------------------

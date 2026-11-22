@@ -103,6 +103,16 @@
   `no`/`size`/`answerLines` 全丢 → 1 列的大题热区对不上题号（点不中、双击改不了），
   重画单题字号还会退回全卷默认。v0.29.3 修。
 - 面板上显示「这一段实际几列」要**从纸面 hits 的 x 反查**，别读 `section.columns`（题型建议值）。
+- **点了按钮毫无反应，先查「异常没人接」**：`loadCurriculumFor` 曾对小学科学去 fetch
+  `taxonomy/science.json`（这份文件根本不存在）→ 404 抛错 → `generatePaper` 没有 try/catch →
+  unhandled rejection → 按钮按下去页面纹丝不动。现在：`taxonomy/index.json` 的 `subjects`
+  清单里没有的科目直接当空题库（连 fetch 都不发），真缺文件 `catch` 成空（对齐 App 的
+  `runCatching{}.getOrDefault(空)`），并且 `generatePaper` 整体 try/catch + 回滚 + toast。
+  **任何 `await` 出来的链路都必须能落到一个 toast 上。**
+- **`disabled` 按钮连 click 都不派发** —— 用 `disabled` 做「置灰」等于「点了彻底没反馈」。
+  能点给解释的一律 `aria-disabled` + `.off`：题型倾向/卷型/科目三排 chip 现在点了会弹
+  「把科目换成英语就能出」「要到三年级、勾上科学才有这类题」。
+- `toast()` 同一时刻只留一条（新的进来先清旧的），否则连点两下会叠成一片。
 
 ## 词表与拼音（v0.28.0）
 

@@ -305,27 +305,41 @@ function fillPageOnce(spec, pref) {
 }
 
 async function generatePaper(spec = ensureSpec()) {
-  const subs = effectiveSubjects(spec);
-  // 课标题库是按科目分文件懒加载的：要用到哪些科目就先读进来
-  const needCurric = Object.keys(spec.counts).some((k) => k.startsWith('CURRIC_'));
-  if (needCurric) await loadCurriculumFor(subs);
-  const pref = mistakePreference();
-  // 设了「页数上限」就不补满：用户已经明确说了「最多印两页」，
-  // 这时候还要加题，等于一边加一边压字号，两个开关互相打架。
-  const canFill = spec.autoFill !== false && !(spec.targetPages > 0);
-  const paper = canFill ? fillPageOnce(spec, pref) : compose(spec, new Set(), pref);
-  if (!paper.questions.length) {
-    toast('这个组合一道题都没出出来，换个题型试试');
+  // 出卷链路上的任何一步抛错都不能「安静地什么都不做」——
+  // 以前科学卷在 file:// 下会在这里抛异常（没有 science.json），
+  // 按钮点下去页面上一点变化都没有，用户只能以为按钮坏了。
+  const prev = { paper: state.paper, result: state.result, kind: state.previewKind };
+  try {
+    const subs = effectiveSubjects(spec);
+    // 课标题库是按科目分文件懒加载的：要用到哪些科目就先读进来
+    const needCurric = Object.keys(spec.counts).some((k) => k.startsWith('CURRIC_'));
+    if (needCurric) await loadCurriculumFor(subs);
+    const pref = mistakePreference();
+    // 设了「页数上限」就不补满：用户已经明确说了「最多印两页」，
+    // 这时候还要加题，等于一边加一边压字号，两个开关互相打架。
+    const canFill = spec.autoFill !== false && !(spec.targetPages > 0);
+    const paper = canFill ? fillPageOnce(spec, pref) : compose(spec, new Set(), pref);
+    if (!paper.questions.length) {
+      toast('这个组合一道题都没出出来，换个题型试试');
+      return null;
+    }
+    ensureUids(paper);
+    state.paper = paper;
+    state.result = renderPaper(buildDoc());
+    state.previewKind = 'paper';
+    // 换了一张卷：上一张卷里展开的是哪个大题跟这一张没关系
+    state.openLayout = {};
+    history.lastSpec = spec;
+    return { paper, result: state.result };
+  } catch (e) {
+    // 回滚到出卷前的状态：半成品 paper 配上旧 result，预览页会显得错乱
+    state.paper = prev.paper;
+    state.result = prev.result;
+    state.previewKind = prev.kind;
+    console.error('出卷失败', e);
+    toast(`出卷失败：${e?.message ?? e}。换个科目或题型再试一次`);
     return null;
   }
-  ensureUids(paper);
-  state.paper = paper;
-  state.result = renderPaper(buildDoc());
-  state.previewKind = 'paper';
-  // 换了一张卷：上一张卷里展开的是哪个大题跟这一张没关系
-  state.openLayout = {};
-  history.lastSpec = spec;
-  return { paper, result: state.result };
 }
 
 /** 每道题一个稳定编号：编辑器靠它把「纸上点的那块」和「数据里那道题」对上。
@@ -436,6 +450,44 @@ function templateRow() {
   return wrap;
 }
 
+/** 这门课从几年级开始有 —— 科目置灰时用来解释「现在为什么选不了」 */
+function firstGradeOf(subject) {
+  for (let g = 0; g <= 9; g += 1) if (subjectAvailableFor(subject, g)) return GradeProfiles.gradeLabel(g);
+  return '高年级';
+}
+
+/**
+ * 「题型倾向」里某一项为什么出不了 —— 要说清「换什么就能出」。
+ *
+ * 以前置灰只是把按钮 disabled 掉：点了连个响都没有，用户会以为坏了。
+ * 这里按「最省事的改法」排序给答案：
+ *   ① 现在这个年级，换一门有这类题的科目就行（换科目最轻）
+ *   ② 现在这门课，到某个年级才有（往后找最近的一档）
+ *   ③ 两个都不行，那就照实说「出了也不会变」
+ */
+function tiltWhy(key) {
+  const spec = state.spec;
+  const label = TILTS.find((t) => t.key === key)?.label ?? '这一项';
+  const have = effectiveSubjects(spec);
+
+  const altSubject = SUBJECT_ALL.find((s) => !have.includes(s)
+    && subjectAvailableFor(s, spec.grade)
+    && tiltFits(spec.grade, [s], key));
+  if (altSubject) {
+    return `「${label}」这一卷没有这类题：把科目换成${SUBJECT_LABEL[altSubject]}就能出`;
+  }
+
+  for (let g = spec.grade + 1; g <= 9; g += 1) {
+    const sub = SUBJECT_ALL.find((s) => subjectAvailableFor(s, g) && tiltFits(g, [s], key));
+    if (sub) {
+      const suffix = have.length === 1 && have[0] === sub ? '' : `、勾上${SUBJECT_LABEL[sub]}`;
+      return `「${label}」要到${GradeProfiles.gradeLabel(g)}${suffix}才有这类题`;
+    }
+  }
+
+  return `「${label}」这个年级 + 科目没有这类题，选了也不会变`;
+}
+
 function paramCard() {
   const spec = state.spec;
   const gradeOpts = gradeSelectOptions(true);
@@ -447,8 +499,14 @@ function paramCard() {
     subjectChips.appendChild(h('button', {
       class: `chip${on ? ' on' : ''}${usable ? '' : ' off'}`,
       text: SUBJECT_LABEL[s],
-      disabled: !usable,
+      // 同上：置灰不 disabled，点了要说清「几年级才开这门课」
+      'aria-disabled': usable ? null : 'true',
+      title: usable ? '' : `${SUBJECT_LABEL[s]}要到${firstGradeOf(s)}才有`,
       onclick: () => {
+        if (!usable) {
+          toast(`${SUBJECT_LABEL[s]}要到${firstGradeOf(s)}才有，现在选不了`);
+          return;
+        }
         let list = [...(spec.subjects ?? [])];
         list = list.includes(s) ? list.filter((x) => x !== s) : [...list, s];
         if (!list.length) return;
@@ -483,12 +541,21 @@ function paramCard() {
   const kindChips = h('div', { class: 'chips' });
   PAPER_KINDS.forEach((k) => {
     const fits = kindFits(spec.grade, k.key);
+    // 置灰原因说一遍就够：title 与点击提示共用同一句，别两处各写一套。
+    // 上下界都有的卷型（拼音 1~6）要按「越的是哪一头」说，不能一律说「X 起才有」
+    const why = k.maxGrade != null && spec.grade > k.maxGrade
+      ? `「${k.label}」只到${GradeProfiles.gradeLabel(k.maxGrade)}`
+      : `「${k.label}」要到${GradeProfiles.gradeLabel(k.minGrade ?? 0)}才有`;
     kindChips.appendChild(h('button', {
       class: `chip${spec.kind === k.key ? ' on' : ''}${fits ? '' : ' off'}`,
       text: k.label,
-      title: fits ? k.hint : (k.minGrade ? `${GradeProfiles.gradeLabel(k.minGrade)}起才有这种卷` : `这种卷只到${GradeProfiles.gradeLabel(k.maxGrade)}`),
-      disabled: !fits,
+      title: fits ? k.hint : why,
+      'aria-disabled': fits ? null : 'true',
       onclick: () => {
+        if (!fits) {
+          toast(why);
+          return;
+        }
         spec.kind = k.key;
         // 卷型带科目（拼音 = 语文、奥数 = 数学）就跟着切：勾着英语再点拼音，
         // 出来会是一张一道拼音题都没有的「拼音卷」
@@ -505,14 +572,22 @@ function paramCard() {
   });
 
   const tiltChips = h('div', { class: 'chips' });
+  const tiltOff = [];
   TILTS.forEach((t) => {
     const fits = tiltFits(spec.grade, primarySubjects(), t.key);
+    if (!fits) tiltOff.push(t);
+    // 置灰项**不设 disabled**：disabled 的按钮连 click 都不派发，点了彻底没反馈，
+    // 用户只会以为坏了。改成 aria-disabled + 点击给一句话说清「换什么就能出」。
     tiltChips.appendChild(h('button', {
       class: `chip${spec.tilt === t.key ? ' on' : ''}${fits ? '' : ' off'}`,
       text: t.label,
-      title: fits ? t.hint : '这个年级 + 科目没有这类题，选了也不会变',
-      disabled: !fits,
+      title: fits ? t.hint : tiltWhy(t.key),
+      'aria-disabled': fits ? null : 'true',
       onclick: () => {
+        if (!fits) {
+          toast(tiltWhy(t.key));
+          return;
+        }
         spec.tilt = t.key;
         recomputeCounts();
         save();
@@ -541,6 +616,13 @@ function paramCard() {
       kindOf(spec.kind).only ? `（已按${SUBJECT_LABEL[kindOf(spec.kind).only]}出题）` : ''
     ) }),
     h('div', { class: 'field' }, [h('span', { text: '题型倾向' }), tiltChips]),
+    // 置灰的原因就写在这儿，不用去猜：App 端一直有这行，网页端漏了
+    tiltOff.length
+      ? h('p', {
+        class: 'hint',
+        text: `当前科目没有【${tiltOff.map((t) => t.label.replace(/偏多$/, '')).join('、')}】这类题，已置灰 —— 点它会说要换什么。`,
+      })
+      : null,
     spec.grade > 0
       ? h('p', { class: 'hint', text: '学期只影响真带上下册数据的课标单元；口算、字词这些按年级分段，选上/下册不会变少。' })
       : null,

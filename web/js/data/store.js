@@ -135,10 +135,29 @@ export function loadExamBank() {
   return examBankPromise;
 }
 
-/** 按需加载某一科的课标题库（一科 2500 道题、约 0.8MB，五科全载没必要） */export async function loadCurriculum(subject) {
+/** 按需加载某一科的课标题库（一科 2500 道题、约 0.8MB，五科全载没必要） */
+export async function loadCurriculum(subject) {
   const key = subjectKey(subject);
   if (DATA.loadedSubjects.has(key)) return;
-  const root = await getJson(`data/taxonomy/${key}.json`);
+  // 这一科没有课标语料时**绝不能抛**：小学科学的题库在 data/science/bank.json，
+  // taxonomy 里根本没有 science.json。以前这里 404 会把整个出卷链路带崩，
+  // 表现是点「生成卷子」一点反应都没有 —— 异常没人接，用户只会以为按钮坏了。
+  // App 端一直是 runCatching{}.getOrDefault(空)，网页端现在对齐。
+  let root = null;
+  try {
+    // 索引里列了哪几科真有语料（math / chinese / english / physics / chemistry）。
+    // 没列的直接当空，连 fetch 都不发 —— 省下控制台一条红色的 404 / CORS。
+    const known = DATA.stats?.subjects;
+    if (known && !known[key]) {
+      DATA.loadedSubjects.add(key);
+      return;
+    }
+    root = await getJson(`data/taxonomy/${key}.json`);
+  } catch (e) {
+    console.warn(`这科没有课标语料（${key}），按空题库处理`, e?.message ?? e);
+    DATA.loadedSubjects.add(key);
+    return;
+  }
   const topics = (root.topics ?? []).map((o) => ({
     id: o.i,
     name: o.n,

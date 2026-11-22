@@ -66,6 +66,8 @@ export function closeModal() {
 }
 
 export function toast(message, ms = 2200) {
+  // 同一时刻只留一条：连着点两下（比如两个置灰项），两条提示会叠在屏幕底部糊成一片
+  document.querySelectorAll('.toast').forEach((n) => n.remove());
   const node = document.createElement('div');
   node.className = 'toast';
   node.textContent = message;

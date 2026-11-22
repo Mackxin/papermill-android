@@ -190,9 +190,11 @@ main {
   font-weight: 600;
 }
 
+/* 置灰 ≠ 点不动：点一下会弹一句「换什么就能出」。
+   用 disabled 的话 click 根本不派发，用户点完啥也没有，只会以为坏了。 */
 .chip.off {
   opacity: 0.42;
-  cursor: not-allowed;
+  cursor: help;
 }
 
 .student-strip {
