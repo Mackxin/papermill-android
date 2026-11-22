@@ -51,13 +51,21 @@
 - 改完必须 `syncPaper()`：批改 / 错题本 / 存库读的是 `paper.questions` 那份扁平副本。
 - 自检第 30 项盯着两件事：`888-88=` 自动算出 800、手写答案落纸且页数不变。
 
-## 大题深度排版（v0.29.1，电脑端独占）
+## 大题深度排版（v0.29.1 起，v0.29.3 改过一轮，电脑端独占）
 
-- `section.layout = { cols, cellH, colGap, rowGap, blank }`，缺省 `null` = 跟随全卷。五个旋钮 + 「恢复全卷版式」。
+- `section.layout = { cols, cellH, colGap, rowGap, blank }`，缺省 `null` = 跟随全卷。
+  面板里**常驻列出全卷每个大题**（不用先点一道题），点标题展开：每行几道 / 共几行 / 每格高 / 列间距 / 题间距 / 每题留白 + 「恢复全卷版式」。
 - 列数优先级：`layout.cols` > 整卷 `forceColumns` > 自动 `fillColumns`。
-- **绝不为了守住用户点的列数而让某道题折行**：`columnsThatFit` 拿 `max(widths)*0.85` 当门槛，差一点的题单独 `fitSize` 缩到 85% 下限，面板直说「实际排 N 列」。一道折行能把整列撑高。
+- **用户显式设了 `layout.cols` 就不许再降列**（v0.29.3 推翻了 v0.29.1 的 `columnsThatFit` 降列）：
+  他说 4 行、你排 6 行 = 设置没生效，比版面差一点严重得多。放不下分两种处理：
+  - **单行短题**（口算）：整段一起缩字号，下限 78%（`SECTION_SHRINK_FLOOR`），公式乘 0.97 留余量；
+  - **多行长题**（题干含 `\n`，如科学选择题的选项行）：不缩字，按列宽折行 + 整段自动等高（`boxH` 取该段最高那题）。
+- 面板上的「N 列」必须读**纸面真实列数**（从 hits 的 x 反查），不能读 `section.columns` ——
+  那是题型建议值，口算建议 2 栏而实排 3 栏，写错用户会以为坏了。
 - `minHeight`（每格高）走 `measure()` 的 `Math.max(内容高, minHeight)`，只撑不压。
 - 面板里数字用 `stepper`（chip 在窄面板会换行）；滑杆改动走 `patch(key,value,false)`，不重建面板否则拖动中断。
+- 「共几行」与「每行几道」联动：改行数 → `cols = ceil(题数/行数)`。
+  **行数不能连续调**（16 道 2 列就是 8 行，+1 到 9 行还是 2 列），所以 stepper 传 `onStep` 直接动列数。
 
 ## 题库不许脏（v0.29.1）
 
@@ -88,6 +96,13 @@
 - 原生 `<select>` 与 `input[type=number]` 的箭头在 macOS 上又灰又小且无法改样式 → 统一用自绘 `.dd` 下拉与 `.stepper` 加减器（`ui/dialogs.js`）。
 - 导出 PDF 走「Canvas 按 pt 重画每页 → JPEG → 手写 PDF」，不引第三方库；测试用 `buildPdfBlob()`，不要调 `exportPdf()`（会触发下载）。
 - 编辑器手动覆盖走 `doc.forceTypeScale / forceItemGap / forceColumns / margin`，一旦设置就跳过全部自动试排，否则滑杆拖出来的结果会被「自动优化」改回去。
+- **`singleLineWidth` 必须按 `\n` 拆开取最宽一行**（`blocks.js` / `QuestionBlock.kt` 同一条）：
+  直接 `measure(stem)` 会把带换行的题干（科学选择题的选项行）两行宽度**加起来**，
+  这类题就被判「一栏都放不下」，白降栏数、白缩字号。v0.29.3 修，修完默认排版更省纸。
+- **`fullWidth()` 包装要用 `{ ...block }` 展开继承**，别手抄字段：旧实现只抄 `qid`，
+  `no`/`size`/`answerLines` 全丢 → 1 列的大题热区对不上题号（点不中、双击改不了），
+  重画单题字号还会退回全卷默认。v0.29.3 修。
+- 面板上显示「这一段实际几列」要**从纸面 hits 的 x 反查**，别读 `section.columns`（题型建议值）。
 
 ## 词表与拼音（v0.28.0）
 
