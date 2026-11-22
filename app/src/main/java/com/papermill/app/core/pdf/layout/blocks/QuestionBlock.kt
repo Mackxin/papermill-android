@@ -68,7 +68,11 @@ class QuestionBlock(
      */
     fun singleLineWidth(tp: TextPainter): Float {
         val p = tp.paint(size)
-        return numberWidth(tp) + tp.measure(stem, p)
+        // 题干里可能有显式换行（科学选择题的「A. 液态　B. 固态　C. 气态」单独一行）。
+        // 直接量整串会把两行的宽度**加起来**，这些题就被判成「一栏都放不下」，
+        // 白白降栏数、白缩字号。按行拆开取最宽的那一行才对。网页版同一条规则。
+        val widest = stem.split('\n').maxOfOrNull { tp.measure(it, p) } ?: 0f
+        return numberWidth(tp) + widest
     }
 
     override fun measure(tp: TextPainter, width: Float): Float {

@@ -164,7 +164,13 @@ export function questionBlock({ no, uid = null, stem, answerLines = 0, size = BO
     minHeight,
     /** 这道题不折行需要多宽：排版拿它定栏数 */
     singleLineWidth(tp) {
-      return numberWidth(tp) + tp.measure(stem, size);
+      // 题干里可能有显式换行（科学选择题的「A. 液态　B. 固态　C. 气态」单独一行）。
+      // 直接量整串会把两行的宽度**加起来**，于是这些题被判成「一列都放不下」，
+      // 白白降列数、白缩字号。按行拆开取最宽的那一行才对。
+      const lines = String(stem ?? '').split('\n');
+      let widest = 0;
+      lines.forEach((l) => { widest = Math.max(widest, tp.measure(l, size)); });
+      return numberWidth(tp) + widest;
     },
     measure(tp, width) {
       const lh = tp.lineHeight(size);
@@ -304,12 +310,12 @@ export function tableBlock(headers, weights, rows, { showHeader = true, textSize
 
 /** 把块强制改成占整行（应用题 / 带图题要用） */
 export function fullWidth(block) {
+  // 用展开继承整块，别手抄字段：以前只抄了 qid，`no`/`size`/`answerLines`
+  // 全丢了 —— 结果 1 列的题在编辑模式下热区对不上题号（改不了），
+  // 重画单题时字号也退回全卷默认。
   return {
-    type: block.type,
+    ...block,
     fullWidth: true,
-    keepWithNext: block.keepWithNext ?? false,
-    columnHint: block.columnHint ?? 0,
-    qid: block.qid ?? null,
     measure: (tp, w) => block.measure(tp, w),
     draw: (tp, x, y, w) => block.draw(tp, x, y, w),
   };

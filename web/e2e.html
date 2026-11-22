@@ -520,17 +520,21 @@ await test('学生档案 · 新建 + 点名字直接出卷', async () => {
 });
 
 // 13 --------------------------------------------------------------
-await test('学生条 · 点名字出卷（出卷页）', async () => {
+await test('学生条 · 点名字只切档案，不直接出卷', async () => {
   goCreate();
   await waitFor(() => q('#view .student-strip'), '出卷页学生条');
   const pill = qa('#view .student-pill').find((b) => T(b).startsWith('小明'));
   if (!pill) throw new Error('学生条里没有小明');
   pill.click();
-  await waitFor(() => qa('#view .paper-stage .paper-page').length > 0, '点名字出卷');
-  await sleep(200);
-  const r = collect();
-  if (!/小明/.test(r.text)) throw new Error('卷头没印名字');
-  return `${r.desc}`;
+  await sleep(400);
+  // 用户点的是人名，不是「出卷」：应该停在设置页，让人先看一眼年级/题数
+  if (qa('#view .paper-stage .paper-page').length) throw new Error('点名字又直接出卷了');
+  if (!q('#view .create-actions')) throw new Error('点名字后没有停在出卷设置页');
+  const onPill = qa('#view .student-pill').find((b) => b.classList.contains('on'));
+  if (!onPill || !T(onPill).startsWith('小明')) throw new Error('学生条没高亮到「小明」');
+  const name = D().defaultView.__papermill.spec.studentName ?? '';
+  if (name !== '小明') throw new Error(`档案没切过去：studentName = ${name}`);
+  return `停在出卷页 · 已切到「小明」· 没有跳预览`;
 });
 
 // 14 --------------------------------------------------------------
@@ -1075,9 +1079,14 @@ await test('编辑排版 · 标题并成一行、每大题单独定栏数', asyn
   await sleep(300);
   const selCard = q('#view .edit-card.is-selected');
   if (!selCard) throw new Error('选中题目后没有「这一大题」卡片');
-  const layoutCard = qa('#view .edit-card').find((n) => T(n).startsWith('这一大题的版式'));
-  if (!layoutCard) throw new Error('面板里没有「这一大题的版式」');
-  const colNum = [...layoutCard.querySelectorAll('.edit-line')]
+  // 大题版式卡现在**常驻**列出（不用先点题），点标题展开旋钮
+  const layoutCard = qa('#view .edit-card.sl-card')[0];
+  if (!layoutCard) throw new Error('面板里没有大题版式列表');
+  if (!layoutCard.classList.contains('is-open')) {
+    layoutCard.querySelector('.sl-head')?.click();
+    await sleep(400);
+  }
+  const colNum = [...q('#view .edit-card.sl-card.is-open').querySelectorAll('.edit-line')]
     .find((n) => T(n).startsWith('每行几道'))?.querySelector('input.num');
   if (!colNum) throw new Error('没有「每行几道」加减器');
   colNum.value = '1';
@@ -1090,7 +1099,7 @@ await test('编辑排版 · 标题并成一行、每大题单独定栏数', asyn
 });
 
 // 30b -------------------------------------------------------------
-await test('大题深度排版 · 每行几道 / 每格高 / 列间距 / 每题留白', async () => {
+await test('大题深度排版 · 每行几道 / 共几行 / 每格高 / 留白', async () => {
   if (frame.clientWidth < 1024) return '窗口太窄，跳过（电脑端功能）';
   goCreate();
   await waitFor(() => q('#view .create-actions'), '出卷页');
@@ -1101,10 +1110,15 @@ await test('大题深度排版 · 每行几道 / 每格高 / 列间距 / 每题�
   await waitFor(() => q('#view .edit-panel'), '编辑面板');
   await waitFor(() => qa('#view .hit').length > 0, '纸面热区', 8000);
 
+  // 不点任何题，面板里就该已经列出全卷每一个大题
+  const heads = qa('#view .edit-card.sl-card .sl-head');
+  const secCount = D().defaultView.__papermill.paper.sections.filter((s) => !s.isAnswer).length;
+  if (heads.length !== secCount) throw new Error(`大题版式卡 ${heads.length} 张，卷里有 ${secCount} 段`);
+
   qa('#view .hit')[0].click();
   await sleep(300);
-  const box = qa('#view .edit-card').find((n) => T(n).startsWith('这一大题的版式'));
-  if (!box) throw new Error('面板里没有「这一大题的版式」卡片');
+  const box = q('#view .edit-card.sl-card.is-open');
+  if (!box) throw new Error('选中题后所属大题的版式卡没有自动展开');
 
   // 只看**第一个大题**的题：跨过大题去数 x 种数会把别的大题的列数混进来
   const rowsOf = () => {
@@ -1113,8 +1127,6 @@ await test('大题深度排版 · 每行几道 / 每格高 / 列间距 / 每题�
     return { x: new Set(hits.map((h) => Math.round(h.x))), h: hits.map((h) => h.h) };
   };
 
-  // ① 每行 4 道：能排 4 就 4；排不下会自动降到放得下的列数，但**一道题都不许折行**。
-  //    这两条要一起验 —— 只验列数会把「挤成 4 列然后括号掉到第二行」当成成功。
   const setStep = (label, value) => {
     const row = [...box.querySelectorAll('.edit-line')].find((n) => T(n).startsWith(label));
     const num = row?.querySelector('input.num');
@@ -1122,18 +1134,34 @@ await test('大题深度排版 · 每行几道 / 每格高 / 列间距 / 每题�
     num.value = String(value);
     num.dispatchEvent(new Event('change', { bubbles: true }));
   };
+
+  // ① 每行 4 道：用户点的列数说了算。放不下就**整段**缩字号，不再背着他降列。
+  //    显式设列时整段自动等高，所以即便某道题折了行，版面也是齐的。
   setStep('每行几道', 4);
   await sleep(1400);
   const four = rowsOf();
-  if (four.x.size < 2 || four.x.size > 4) throw new Error(`设成每行 4 道后列数是 ${four.x.size}，超出 2~4`);
-  const bodySize = D().defaultView.__papermill.result.bodySize;
-  const oneLine = bodySize * 1.5;
-  const wrapped = four.h.filter((v) => v > oneLine + 4.5).length;
-  if (wrapped > 0) throw new Error(`设成 4 列后有 ${wrapped} 道题折了行（列宽放不下题干）`);
+  if (four.x.size !== 4) throw new Error(`设成每行 4 道后实际排了 ${four.x.size} 列（应当就是 4）`);
+  if (new Set(four.h.map((v) => Math.round(v * 10))).size !== 1) {
+    throw new Error(`4 列后各题高度不齐：${four.h.map((v) => v.toFixed(1)).join('/')}`);
+  }
   const laid = D().defaultView.__papermill.paper.sections[0].layout;
   if (laid?.cols !== 4) throw new Error(`版式没存下来：layout.cols = ${laid?.cols}`);
 
-  // ② 每格高 42pt：同一大题每道题的高度都应当 ≥42 且彼此相等（按行对齐）
+  // ② 「共几行」反过来算：16 道设 4 行 → 列数应当变成 4
+  const sec = D().defaultView.__papermill.paper.sections[0];
+  const total = sec.questions.length;
+  const wantRows = Math.max(1, Math.ceil(total / 4));
+  setStep('共几行', wantRows);
+  await sleep(1400);
+  const byRows = rowsOf();
+  if (sec.layout?.cols !== Math.ceil(total / wantRows)) {
+    throw new Error(`设 ${wantRows} 行后列数算错：layout.cols = ${sec.layout?.cols}`);
+  }
+  if (byRows.x.size !== Math.ceil(total / wantRows)) {
+    throw new Error(`设 ${wantRows} 行后实际排了 ${byRows.x.size} 列`);
+  }
+
+  // ③ 每格高 42pt：同一大题每道题的高度都应当 ≥42 且彼此相等（按行对齐）
   setStep('每格高', 42);
   await sleep(1400);
   const cell = rowsOf();
@@ -1142,7 +1170,7 @@ await test('大题深度排版 · 每行几道 / 每格高 / 列间距 / 每题�
     throw new Error(`同一大题的高度不齐，行对不上：${cell.h.map((v) => v.toFixed(1)).join('/')}`);
   }
 
-  // ③ 每题留白：拖到 48pt，这一大题的总高度必须变高
+  // ④ 每题留白：拖到 48pt，这一大题的总高度必须变高
   const before = rowsOf().h[0];
   const blankSlider = [...box.querySelectorAll('.edit-line')]
     .find((n) => T(n).startsWith('每题留白'))?.querySelector('input[type=range]');
@@ -1153,7 +1181,7 @@ await test('大题深度排版 · 每行几道 / 每格高 / 列间距 / 每题�
   const after = rowsOf().h[0];
   if (!(after > before + 20)) throw new Error(`留白拖到 48pt 后每格没变高：${before.toFixed(1)} → ${after.toFixed(1)}`);
 
-  // ④ 恢复全卷版式：layout 清空、列数回到自动试排的结果
+  // ⑤ 恢复全卷版式：layout 清空、列数回到自动试排的结果
   const back = [...box.querySelectorAll('.btn')].find((n) => T(n).includes('恢复全卷版式'));
   if (!back) throw new Error('没有「恢复全卷版式」');
   back.click();
@@ -1161,7 +1189,7 @@ await test('大题深度排版 · 每行几道 / 每格高 / 列间距 / 每题�
   const reset = rowsOf();
   if (D().defaultView.__papermill.paper.sections[0].layout) throw new Error('layout 没被清掉');
 
-  return `每行 4 道 → 实际 ${four.x.size} 列（0 道折行）· 每格 42pt 等高 · 留白 48pt 撑高 ${(after - before).toFixed(0)}pt · 恢复后 ${reset.x.size} 列`;
+  return `${heads.length} 张大题卡常驻 · 每行 4 道 → 4 列等高 · ${total} 道设 ${wantRows} 行 → ${byRows.x.size} 列 · 每格 42pt 等高 · 留白撑高 ${(after - before).toFixed(0)}pt · 恢复后 ${reset.x.size} 列`;
 });
 
 // 30 --------------------------------------------------------------

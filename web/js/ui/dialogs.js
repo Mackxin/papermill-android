@@ -251,7 +251,14 @@ export function input(type, value, onChange, attrs = {}) {
 }
 
 /** 数字加减器：把原生 input 那对上下小箭头换成真正的 − / ＋（原生箭头在 macOS 上又小又糊） */
-export function stepper(value, onChange, { min = 0, max = 200, step = 1 } = {}) {
+/**
+ * 加减器。
+ *
+ * [onStep] 给「不可连续」的量用：像大题的「共几行」，16 道题 2 列就是 8 行，
+ * 往上调一档只有「1 列 16 行」—— 按 ±1 算出来的 9 行还是 2 列，界面纹丝不动，
+ * 看着像坏了。传了 onStep 就把 ± 交给调用方，由它决定怎么动。
+ */
+export function stepper(value, onChange, { min = 0, max = 200, step = 1, onStep = null } = {}) {
   const wrap = document.createElement('div');
   wrap.className = 'stepper';
 
@@ -264,6 +271,7 @@ export function stepper(value, onChange, { min = 0, max = 200, step = 1 } = {}) 
   box.value = String(value ?? 0);
 
   const bump = (d) => {
+    if (onStep) { onStep(d); return; }
     const next = Math.max(min, Math.min(max, (Number(box.value) || 0) + d));
     box.value = String(next);
     onChange(next);

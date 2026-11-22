@@ -32,6 +32,15 @@ const BODY_FILL_TARGET = 0.96;
 /** 单道题为了塞进一列能缩到原字号的百分之多少（再窄就降列数） */
 const SHRINK_FLOOR = 0.85;
 
+/**
+ * 用户在「大题的版式」里亲自点了列数时，这一**段**最多能一起缩到百分之多少。
+ *
+ * 跟 SHRINK_FLOOR 同值不是巧合：一段字缩到 85% 已经能看出「比别处小一号」，
+ * 再小就是蚂蚁字，小学生看不清。缩到底还放不下就允许折行 ——
+ * 折行时这一段会自动等高（下面 autoCell），版面仍然是齐的。
+ */
+const SECTION_SHRINK_FLOOR = 0.78;
+
 const TITLE_SIZE = 17;
 const TITLE_H = 26;
 const SUB_SIZE = 9;
@@ -97,8 +106,17 @@ function columnsThatFit(widths, contentW, gap, ceiling) {
  * 得让他当场知道，而不是等印出来才发现右边空一截、或者括号被挤到下一行。
  */
 export function maxColumnsFor(questions, contentW, bodySize = BODY_SIZE, gap = COLUMN_GAP, tp = TP) {
-  const widths = questions.map((q) => questionBlock({ no: q.no, stem: q.stem, size: bodySize }).singleLineWidth(tp));
-  return columnsThatFit(widths, contentW, gap, MAX_BODY_COLUMNS);
+  return columnsThatFit(questionWidths(questions, bodySize, tp), contentW, gap, MAX_BODY_COLUMNS);
+}
+
+/**
+ * 这几道题各自的「单行宽度」（含题号）。
+ *
+ * 编辑器拿它算一句实话：用户点了 4 列、最宽那道 137pt、而这列只有 113pt，
+ * 就把「字号会缩到 85%」明明白白说出来，别让他印出来才发现字变小了。
+ */
+export function questionWidths(questions, bodySize = BODY_SIZE, tp = TP) {
+  return questions.map((q) => questionBlock({ no: q.no, stem: q.stem, size: bodySize }).singleLineWidth(tp));
 }
 
 /**
@@ -240,16 +258,21 @@ export function renderPaper(doc, tp = TP) {
       const cellH = L.cellH && L.cellH > 0 ? L.cellH : 0;
 
       const forceFullWidth = section.columns <= 1;
+      const widths = section.questions.map((q) => questionBlock({ no: q.no, stem: q.stem, size: bodySize * typeScale }).singleLineWidth(tp));
       let hint = 0;
       if (!forceFullWidth && section.questions.length) {
-        const widths = section.questions.map((q) => questionBlock({ no: q.no, stem: q.stem, size: bodySize * typeScale }).singleLineWidth(tp));
         const secGapV = secColGap || COLUMN_GAP;
         // 优先级：这一大题自己的版式 > 整卷「每行栏数」滑杆 > 自动试排。
         // 具体的覆盖通用的 —— 用户专门为这一大题点过「每行 4 道」，
         // 整卷滑杆就不该再把它改成 2 栏（那等于设置没生效）。
         if (L.cols && L.cols > 0) {
-          // 他要 4 列，但这几道题在 4 列宽度里放不下就自动降到放得下的列数
-          hint = columnsThatFit(widths, g.contentW, secGapV, L.cols);
+          // 用户亲手点的列数**不再降**。
+          //
+          // 以前这里过 columnsThatFit：他要 4 列、题宽差 12pt，就被悄悄改成 3 列，
+          // 面板上写「实际 3 列」—— 用户说的是「分 4 行」，得到 6 行，等于设置没生效。
+          // 放不下就整段缩字号（见下面的 secSize），缩到底还是放不下就折行，
+          // 那也是他自己点的列数，比背着他改数字要诚实。
+          hint = Math.min(L.cols, MAX_BODY_COLUMNS);
         } else if (forceColumns > 0) {
           hint = section.answerLines > 0 ? section.columns : forceColumns;
         } else {
@@ -267,14 +290,61 @@ export function renderPaper(doc, tp = TP) {
       }
       // 这一列到底有多宽：单栏时就是整张纸的正文宽
       const colW = hint > 1 ? (g.contentW - (secColGap || COLUMN_GAP) * (hint - 1)) / hint : g.contentW;
+
+      /**
+       * 这一段的字号。
+       *
+       * 分两种情况，判据是「题干本身是不是多行的」：
+       *
+       *  · 单行短题（口算「208+336=（　　）」）：差一点放不下就**整段**一起收一档字号。
+       *    这类题折行最难看 —— 结尾的「）」掉到第二行，只有那一列被撑高。
+       *  · 多行长题（科学选择题「【水】冰是水的什么状态？ / A. 液态　B. 固态　C. 气态」）：
+       *    它本来就占两行，缩字号只会把 27 个字挤进半栏、成了密密麻麻的小字。
+       *    不如让它按列宽自然折行 —— 整段会自动等高，版面还是齐的。
+       */
+      const multiline = section.questions.some((q) => String(q.stem ?? '').includes('\n'));
+      let secSize = bodySize * typeScale;
+      if (L.cols && L.cols > 0 && hint > 1 && widths.length && !multiline) {
+        const widest = Math.max(...widths);
+        if (widest > colW && colW > 0) {
+          // 留 3% 余量：singleLineWidth 与实际断行判断有零点几毫米的出入，
+          // 贴着临界值缩，最后一道题的「）」就会被挤到第二行。
+          secSize = Math.max(secSize * SECTION_SHRINK_FLOOR, secSize * (colW / widest) * 0.97);
+        }
+      }
+
+      /**
+       * 用户点过列数的这一大段，自动**等高**。
+       *
+       * 缩到 85% 还有一道题折行时，那一列就会被它撑高，整段参差不齐。
+       * 这里先量一遍该段最高的那一题，拿它当所有题的「每格高」——
+       * 折行的那道也就成了它自己那一格的高度，四四方方还是齐的。
+       * 用户自己拖过「每格高」就听他的（cellH 优先）。
+       */
+      const qLines = section.answerLines > 0
+        ? section.answerLines + (section.padWithLines ? extraLines : 0)
+        : 0;
+      let boxH = cellH;
+      if (!boxH && L.cols && L.cols > 0 && hint > 1 && section.questions.length) {
+        section.questions.forEach((q) => {
+          const probe = questionBlock({
+            no: q.no, stem: q.stem, answerLines: qLines,
+            size: secSize, figure: q.figure,
+          });
+          boxH = Math.max(boxH, probe.measure(tp, colW));
+        });
+        boxH = Math.ceil(boxH);
+      }
+
       section.questions.forEach((q) => {
-        const lines = section.answerLines > 0
-          ? section.answerLines + (section.padWithLines ? extraLines : 0)
-          : 0;
+        const lines = qLines;
+        // 整段已经按「最宽那道」一次性缩过字了，这里不再逐题缩 ——
+        // 两道缩字叠在一起，11pt 会缩成 8pt 的蚂蚁字。
+        const size = (L.cols && L.cols > 0) ? secSize : fitSize(q, secSize, colW);
         const qb = questionBlock({
           no: q.no, uid: q.uid ?? null, stem: q.stem, answerLines: lines,
-          size: fitSize(q, bodySize * typeScale, colW), itemGap: secItemGap + secBlank, figure: q.figure,
-          minHeight: cellH,
+          size, itemGap: secItemGap + secBlank, figure: q.figure,
+          minHeight: boxH,
         });
         blocks.push((forceFullWidth || q.figure) ? fullWidth(qb) : qb);
       });

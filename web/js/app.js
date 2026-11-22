@@ -25,7 +25,7 @@ import {
 } from './core/composer.js';
 import { availableTypes, generatorOf, runGenerator, generatorCount } from './core/registry.js';
 import { applyRefWords, wordBankSize } from './gen/language.js';
-import { renderPaper, assemble, repaintQuestion, repaintAnswer, maxColumnsFor } from './core/renderer.js';
+import { renderPaper, assemble, repaintQuestion, repaintAnswer, questionWidths } from './core/renderer.js';
 import { renderPages, applyZoom, printPaper, describe, printNodes } from './ui/paper.js';
 import { exportPdf, exportPngs } from './ui/export.js';
 import { referenceSheet, practiceSheet } from './ui/sheets.js';
@@ -65,6 +65,8 @@ const state = {
   // 打开原地编辑时的原文：按 Esc / 点「还原」要能回到这一版
   editOrigin: null,
   editOriginAnswer: '',
+  // 右侧面板里哪些大题展开了「版式」卡（下标 → true）。纯界面状态，不存盘
+  openLayout: {},
 };
 
 // ------------------------------------------------------------------ 存储
@@ -320,6 +322,8 @@ async function generatePaper(spec = ensureSpec()) {
   state.paper = paper;
   state.result = renderPaper(buildDoc());
   state.previewKind = 'paper';
+  // 换了一张卷：上一张卷里展开的是哪个大题跟这一张没关系
+  state.openLayout = {};
   history.lastSpec = spec;
   return { paper, result: state.result };
 }
@@ -379,7 +383,13 @@ function studentStrip() {
   return wrap;
 }
 
-async function applyStudent(student) {
+/**
+ * 切到这个学生的档案。
+ *
+ * [build] 只在用户**明确点了「出卷」按钮**时才为真（学生档案页那个按钮）。
+ * 学生条上点名字只切档案 —— 点错人名、或者还想改题数，不该被直接带去预览页。
+ */
+async function applyStudent(student, { build = false } = {}) {
   const spec = ensureSpec();
   const changed = spec.grade !== student.grade
     || (spec.subjects ?? []).join() !== (student.subjects ?? []).join()
@@ -394,7 +404,11 @@ async function applyStudent(student) {
   normalizeKind(spec);
   if (changed) recomputeCounts();
   save();
-  // 点名字 = 直接出卷
+  if (!build) {
+    render();
+    toast(`已切到「${student.name}」${Term.short(student.grade, student.term)} 的档案，确认后点「生成卷子」`);
+    return;
+  }
   const built = await generatePaper(spec);
   if (built) {
     toast(`已按 ${student.name} 的档案出卷：${Term.short(student.grade, student.term)}`);
@@ -1004,10 +1018,17 @@ function previewScreen() {
   } : null);
 
   const openInline = (qid) => {
+    const prevSi = findQuestion(state.editSel)?.si;
     state.editSel = qid;
     state.editInline = true;
     state.editOrigin = findQuestion(qid)?.q.stem ?? '';
     state.editOriginAnswer = findQuestion(qid)?.q.answer ?? '';
+    // 换到另一个大题时，顺手展开那一段的版式卡（同一段内换题不打扰已收起的状态）
+    const si = findQuestion(qid)?.si;
+    if (si != null && si !== prevSi) {
+      state.openLayout = {};
+      state.openLayout[si] = true;
+    }
     if (panelHost) fillEditorPanel(panelHost);   // 右侧面板要跟着换内容
     draw();
   };
@@ -1346,28 +1367,53 @@ function removeQuestion(hit) {
  * 改完必须**重排**（版式变了，不是改字），但只重排不动数据 —— 这是用户点名的例外：
  * 「改字绝不洗牌」管的是改题干；主动改版式本来就该重排。
  */
-function sectionLayoutCard(section, line, card) {
+function sectionLayoutCard(section, si, line) {
   const L = section.layout ?? {};
+  const count = section.questions.length || 0;
+  const open = state.openLayout?.[si] === true;
+  /**
+   * 这一段**实际**排了几列。
+   *
+   * 不能拿 section.columns 顶替：那是「这一题型建议几栏」，自动试排时会被挪动
+   * （口算建议 2 栏，实排 3 栏）。面板上写 2 列、纸上明明 3 列，用户会以为坏了。
+   * 从纸面坐标反查最准 —— 同一列里各题的 x 是同一个值。
+   */
+  const actualCols = (() => {
+    const nos = section.questions.map((q) => q.no);
+    if (!nos.length) return 0;
+    const lo = Math.min(...nos);
+    const hi = Math.max(...nos);
+    const hits = (state.result?.pages ?? []).flatMap((p) => p.hits ?? [])
+      .filter((h) => h.no >= lo && h.no <= hi);
+    return new Set(hits.map((h) => Math.round(h.x))).size;
+  })();
+  /**
+   * 第一次动任何旋钮时，把当前生效值全部落实下来 ——
+   * 否则「只改了列间距」的大题会连带把行距重置成全卷默认，看着像点一下全变了。
+   */
+  const initLayout = () => {
+    if (section.layout) return section.layout;
+    const base = TYPE[section.type];
+    section.layout = {
+      // 落实的是「现在实际排的列数」，不是题型建议值 ——
+      // 否则拖一下列间距，口算会从实排的 3 栏退回建议的 2 栏
+      cols: actualCols || section.columns || base?.columns || 2,
+      cellH: 0,
+      colGap: 20,
+      rowGap: state.editOpt?.gap ?? 6,
+      blank: 0,
+    };
+    return section.layout;
+  };
   /**
    * 改一个旋钮。
    *
-   * [rerender] 只有「换控件显示的值会跟着变」的情况才传 true（点 chip 改列数）。
+   * [rerender] 只有「换控件显示的值会跟着变」的情况才传 true（加减器改列数）。
    * 滑杆拖动时绝不能重建面板 —— 面板一重建，正在拖的那个 input 就被换成新的，
    * 手指还按着，滑杆已经跳走了。
    */
   const patch = (key, value, rerender = false) => {
-    // 第一次动任何旋钮时，把当前生效值全部落实下来 ——
-    // 否则「只改了列间距」的大题会连带把行距重置成全卷默认，看着像点一下全变了
-    if (!section.layout) {
-      const base = TYPE[section.type];
-      section.layout = {
-        cols: section.columns ?? base?.columns ?? 2,
-        cellH: 0,
-        colGap: 20,
-        rowGap: state.editOpt?.gap ?? 6,
-        blank: 0,
-      };
-    }
+    initLayout();
     if (value == null) delete section.layout[key];
     else section.layout[key] = value;
     if (key === 'cols' && value) section.columns = value;
@@ -1376,7 +1422,9 @@ function sectionLayoutCard(section, line, card) {
     if (rerender) setTimeout(() => render(), 80);
   };
   const cur = {
-    cols: L.cols ?? section.columns ?? 2,
+    // 用户亲手点过的列数优先；没点过就显示实际排出来的。
+    // 这里用 || 不用 ??：actualCols 查不到时是 0，而 0 列没有意义
+    cols: L.cols || actualCols || section.columns || 2,
     cellH: L.cellH ?? 0,
     colGap: L.colGap ?? 20,
     rowGap: L.rowGap ?? (state.editOpt?.gap ?? 6),
@@ -1393,29 +1441,62 @@ function sectionLayoutCard(section, line, card) {
     setTimeout(() => render(), 80);
   };
 
-  // 这一大题的题有多宽 → 物理上最多排几列。
-  // 用户点 4 但只能排 3 时必须当场说清楚，别等印出来发现右边空一截。
-  let fitCols = 0;
+  // 这一大题的题有多宽 → 缩字号能缩到多少。
+  // 只用来给一句实话（「字号缩到 92%」），不拿它去改用户点的列数 ——
+  // 他说分 4 行，就是 4 行。
+  const contentW = state.result?.geometry?.contentW ?? 515;
+  const bodySize = state.result?.bodySize ?? 11;
+  let widest = 0;
   try {
-    fitCols = maxColumnsFor(
-      section.questions,
-      state.result?.geometry?.contentW ?? 515,
-      state.result?.bodySize ?? 11,
-      cur.colGap,
-    );
-  } catch { fitCols = 0; }
-  const shown = Math.min(cur.cols || fitCols || 2, fitCols || 6);
-  const fitNote = fitCols && cur.cols > fitCols
-    ? `这几道题最多排 ${fitCols} 列（再宽括号就被挤到下一行了），现在自动按 ${fitCols} 列排`
-    : `实际排 ${shown} 列`;
+    widest = Math.max(0, ...questionWidths(section.questions, bodySize));
+  } catch { widest = 0; }
+  const shown = Math.max(1, Math.min(cur.cols || 2, 6));
+  const rows = count ? Math.ceil(count / shown) : 0;
+  // 题干本身多行的（科学选择题带 A/B/C 选项行）：按列宽折行，不缩字号
+  const multiline = section.questions.some((q) => String(q.stem ?? '').includes('\n'));
+  const fitNote = (() => {
+    const base = `实际 ${shown} 列 × ${rows} 行`;
+    if (!widest || !count) return base;
+    const colW = shown > 1 ? (contentW - cur.colGap * (shown - 1)) / shown : contentW;
+    if (!(colW > 0) || widest <= colW) return base;
+    if (multiline) return `${base}；长题按列宽折行，整段按最高那题对齐`;
+    const pct = Math.max(78, Math.round((colW / widest) * 97));
+    return `${base}；这 ${shown} 列略紧，整段字号缩到 ${pct}%`;
+  })();
 
-  return card('这一大题的版式', [
+  /**
+   * 反过来设：直接说「我要几行」，列数按题数除回来。
+   * 用户指着口算那一段说的是「分几行」，不是「分几列」——
+   * 16 道题设 4 行，列数自然是 4。
+   */
+  /** 直接说「我要 N 行」：列数按题数除回来（16 道设 4 行 → 4 列） */
+  const setRows = (r) => {
+    const n = Math.min(20, Math.max(1, r));
+    patch('cols', Math.max(1, Math.min(6, Math.ceil(count / n) || 1)), true);
+  };
+
+  const body = h('div', { class: 'sl-body' }, [
     h('p', { class: 'edit-tip', text: '只影响这一大题。每行几道 = 几列；每格高填了就按行对齐。' }),
     // 这两行的单位用 tight（不占整行）：加减器本身窄，硬把「列」挤到下一行会显得散
     h('div', { class: 'edit-line' }, [
       h('span', { class: 'edit-label', text: '每行几道' }),
       stepper(cur.cols, (v) => patch('cols', v, true), { min: 1, max: 6, step: 1 }),
       h('em', { class: 'edit-hint tight', text: '列' }),
+    ]),
+    h('div', { class: 'edit-line' }, [
+      h('span', { class: 'edit-label', text: '共几行' }),
+      stepper(rows, setRows, {
+        min: 1,
+        max: 20,
+        step: 1,
+        // 行数不能连续调：16 道题 2 列就是 8 行，往上只有「1 列 16 行」这一档。
+        // 所以 ± 直接动列数，按一下必定有变化（不然 +1 到 9 行还是 2 列，看着像坏了）。
+        onStep: (d) => {
+          const next = Math.max(1, Math.min(6, shown - Math.sign(d)));
+          if (next !== shown) patch('cols', next, true);
+        },
+      }),
+      h('em', { class: 'edit-hint tight', text: `行 · 共 ${count} 道` }),
     ]),
     h('div', { class: 'edit-line' }, [
       h('span', { class: 'edit-label', text: '每格高' }),
@@ -1431,6 +1512,36 @@ function sectionLayoutCard(section, line, card) {
       button('恢复全卷版式', 'ghost', reset),
     ]),
   ]);
+
+  // 折叠头：面板里同时列出全卷每一个大题，点标题展开它的旋钮。
+  // 只有「选中题所属的那一大题」默认展开 —— 七段全摊开面板会长得翻不到底。
+  const toggle = () => {
+    state.openLayout = state.openLayout ?? {};
+    state.openLayout[si] = !open;
+    repaintPanel();
+  };
+  return h('div', { class: `edit-card sl-card${open ? ' is-open' : ''}` }, [
+    h('button', { class: `sl-head${open ? ' on' : ''}`, onclick: toggle }, [
+      h('i', { class: 'dot' }),
+      h('b', { text: section.name ?? section.title ?? `第 ${si + 1} 大题` }),
+      h('span', { text: count ? `${count} 道 · ${shown} 列 × ${rows} 行` : '没有题' }),
+      h('em', { class: 'sl-caret', text: open ? '收起' : '调版式' }),
+    ]),
+    open ? body : null,
+  ].flat());
+}
+
+/**
+ * 只重建右侧面板，不动纸面。
+ * 展开/收起一个大题的版式卡属于界面动作，不该连带触发重排 —— 纸面一动，
+ * 用户刚看清的位置就跑了。
+ */
+function repaintPanel() {
+  const host = document.querySelector('.edit-panel');
+  if (!host) return;
+  const top = host.scrollTop;
+  fillEditorPanel(host);
+  host.scrollTop = top;
 }
 
 function fillEditorPanel(panel) {
@@ -1502,9 +1613,24 @@ function fillEditorPanel(panel) {
         button('删除', 'ghost danger', () => removeQuestion(hit)),
       ]),
     ], ' is-selected'));
+  }
 
-    panel.appendChild(sectionLayoutCard(section, line, card));
-  } else {
+  // ---- 每个大题的版式
+  //
+  // 常驻列出全卷所有大题，而不是「先点中一道题」才冒出来 ——
+  // 用户想调的是「口算这一段分几行」，眼睛盯着的是那一段，不该先在里面挑一道题。
+  // 面板里每一行就是一段，点标题展开旋钮；选中的题所属那一段默认展开。
+  const secs = state.paper.sections.filter((s) => !s.isAnswer);
+  if (secs.length) {
+    const box = h('div', { class: 'sl-list' });
+    state.paper.sections.forEach((s, si) => {
+      if (s.isAnswer) return;
+      box.appendChild(sectionLayoutCard(s, si, line));
+    });
+    panel.appendChild(box);
+  }
+
+  if (!hit) {
     panel.appendChild(h('p', { class: 'panel-tip', text: '点纸面上的任意一道题：光标会在那道题的位置出现，改完点别处就落纸。' }));
   }
 
@@ -1886,7 +2012,7 @@ function studentsScreen() {
       ]),
       h('div', { class: 'custom-actions' }, [
         button('编辑', 'ghost', () => editStudent(s)),
-        button('出卷', 'ghost', () => applyStudent(s)),
+        button('出卷', 'ghost', () => applyStudent(s, { build: true })),
         button('删', 'ghost danger', () => {
           confirmDialog('删除学生', `确定删除「${s.name}」的档案？`, () => {
             state.students = state.students.filter((x) => x.id !== s.id);
